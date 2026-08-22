@@ -22,3 +22,5 @@ add_satellite_test(test_llm_provider test_llm_provider.cpp)
 add_satellite_test(test_catalog test_catalog.cpp)
 
 add_satellite_test(test_context_engine test_context_engine.cpp)
+
+add_satellite_test(test_context_optimizer test_context_optimizer.cpp)
