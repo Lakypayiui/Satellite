@@ -1,4 +1,4 @@
-# 🛰️ Satellite
+#  Satellite
 
 **A general-purpose microagent framework for software development.**
 
@@ -397,11 +397,9 @@ cmake --build build
 ./build/satellite_benchmark
 ```
 
-> Honest limitations: token counts are estimates (1 token ≈ 4 chars), there is
-> no real LLM call (no network latency/cost), and the synthetic project is the
-> optimizer's best case. The benchmark proves the *mechanism* (3–4× context
-> reduction at 100% success); production numbers require a real tokenizer,
-> real LLM calls, and real repositories.
+> Honest limitations: token counts are estimates (1 token ≈ 4 chars) and the
+> synthetic project is the optimizer's best case. The benchmark proves the
+> *mechanism* (3–4× context reduction at 100% success).
 
 ---
 
