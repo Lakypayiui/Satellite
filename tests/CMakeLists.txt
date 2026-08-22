@@ -41,3 +41,5 @@ add_satellite_test(test_persistence test_persistence.cpp)
 target_compile_definitions(test_persistence PRIVATE SATELLITE_ROOT="${PROJECT_SOURCE_DIR}")
 
 add_satellite_test(test_project_initializer test_project_initializer.cpp)
+
+add_satellite_test(test_config test_config.cpp)
