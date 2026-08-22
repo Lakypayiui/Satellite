@@ -16,3 +16,5 @@ add_satellite_test(test_dispatcher test_dispatcher.cpp)
 add_satellite_test(test_native_agents test_native_agents.cpp)
 
 add_satellite_test(test_protocol test_protocol.cpp)
+
+add_satellite_test(test_llm_provider test_llm_provider.cpp)

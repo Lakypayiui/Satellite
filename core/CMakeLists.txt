@@ -22,6 +22,10 @@ target_sources(satellite_core PRIVATE
   agents/NativeAgents.cpp
   protocol/Protocol.h
   protocol/Protocol.cpp
+  ../llm/LLMTypes.h
+  ../llm/ILLMProvider.h
+  ../llm/DeepSeekProvider.h
+  ../llm/DeepSeekProvider.cpp
 )
 
 target_include_directories(satellite_core PUBLIC
