@@ -28,6 +28,9 @@ target_sources(satellite_core PRIVATE
   ../llm/ILLMProvider.h
   ../llm/DeepSeekProvider.h
   ../llm/DeepSeekProvider.cpp
+  ../context/engine/ProjectContext.h
+  ../context/engine/ContextEngine.h
+  ../context/engine/ContextEngine.cpp
 )
 
 target_include_directories(satellite_core PUBLIC
