@@ -178,7 +178,15 @@ std::size_t AgentStore::rebuild_agents(AgentRegistry& registry, AgentFactory& fa
         {
             if (!spec.capabilities.empty() && !desc.capabilities.empty() && desc.capabilities[0] == spec.capabilities[0])
             {
-                exists = true;
+                if (desc.agent == nullptr)
+                {
+                    // Descriptor persistido sin implementación: se reemplaza recreando el agente.
+                    registry.unregister_agent(desc.id);
+                }
+                else
+                {
+                    exists = true;
+                }
                 break;
             }
         }
@@ -226,8 +234,12 @@ void from_json(const nlohmann::json& j, AgentSpec& spec)
     spec.version = j.value("version", "1.0.0");
     spec.input_schema = j.value("input_schema", nlohmann::json::object());
     spec.output_schema = j.value("output_schema", nlohmann::json::object());
-    spec.context_requirements = j.value("context_requirements", std::vector<std::string>{});
-    spec.capabilities = j.value("capabilities", std::vector<std::string>{});
+    spec.context_requirements = j.contains("context_requirements") && !j["context_requirements"].is_null()
+                                    ? j["context_requirements"].get<std::vector<std::string>>()
+                                    : std::vector<std::string>{};
+    spec.capabilities = j.contains("capabilities") && !j["capabilities"].is_null()
+                            ? j["capabilities"].get<std::vector<std::string>>()
+                            : std::vector<std::string>{};
     spec.implementation_code = j.value("implementation_code", "");
 
     spec.test_cases.clear();

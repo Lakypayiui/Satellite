@@ -474,7 +474,7 @@ int SatelliteCLI::cmd_context_inspect()
 
 int SatelliteCLI::cmd_agent_create(int argc, char* argv[])
 {
-    if (argc < 3)
+    if (argc < 4)
     {
         std::cout << "Uso: satellite agent create <spec.json>\n";
         return 1;
@@ -487,7 +487,8 @@ int SatelliteCLI::cmd_agent_create(int argc, char* argv[])
         return 1;
     }
 
-    std::filesystem::path spec_path = argv[2];
+    std::filesystem::path spec_path = argv[3];
+    std::cout << "DEBUG CLI: spec_path = " << spec_path << "\n" << std::flush;
     std::ifstream ifs(spec_path);
     if (!ifs.is_open())
     {
@@ -496,14 +497,18 @@ int SatelliteCLI::cmd_agent_create(int argc, char* argv[])
     }
 
     std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    std::cout << "DEBUG CLI: content length = " << content.length() << "\n" << std::flush;
     nlohmann::json j = nlohmann::json::parse(content, nullptr, false);
+    std::cout << "DEBUG CLI: json parsed, discarded = " << j.is_discarded() << "\n" << std::flush;
     if (j.is_discarded())
     {
         std::cout << "Error: spec.json inválido\n";
         return 1;
     }
 
-    satellite::core::agent::AgentSpec spec = j.get<satellite::core::agent::AgentSpec>();
+    std::cout << "DEBUG CLI: getting AgentSpec\n" << std::flush;
+    satellite::factory::AgentSpec spec = j.get<satellite::factory::AgentSpec>();
+    std::cout << "DEBUG CLI: got AgentSpec, test_cases size = " << spec.test_cases.size() << "\n" << std::flush;
     if (spec.name.empty())
     {
         std::cout << "Error: spec inválida (falta name)\n";
@@ -548,12 +553,12 @@ int SatelliteCLI::cmd_agent_test(int argc, char* argv[])
         return 1;
     }
 
-    satellite::core::agent::AgentID id = static_cast<satellite::core::agent::AgentID>(std::stoul(argv[2]));
+    satellite::core::agent::AgentID id = static_cast<satellite::core::agent::AgentID>(std::stoul(argv[3]));
 
     nlohmann::json input = nlohmann::json::object();
-    if (argc >= 4)
+    if (argc >= 5)
     {
-        std::filesystem::path input_path = argv[3];
+        std::filesystem::path input_path = argv[4];
         std::ifstream ifs(input_path);
         if (!ifs.is_open())
         {
@@ -573,6 +578,24 @@ int SatelliteCLI::cmd_agent_test(int argc, char* argv[])
     satellite::core::registry::AgentRegistry registry;
     satellite::core::agents::register_native_agents(registry);
     store.load_registry(registry);
+
+    std::filesystem::path work_dir = project_root_ / ".satellite" / "agents" / "work";
+    std::filesystem::create_directories(work_dir);
+    satellite::factory::AgentFactory factory(registry, work_dir, framework_root_, "g++");
+    store.rebuild_agents(registry, factory);
+
+    // Workaround: rebuild_agents salta agentes con agent=nullptr si ya existe capability en registry.
+    // Cargamos specs y recreamos los que falten implementación (unregister + create).
+    auto specs = store.load_specs();
+    for (const auto& spec : specs)
+    {
+        const auto* desc = registry.find_agent(spec.id);
+        if (desc && desc->agent == nullptr)
+        {
+            registry.unregister_agent(spec.id);
+            factory.create_agent(spec);
+        }
+    }
 
     satellite::core::dispatcher::Dispatcher dispatcher(registry);
     satellite::core::agent::AgentRequest request;
@@ -630,10 +653,10 @@ int SatelliteCLI::cmd_run(int argc, char* argv[])
     std::filesystem::create_directories(work_dir);
 
     satellite::factory::AgentFactory factory(registry, work_dir, framework_root_, "g++");
-    factory.rebuild_all();
+    store.rebuild_agents(registry, factory);
 
     satellite::core::dispatcher::Dispatcher dispatcher(registry);
-    satellite::context::optimizer::DefaultContextOptimizer optimizer;
+    satellite::context::DefaultContextOptimizer optimizer;
     auto provider = std::make_unique<satellite::llm::DeepSeekProvider>(key);
     satellite::orchestrator::Orchestrator orchestrator(registry, dispatcher, optimizer, provider.get());
 
@@ -641,7 +664,7 @@ int SatelliteCLI::cmd_run(int argc, char* argv[])
     satellite::context::ProjectContext proj = adapter ? adapter->build_context(project_root_) : satellite::context::ProjectContext{};
 
     satellite::core::catalog::AgentCatalog catalog(registry);
-    satellite::core::agent::TokenBudget token_budget{4000};
+    satellite::core::protocol::TokenBudget token_budget{4000};
 
     auto result = orchestrator.execute_goal(goal, proj, token_budget, catalog);
 
@@ -652,7 +675,7 @@ int SatelliteCLI::cmd_run(int argc, char* argv[])
         return 1;
     }
 
-    for (const auto& step_result : result.step_results)
+    for (const auto& step_result : result.results)
     {
         std::cout << "paso -> " << step_result.output.dump(2) << "\n";
     }

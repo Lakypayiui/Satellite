@@ -47,3 +47,5 @@ add_satellite_test(test_config test_config.cpp)
 add_satellite_test(test_security test_security.cpp)
 
 add_satellite_test(test_observability test_observability.cpp)
+add_satellite_test(test_cli test_cli.cpp ../cli/SatelliteCLI.cpp)
+target_compile_definitions(test_cli PRIVATE SATELLITE_ROOT="${PROJECT_SOURCE_DIR}")
