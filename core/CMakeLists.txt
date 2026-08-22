@@ -18,6 +18,8 @@ target_sources(satellite_core PRIVATE
   validation/InputValidator.cpp
   dispatcher/Dispatcher.h
   dispatcher/Dispatcher.cpp
+  agents/NativeAgents.h
+  agents/NativeAgents.cpp
 )
 
 target_include_directories(satellite_core PUBLIC
