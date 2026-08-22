@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(satellite VERSION 0.1.0 LANGUAGES CXX)
+project(satellite VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,4 +23,12 @@ add_subdirectory(tests)
 # CLI executable (FASE 20 parte A)
 add_executable(satellite cli/main.cpp cli/SatelliteCLI.cpp cli/SatelliteCLI.h)
 target_link_libraries(satellite PRIVATE satellite_core)
-target_compile_definitions(satellite PRIVATE SATELLITE_ROOT="${PROJECT_SOURCE_DIR}")
+target_compile_definitions(satellite PRIVATE SATELLITE_ROOT="${PROJECT_SOURCE_DIR}" SATELLITE_VERSION="${PROJECT_VERSION}")
+
+# Distribución (FASE 21): instalación independiente del framework.
+install(TARGETS satellite RUNTIME DESTINATION bin)
+install(DIRECTORY third_party/json DESTINATION share/satellite/third_party)
+install(FILES README.md AGENTS.md DESTINATION share/satellite)
+add_executable(satellite_benchmark benchmark/benchmark.cpp)
+target_link_libraries(satellite_benchmark PRIVATE satellite_core)
+target_compile_definitions(satellite_benchmark PRIVATE SATELLITE_ROOT="${PROJECT_SOURCE_DIR}")

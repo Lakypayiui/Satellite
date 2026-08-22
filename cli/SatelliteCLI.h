@@ -24,6 +24,7 @@ private:
     int cmd_agents();
     int cmd_agent_info(int argc, char* argv[]);
     int cmd_agent_enable_disable(int argc, char* argv[], bool enable);
+    int cmd_version();
     int cmd_doctor();
 
     // FASE 20 parte B:

@@ -48,4 +48,9 @@ add_satellite_test(test_security test_security.cpp)
 
 add_satellite_test(test_observability test_observability.cpp)
 add_satellite_test(test_cli test_cli.cpp ../cli/SatelliteCLI.cpp)
-target_compile_definitions(test_cli PRIVATE SATELLITE_ROOT="${PROJECT_SOURCE_DIR}")
+target_compile_definitions(test_cli PRIVATE SATELLITE_ROOT="${PROJECT_SOURCE_DIR}" SATELLITE_VERSION="${PROJECT_VERSION}")
+
+add_satellite_test(test_portability test_portability.cpp)
+target_compile_definitions(test_portability PRIVATE SATELLITE_ROOT="${PROJECT_SOURCE_DIR}")
+
+add_satellite_test(test_benchmark test_benchmark.cpp)

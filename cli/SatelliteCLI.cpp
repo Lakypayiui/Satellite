@@ -135,6 +135,10 @@ int SatelliteCLI::run(int argc, char* argv[])
     {
         return cmd_doctor();
     }
+    else if (subcommand == "version" || subcommand == "--version" || subcommand == "-v")
+    {
+        return cmd_version();
+    }
     else
     {
         std::cout << "Comando desconocido: " << subcommand << "\n";
@@ -274,6 +278,12 @@ int SatelliteCLI::cmd_agent_enable_disable(int argc, char* argv[], bool enable)
         std::cout << "Error: no se pudo guardar el registro\n";
         return 1;
     }
+}
+
+int SatelliteCLI::cmd_version()
+{
+    std::cout << "satellite " << SATELLITE_VERSION << "\n";
+    return 0;
 }
 
 int SatelliteCLI::cmd_doctor()
