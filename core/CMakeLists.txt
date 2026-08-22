@@ -46,6 +46,8 @@ target_sources(satellite_core PRIVATE
   ../factory/AgentExpander.cpp
   ../persistence/AgentStore.h
   ../persistence/AgentStore.cpp
+  ../persistence/ProjectInitializer.h
+  ../persistence/ProjectInitializer.cpp
   )
 
 target_include_directories(satellite_core PUBLIC
