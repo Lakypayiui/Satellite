@@ -1,7 +1,5 @@
 # ============================================================
 # Satellite — .gitignore del repositorio del FRAMEWORK
-# Todo lo que un USUARIO del framework no necesita en GitHub.
-# (El estado de proyectos consumidores vive en su propio .satellite/)
 # ============================================================
 
 # --- Build (CMake / Ninja / Make) ---
@@ -78,3 +76,6 @@ venv/
 *.cache
 .cache/
 *.pid
+
+# --- Agentes ---
+
