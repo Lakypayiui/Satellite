@@ -6,3 +6,5 @@ function(add_satellite_test TEST_NAME)
 endfunction()
 
 add_satellite_test(test_agent_core test_agent_core.cpp)
+
+add_satellite_test(test_registry test_registry.cpp)

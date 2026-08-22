@@ -12,6 +12,8 @@ target_sources(satellite_core PRIVATE
   agent/IAgent.h
   agent/agent.h
   agent/agent.cpp
+  registry/AgentRegistry.h
+  registry/AgentRegistry.cpp
 )
 
 target_include_directories(satellite_core PUBLIC
