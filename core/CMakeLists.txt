@@ -37,6 +37,8 @@ target_sources(satellite_core PRIVATE
   ../context/adapter/ProjectAdapter.cpp
   ../orchestrator/Orchestrator.h
   ../orchestrator/Orchestrator.cpp
+  ../planner/Planner.h
+  ../planner/Planner.cpp
 )
 
 target_include_directories(satellite_core PUBLIC

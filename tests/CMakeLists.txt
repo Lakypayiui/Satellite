@@ -28,3 +28,5 @@ add_satellite_test(test_context_optimizer test_context_optimizer.cpp)
 add_satellite_test(test_project_adapter test_project_adapter.cpp)
 
 add_satellite_test(test_orchestrator test_orchestrator.cpp)
+
+add_satellite_test(test_planner test_planner.cpp)
