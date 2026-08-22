@@ -39,6 +39,9 @@ target_sources(satellite_core PRIVATE
   ../orchestrator/Orchestrator.cpp
   ../planner/Planner.h
   ../planner/Planner.cpp
+  ../factory/AgentFactory.h
+  ../factory/AgentFactory.cpp
+  ../factory/AgentPlugin.h
 )
 
 target_include_directories(satellite_core PUBLIC
@@ -46,3 +49,7 @@ target_include_directories(satellite_core PUBLIC
   ${PROJECT_SOURCE_DIR}/third_party
   ${PROJECT_SOURCE_DIR}/third_party/json
 )
+
+if(NOT MSVC)
+    target_link_libraries(satellite_core PRIVATE ${CMAKE_DL_LIBS})
+endif()
