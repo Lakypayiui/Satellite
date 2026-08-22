@@ -33,3 +33,6 @@ add_satellite_test(test_planner test_planner.cpp)
 
 add_satellite_test(test_agent_factory test_agent_factory.cpp)
 target_compile_definitions(test_agent_factory PRIVATE SATELLITE_ROOT="${PROJECT_SOURCE_DIR}")
+
+add_satellite_test(test_agent_expander test_agent_expander.cpp)
+target_compile_definitions(test_agent_expander PRIVATE SATELLITE_ROOT="${PROJECT_SOURCE_DIR}")

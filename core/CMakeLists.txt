@@ -39,10 +39,12 @@ target_sources(satellite_core PRIVATE
   ../orchestrator/Orchestrator.cpp
   ../planner/Planner.h
   ../planner/Planner.cpp
-  ../factory/AgentFactory.h
+../factory/AgentFactory.h
   ../factory/AgentFactory.cpp
   ../factory/AgentPlugin.h
-)
+  ../factory/AgentExpander.h
+  ../factory/AgentExpander.cpp
+ )
 
 target_include_directories(satellite_core PUBLIC
   ${PROJECT_SOURCE_DIR}

@@ -204,15 +204,15 @@ int main()
         AgentResult result = agent->execute(req);
 
         bool match = true;
-        if (result.output.type() != expected.type())
-        {
-            match = false;
-        }
-        else if (result.output.is_number() && expected.is_number())
+        if (result.output.is_number() && expected.is_number())
         {
             double diff = std::abs(result.output.get<double>() - expected.get<double>());
             if (diff > 1e-9)
                 match = false;
+        }
+        else if (result.output.type() != expected.type())
+        {
+            match = false;
         }
         else
         {
