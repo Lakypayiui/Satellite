@@ -1,0 +1,11 @@
+build/
+*.o
+*.obj
+*.exe
+CMakeCache.txt
+CMakeFiles/
+.satellite/
+.agent/
+*.log
+.DS_Store
+__pycache__/
