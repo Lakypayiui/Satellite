@@ -33,6 +33,8 @@ target_sources(satellite_core PRIVATE
   ../context/engine/ContextEngine.cpp
   ../context/optimizer/ContextOptimizer.h
   ../context/optimizer/ContextOptimizer.cpp
+  ../context/adapter/ProjectAdapter.h
+  ../context/adapter/ProjectAdapter.cpp
 )
 
 target_include_directories(satellite_core PUBLIC
