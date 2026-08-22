@@ -19,3 +19,8 @@ add_subdirectory(core)
 
 enable_testing()
 add_subdirectory(tests)
+
+# CLI executable (FASE 20 parte A)
+add_executable(satellite cli/main.cpp cli/SatelliteCLI.cpp cli/SatelliteCLI.h)
+target_link_libraries(satellite PRIVATE satellite_core)
+target_compile_definitions(satellite PRIVATE SATELLITE_ROOT="${PROJECT_SOURCE_DIR}")
