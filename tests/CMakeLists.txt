@@ -8,3 +8,7 @@ endfunction()
 add_satellite_test(test_agent_core test_agent_core.cpp)
 
 add_satellite_test(test_registry test_registry.cpp)
+
+add_satellite_test(test_validator test_validator.cpp)
+
+add_satellite_test(test_dispatcher test_dispatcher.cpp)

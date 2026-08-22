@@ -14,6 +14,10 @@ target_sources(satellite_core PRIVATE
   agent/agent.cpp
   registry/AgentRegistry.h
   registry/AgentRegistry.cpp
+  validation/InputValidator.h
+  validation/InputValidator.cpp
+  dispatcher/Dispatcher.h
+  dispatcher/Dispatcher.cpp
 )
 
 target_include_directories(satellite_core PUBLIC
