@@ -442,7 +442,6 @@ cmake --build build && ctest --test-dir build --output-on-failure
 ## Roadmap / limitations
 
 - [ ] Real tokenizer integration (provider-accurate token counts).
-- [ ] Benchmark with real LLM calls (latency + cost in USD) and real repositories.
 - [ ] Additional project adapters (JavaScript, TypeScript, Java).
 - [ ] Additional LLM providers (OpenAI, Anthropic, local models).
 - [ ] Process-level isolation for LLM-generated agents (per-agent sandboxing).

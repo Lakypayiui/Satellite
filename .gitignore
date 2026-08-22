@@ -1,11 +1,80 @@
+# ============================================================
+# Satellite — .gitignore del repositorio del FRAMEWORK
+# Todo lo que un USUARIO del framework no necesita en GitHub.
+# (El estado de proyectos consumidores vive en su propio .satellite/)
+# ============================================================
+
+# --- Build (CMake / Ninja / Make) ---
 build/
-*.o
-*.obj
-*.exe
+cmake-build-*/
+out/
 CMakeCache.txt
 CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+CMakeScripts/
+Makefile
+*.ninja
+.ninja_deps
+.ninja_log
+install_manifest.txt
+Testing/
+compile_commands.json
+
+# --- Compilados / binarios / librerías ---
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.pdb
+*.ilk
+*.exp
+*.mod
+*.i
+*.s
+*.dSYM/
+*.gcda
+*.gcno
+
+# --- Depuración local del desarrollador ---
+test_debug.cpp
+*_debug.cpp
+*_diag.cpp
+*.orig
+
+# --- Estado del framework en proyectos (pruebas locales) ---
 .satellite/
 .agent/
-*.log
+
+# --- Editor / IDE / SO ---
+.vscode/
+.idea/
+.vs/
+*.swp
+*~
+*.sublime-*
 .DS_Store
+Thumbs.db
+Desktop.ini
+
+# --- Python (proyectos de ejemplo / scripts de desarrollo) ---
 __pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# --- Logs y temporales ---
+*.log
+*.tmp
+*.temp
+*.bak
+*.cache
+.cache/
+*.pid
