@@ -50,6 +50,8 @@ target_sources(satellite_core PRIVATE
   ../persistence/ProjectInitializer.cpp
   ../config/Config.h
   ../config/Config.cpp
+  ../observability/ExecutionLog.h
+  ../observability/ExecutionLog.cpp
   ../security/SecurityPolicy.h
   ../security/SecurityPolicy.cpp
   )

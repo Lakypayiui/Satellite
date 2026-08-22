@@ -22,6 +22,11 @@
 #include "core/protocol/Protocol.h"
 #include "llm/ILLMProvider.h"
 
+namespace satellite::observability
+{
+class ExecutionLogger;
+}
+
 namespace satellite::orchestrator
 {
 
@@ -73,11 +78,15 @@ public:
     std::vector<std::string> detect_missing_capabilities(const std::string& goal,
                                                          const AgentCatalog& catalog) const;
 
+    // Establece el logger de observabilidad (opcional; nullptr = sin registro).
+    void set_logger(satellite::observability::ExecutionLogger* logger);
+
 private:
     satellite::core::registry::AgentRegistry& registry_;
     satellite::core::dispatcher::Dispatcher& dispatcher_;
     satellite::context::IContextOptimizer& optimizer_;
     satellite::llm::ILLMProvider* llm_;   // nullable (el runtime no depende del LLM)
+    satellite::observability::ExecutionLogger* logger_ = nullptr;
 
     AgentResult execute_step(const OrchestrationStep& step,
                              const ProjectContext& project,

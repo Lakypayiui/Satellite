@@ -45,3 +45,5 @@ add_satellite_test(test_project_initializer test_project_initializer.cpp)
 add_satellite_test(test_config test_config.cpp)
 
 add_satellite_test(test_security test_security.cpp)
+
+add_satellite_test(test_observability test_observability.cpp)

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <sstream>
 #include <unordered_set>
 
@@ -16,6 +17,7 @@
 #include "llm/ILLMProvider.h"
 #include "llm/LLMTypes.h"
 #include "core/protocol/Protocol.h"
+#include "observability/ExecutionLog.h"
 
 namespace satellite::orchestrator
 {
@@ -29,6 +31,11 @@ Orchestrator::Orchestrator(satellite::core::registry::AgentRegistry& registry,
     , optimizer_(optimizer)
     , llm_(llm)
 {
+}
+
+void Orchestrator::set_logger(satellite::observability::ExecutionLogger* logger)
+{
+    logger_ = logger;
 }
 
 OrchestrationResult Orchestrator::run_plan(const std::vector<OrchestrationStep>& plan,
@@ -314,7 +321,37 @@ AgentResult Orchestrator::execute_step(const OrchestrationStep& step,
     request.execution_metadata.execution_id = satellite::core::protocol::make_execution_id();
 
     // 5. return dispatcher_.dispatch(request);
-    return dispatcher_.dispatch(request);
+    AgentResult step_result = dispatcher_.dispatch(request);
+    if (logger_ != nullptr)
+    {
+        satellite::observability::ExecutionRecord rec;
+        rec.execution_id = request.execution_metadata.execution_id;
+        rec.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        rec.provider = request.execution_metadata.provider;
+        rec.model = request.execution_metadata.model;
+        rec.agent_id = request.agent_id;
+        if (desc != nullptr)
+        {
+            rec.agent_version = desc->version;
+        }
+        rec.input = request.input;
+        rec.context = request.context;
+        rec.output = step_result.output;
+        rec.duration_ms = step_result.duration_ms;
+        rec.status = step_result.status;
+        if (step_result.error)
+        {
+            rec.error_message = step_result.error->message;
+        }
+        satellite::context::OptimizationStats st = optimizer_.last_stats();
+        rec.tokens_before = st.tokens_before;
+        rec.tokens_after = st.tokens_after;
+        rec.tokens_saved = st.tokens_saved;
+        rec.compression_ratio = st.compression_ratio;
+        rec.relevance_score = st.relevance_score;
+        logger_->log(rec);
+    }
+    return step_result;
 }
 
 } // namespace satellite::orchestrator
