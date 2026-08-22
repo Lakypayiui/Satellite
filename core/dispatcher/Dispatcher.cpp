@@ -5,6 +5,7 @@
 #include "core/registry/AgentRegistry.h"
 #include "core/validation/InputValidator.h"
 #include "core/protocol/Protocol.h"
+#include "security/SecurityPolicy.h"
 #include <chrono>
 #include <exception>
 #include <string>
@@ -13,8 +14,9 @@
 namespace satellite::core::dispatcher
 {
 
-Dispatcher::Dispatcher(satellite::core::registry::AgentRegistry& registry)
+Dispatcher::Dispatcher(satellite::core::registry::AgentRegistry& registry, const satellite::security::SecurityPolicy* security)
     : registry_(registry)
+    , security_(security)
 {
 }
 
@@ -35,7 +37,8 @@ satellite::core::agent::AgentResult Dispatcher::dispatch(const satellite::core::
             AgentStatus::UNKNOWN_AGENT,
             nlohmann::json(),
             AgentError{AgentErrorCode::UNKNOWN_AGENT, "unknown agent id: " + std::to_string(request.agent_id)},
-            0.0
+            0.0,
+        {}
         };
     }
 
@@ -47,8 +50,26 @@ satellite::core::agent::AgentResult Dispatcher::dispatch(const satellite::core::
             AgentStatus::DISABLED,
             nlohmann::json(),
             AgentError{AgentErrorCode::DISABLED_AGENT, "agent disabled: " + std::to_string(request.agent_id)},
-            0.0
+            0.0,
+        {}
         };
+    }
+
+    if (security_ != nullptr)
+    {
+        std::string denied;
+        if (!security_->validate_agent(*desc, denied))
+        {
+            return AgentResult
+            {
+                request.agent_id,
+                AgentStatus::FAILED,
+                nlohmann::json(),
+                AgentError{AgentErrorCode::SECURITY_DENIED, "capability denied: " + denied},
+                0.0,
+            {}
+            };
+        }
     }
 
     if (desc->agent == nullptr)
@@ -59,7 +80,8 @@ satellite::core::agent::AgentResult Dispatcher::dispatch(const satellite::core::
             AgentStatus::FAILED,
             nlohmann::json(),
             AgentError{AgentErrorCode::INTERNAL_ERROR, "agent has no implementation"},
-            0.0
+            0.0,
+        {}
         };
     }
 
@@ -72,7 +94,8 @@ satellite::core::agent::AgentResult Dispatcher::dispatch(const satellite::core::
             AgentStatus::VALIDATION_ERROR,
             nlohmann::json(),
             AgentError{AgentErrorCode::VALIDATION_ERROR, err},
-            0.0
+            0.0,
+        {}
         };
     }
 
@@ -91,7 +114,8 @@ satellite::core::agent::AgentResult Dispatcher::dispatch(const satellite::core::
             AgentStatus::FAILED,
             nlohmann::json(),
             AgentError{AgentErrorCode::EXECUTION_FAILED, e.what()},
-            duration_ms
+            duration_ms,
+            {}
         };
     }
 

@@ -18,7 +18,8 @@ enum class AgentErrorCode : std::uint32_t
     EXECUTION_FAILED,
     DISABLED_AGENT,
     TIMEOUT,
-    INTERNAL_ERROR
+    INTERNAL_ERROR,
+    SECURITY_DENIED
 };
 
 struct AgentError

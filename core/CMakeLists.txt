@@ -39,7 +39,7 @@ target_sources(satellite_core PRIVATE
   ../orchestrator/Orchestrator.cpp
   ../planner/Planner.h
   ../planner/Planner.cpp
-../factory/AgentFactory.h
+  ../factory/AgentFactory.h
   ../factory/AgentFactory.cpp
   ../factory/AgentPlugin.h
   ../factory/AgentExpander.h
@@ -50,6 +50,8 @@ target_sources(satellite_core PRIVATE
   ../persistence/ProjectInitializer.cpp
   ../config/Config.h
   ../config/Config.cpp
+  ../security/SecurityPolicy.h
+  ../security/SecurityPolicy.cpp
   )
 
 target_include_directories(satellite_core PUBLIC
