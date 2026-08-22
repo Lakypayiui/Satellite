@@ -36,3 +36,6 @@ target_compile_definitions(test_agent_factory PRIVATE SATELLITE_ROOT="${PROJECT_
 
 add_satellite_test(test_agent_expander test_agent_expander.cpp)
 target_compile_definitions(test_agent_expander PRIVATE SATELLITE_ROOT="${PROJECT_SOURCE_DIR}")
+
+add_satellite_test(test_persistence test_persistence.cpp)
+target_compile_definitions(test_persistence PRIVATE SATELLITE_ROOT="${PROJECT_SOURCE_DIR}")

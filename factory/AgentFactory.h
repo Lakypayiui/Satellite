@@ -66,4 +66,8 @@ private:
     std::string get_test_executable_path(AgentID id) const;
 };
 
+// Serialización de AgentSpec para persistencia
+void to_json(nlohmann::json& j, const AgentSpec& spec);
+void from_json(const nlohmann::json& j, AgentSpec& spec);
+
 } // namespace satellite::factory
