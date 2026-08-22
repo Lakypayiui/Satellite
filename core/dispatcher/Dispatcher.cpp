@@ -4,6 +4,7 @@
 #include "core/agent/IAgent.h"
 #include "core/registry/AgentRegistry.h"
 #include "core/validation/InputValidator.h"
+#include "core/protocol/Protocol.h"
 #include <chrono>
 #include <exception>
 #include <string>
@@ -102,6 +103,27 @@ satellite::core::agent::AgentResult Dispatcher::dispatch(const satellite::core::
     if (result.duration_ms <= 0.0)
     {
         result.duration_ms = duration_ms;
+    }
+
+    // Normalización de execution_metadata (Fase 5)
+    if (result.execution_metadata.execution_id.empty())
+    {
+        if (!request.execution_metadata.execution_id.empty())
+        {
+            result.execution_metadata.execution_id = request.execution_metadata.execution_id;
+        }
+        else
+        {
+            result.execution_metadata.execution_id = satellite::core::protocol::make_execution_id();
+        }
+    }
+    if (result.execution_metadata.provider.empty())
+    {
+        result.execution_metadata.provider = request.execution_metadata.provider;
+    }
+    if (result.execution_metadata.model.empty())
+    {
+        result.execution_metadata.model = request.execution_metadata.model;
     }
 
     return result;

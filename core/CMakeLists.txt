@@ -20,6 +20,8 @@ target_sources(satellite_core PRIVATE
   dispatcher/Dispatcher.cpp
   agents/NativeAgents.h
   agents/NativeAgents.cpp
+  protocol/Protocol.h
+  protocol/Protocol.cpp
 )
 
 target_include_directories(satellite_core PUBLIC

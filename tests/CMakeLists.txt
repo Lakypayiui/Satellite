@@ -14,3 +14,5 @@ add_satellite_test(test_validator test_validator.cpp)
 add_satellite_test(test_dispatcher test_dispatcher.cpp)
 
 add_satellite_test(test_native_agents test_native_agents.cpp)
+
+add_satellite_test(test_protocol test_protocol.cpp)
