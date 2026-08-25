@@ -74,7 +74,7 @@ int main()
         {
             FileInfo fi;
             fi.path = entry.path().filename().string();
-            fi.language = "C++";
+            fi.type = "C++";
             fi.size = entry.file_size();
             std::ifstream in(entry.path());
             std::string line;

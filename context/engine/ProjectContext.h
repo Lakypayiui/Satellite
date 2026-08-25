@@ -30,7 +30,9 @@ struct SymbolInfo
 struct FileInfo
 {
     std::string path;
-    std::string language;
+    std::string category;
+    std::string type;
+
     std::size_t size = 0;
     std::size_t lines = 0;
     std::vector<SymbolInfo> symbols;

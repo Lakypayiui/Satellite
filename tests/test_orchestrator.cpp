@@ -72,7 +72,7 @@ ProjectContext make_minimal_project()
 
     FileInfo file;
     file.path = "src/main.cpp";
-    file.language = "cpp";
+    file.type = "cpp";
     file.size = 100;
     file.lines = 10;
 

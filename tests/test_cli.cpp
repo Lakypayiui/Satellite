@@ -15,6 +15,10 @@
 #include <json.hpp>
 
 using satellite::cli::SatelliteCLI;
+#ifdef _WIN32
+#define popen _popen
+#define pclose _pclose
+#endif
 
 int g_passed = 0;
 int g_failed = 0;
@@ -233,30 +237,40 @@ int main()
         // create y test se ejecutan en SUBPROCESOS (el binario real satellite.exe):
         // in-process, la DLL del plugin quedaría cargada y Windows bloquea su
         // recompilación durante el rebuild que hace cmd_agent_test.
-        fs::path bin = fs::path(SATELLITE_ROOT) / "build" / "satellite.exe";
+        #ifdef _WIN32
+            fs::path bin = fs::path(SATELLITE_ROOT) / "build" / "satellite.exe";
+        #else
+            fs::path bin = fs::path(SATELLITE_ROOT) / "build" / "satellite";
+        #endif
+
         std::string bin_native = bin.string();
-        for (auto& ch : bin_native)
-        {
-            if (ch == '/')
-            {
-                ch = '\\';
-            }
-        }
         auto run_bin = [&](const std::string& args) -> std::string
         {
-            std::string cmd = "cmd /c \"cd /d " + proj.string() + " && " + bin_native + " " + args + "\"";
-            std::string result;
-            char buf[512];
-            FILE* pipe = _popen(cmd.c_str(), "r");
-            while (pipe && fgets(buf, sizeof(buf), pipe))
-            {
-                result += buf;
-            }
-            if (pipe)
-            {
-                _pclose(pipe);
-            }
-            return result;
+            #ifdef _WIN32
+                std::string cmd = "cmd /c \"cd /d " + proj.string() + " && " +
+                                bin_native + " " + args + "\"";
+            #else
+                std::string cmd = "cd \"" + proj.string() + "\" && " +
+                                bin_native + " " + args;
+            #endif
+
+                std::string result;
+
+                char buf[512];
+
+                FILE* pipe = popen(cmd.c_str(), "r");
+
+                while (pipe && fgets(buf, sizeof(buf), pipe))
+                {
+                    result += buf;
+                }
+
+                if (pipe)
+                {
+                    pclose(pipe);
+                }
+
+                return result;
         };
 
         std::string create_out = run_bin("agent create spec.json");

@@ -152,17 +152,17 @@ void test_files_info()
             if (file.path == "src/math.cpp")
             {
                 has_math_cpp = true;
-                CHECK("math.cpp language == C++", file.language == "C++");
+                CHECK("math.cpp language == C++", file.type == "C++");
             }
             else if (file.path == "src/math.h")
             {
                 has_math_h = true;
-                CHECK("math.h language == C++", file.language == "C++");
+                CHECK("math.h language == C++", file.type == "C++");
             }
             else if (file.path == "app.py")
             {
                 has_app_py = true;
-                CHECK("app.py language == Python", file.language == "Python");
+                CHECK("app.py language == Python", file.type == "Python");
             }
             else if (file.path.find("README.md") != std::string::npos)
             {

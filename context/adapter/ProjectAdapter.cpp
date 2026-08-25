@@ -35,7 +35,7 @@ std::vector<std::string> default_ignore_dirs()
 bool has_cpp_extension(const std::filesystem::path& path)
 {
     const auto ext = path.extension().string();
-    return ext == ".cpp" || ext == ".cc" || ext == ".cxx" ||
+    return ext == ".c" || ext == ".cpp" || ext == ".cc" || ext == ".cxx" ||
            ext == ".h" || ext == ".hpp" || ext == ".hh";
 }
 
@@ -101,51 +101,27 @@ bool CppProjectAdapter::supports(const std::filesystem::path& root) const
     return false;
 }
 
-ProjectContext CppProjectAdapter::build_context(const std::filesystem::path& root) const
+ProjectContext CppProjectAdapter::build_context(
+    const std::filesystem::path& root) const
 {
-    ProjectContext ctx = ContextEngine(root).build();
+    auto ctx = ContextEngine(root).build();
 
-    std::vector<FileInfo> filtered_files;
-    filtered_files.reserve(ctx.files.size());
+    ctx.files.erase(
+        std::remove_if(
+            ctx.files.begin(),
+            ctx.files.end(),
+            [](const FileInfo& file) {
+                return file.type != "C++";
+            }),
+        ctx.files.end());
+
+    ctx.total_files = ctx.files.size();
+    ctx.total_lines = 0;
 
     for (const auto& file : ctx.files)
     {
-        if (file.language == language())
-        {
-            filtered_files.push_back(file);
-        }
+        ctx.total_lines += file.lines;
     }
-
-    std::vector<DependencyInfo> filtered_deps;
-    filtered_deps.reserve(ctx.dependencies.size());
-
-    for (const auto& dep : ctx.dependencies)
-    {
-        bool from_file_exists = false;
-        for (const auto& file : filtered_files)
-        {
-            if (file.path == dep.from_file)
-            {
-                from_file_exists = true;
-                break;
-            }
-        }
-        if (from_file_exists)
-        {
-            filtered_deps.push_back(dep);
-        }
-    }
-
-    std::size_t total_lines = 0;
-    for (const auto& file : filtered_files)
-    {
-        total_lines += file.lines;
-    }
-
-    ctx.files = std::move(filtered_files);
-    ctx.dependencies = std::move(filtered_deps);
-    ctx.total_lines = total_lines;
-    ctx.total_files = ctx.files.size();
 
     return ctx;
 }
@@ -192,51 +168,27 @@ bool PythonProjectAdapter::supports(const std::filesystem::path& root) const
     return false;
 }
 
-ProjectContext PythonProjectAdapter::build_context(const std::filesystem::path& root) const
+ProjectContext PythonProjectAdapter::build_context(
+    const std::filesystem::path& root) const
 {
-    ProjectContext ctx = ContextEngine(root).build();
+    auto ctx = ContextEngine(root).build();
 
-    std::vector<FileInfo> filtered_files;
-    filtered_files.reserve(ctx.files.size());
+    ctx.files.erase(
+        std::remove_if(
+            ctx.files.begin(),
+            ctx.files.end(),
+            [](const FileInfo& file) {
+                return file.type != "Python";
+            }),
+        ctx.files.end());
+
+    ctx.total_files = ctx.files.size();
+    ctx.total_lines = 0;
 
     for (const auto& file : ctx.files)
     {
-        if (file.language == language())
-        {
-            filtered_files.push_back(file);
-        }
+        ctx.total_lines += file.lines;
     }
-
-    std::vector<DependencyInfo> filtered_deps;
-    filtered_deps.reserve(ctx.dependencies.size());
-
-    for (const auto& dep : ctx.dependencies)
-    {
-        bool from_file_exists = false;
-        for (const auto& file : filtered_files)
-        {
-            if (file.path == dep.from_file)
-            {
-                from_file_exists = true;
-                break;
-            }
-        }
-        if (from_file_exists)
-        {
-            filtered_deps.push_back(dep);
-        }
-    }
-
-    std::size_t total_lines = 0;
-    for (const auto& file : filtered_files)
-    {
-        total_lines += file.lines;
-    }
-
-    ctx.files = std::move(filtered_files);
-    ctx.dependencies = std::move(filtered_deps);
-    ctx.total_lines = total_lines;
-    ctx.total_files = ctx.files.size();
 
     return ctx;
 }

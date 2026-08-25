@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <cstdlib>
 #include <cstdio>
+#include <unistd.h>
 
 namespace satellite::llm
 {

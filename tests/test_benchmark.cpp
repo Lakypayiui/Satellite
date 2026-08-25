@@ -50,7 +50,7 @@ int main()
         {
             FileInfo fi;
             fi.path = "modulo_" + std::to_string(i) + ".cpp";
-            fi.language = "C++";
+            fi.type = "C++";
             fi.lines = 30;
             fi.size = 900;
             fi.symbols.push_back(SymbolInfo{"funcion_" + std::to_string(i), SymbolKind::Function, fi.path, 1, ""});

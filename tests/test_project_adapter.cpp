@@ -87,7 +87,7 @@ void test_cpp_project_adapter()
     // Verificar que todos los archivos son language == "C++"
     bool all_cpp = true;
     for (const auto& file : ctx.files) {
-        if (file.language != "C++") {
+        if (file.type != "C++") {
             all_cpp = false;
             break;
         }
@@ -97,7 +97,7 @@ void test_cpp_project_adapter()
     // Verificar que NO hay archivos Python
     bool has_python = false;
     for (const auto& file : ctx.files) {
-        if (file.language == "Python") {
+        if (file.type == "Python") {
             has_python = true;
             break;
         }
@@ -144,7 +144,7 @@ void test_python_project_adapter()
     // Verificar que el archivo es language == "Python"
     bool all_python = true;
     for (const auto& file : ctx.files) {
-        if (file.language != "Python") {
+        if (file.type != "Python") {
             all_python = false;
             break;
         }

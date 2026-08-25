@@ -40,7 +40,7 @@ ProjectContext make_project()
     // 1. src/auth/login.cpp
     FileInfo login_cpp;
     login_cpp.path = "src/auth/login.cpp";
-    login_cpp.language = "C++";
+    login_cpp.type = "C++";
     login_cpp.size = 4000;
     login_cpp.lines = 120;
     login_cpp.symbols = {
@@ -52,7 +52,7 @@ ProjectContext make_project()
     // 2. src/auth/token.h
     FileInfo token_h;
     token_h.path = "src/auth/token.h";
-    token_h.language = "C++";
+    token_h.type = "C++";
     token_h.size = 1500;
     token_h.lines = 40;
     token_h.symbols = {
@@ -63,7 +63,7 @@ ProjectContext make_project()
     // 3. src/math/calc.cpp
     FileInfo calc_cpp;
     calc_cpp.path = "src/math/calc.cpp";
-    calc_cpp.language = "C++";
+    calc_cpp.type = "C++";
     calc_cpp.size = 6000;
     calc_cpp.lines = 180;
     calc_cpp.symbols = {
@@ -75,7 +75,7 @@ ProjectContext make_project()
     // 4. src/main.cpp
     FileInfo main_cpp;
     main_cpp.path = "src/main.cpp";
-    main_cpp.language = "C++";
+    main_cpp.type = "C++";
     main_cpp.size = 2000;
     main_cpp.lines = 60;
     main_cpp.symbols = {

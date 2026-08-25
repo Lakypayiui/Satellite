@@ -29,7 +29,8 @@ private:
 
     static std::vector<std::string> default_ignore_dirs();
 
-    static std::string detect_language(const std::filesystem::path& path);
+        static std::string detect_category(const std::filesystem::path& path);
+    static std::string detect_type(const std::filesystem::path& path);
 
     static bool should_process_file(const std::filesystem::path& path);
 

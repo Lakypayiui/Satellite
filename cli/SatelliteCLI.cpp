@@ -1,3 +1,5 @@
+#include <map>
+#include <set>
 // Implementación de la CLI del framework Satellite (FASE 20 parte A + B).
 // La CLI usa el framework como BIBLIOTECA (no duplica lógica).
 
@@ -380,55 +382,121 @@ int SatelliteCLI::cmd_doctor()
 
 int SatelliteCLI::cmd_context_build()
 {
-    satellite::persistence::AgentStore store(project_root_);
-    if (!store.has_state())
-    {
-        std::cout << "Error: proyecto no inicializado. Ejecuta: satellite init\n";
-        return 1;
-    }
-
-    auto adapter = satellite::context::ProjectAdapterFactory::detect(project_root_);
-    if (!adapter)
-    {
-        std::cout << "Error: no se detectó un proyecto soportado (C++/Python)\n";
-        return 1;
-    }
-
-    satellite::context::ProjectContext ctx = adapter->build_context(project_root_);
+    satellite::context::ContextEngine engine(project_root_);
+    satellite::context::ProjectContext ctx = engine.build();
 
     size_t total_symbols = 0;
+
+    std::map<std::string, std::map<std::string, size_t>> category_counts;
+
     for (const auto& file : ctx.files)
     {
         total_symbols += file.symbols.size();
+
+        if (!file.type.empty() && !file.category.empty())
+        {
+            category_counts[file.category][file.type]++;
+        }
     }
 
-    std::cout << "Lenguaje: " << adapter->language() << "\n";
+    // Categorías en el orden deseado.
+    const std::vector<std::string> category_order = {
+        "Code",
+        "Configuration",
+        "Markup"
+    };
+
+    const std::map<std::string, std::string> category_labels = {
+        {"Code", "Código"},
+        {"Configuration", "Configuración"},
+        {"Markup", "Markup"}
+    };
+
+    // Mostrar categorías.
+    for (const auto& category : category_order)
+    {
+        auto it = category_counts.find(category);
+
+        if (it == category_counts.end() || it->second.empty())
+        {
+            continue;
+        }
+
+        std::cout << category_labels.at(category) << ":\n";
+
+        for (const auto& [type, count] : it->second)
+        {
+            std::cout << "  " << type << ": " << count << "\n";
+        }
+
+        std::cout << "\n";
+    }
+
     std::cout << "Archivos: " << ctx.files.size() << "\n";
     std::cout << "Simbolos: " << total_symbols << "\n";
     std::cout << "Dependencias: " << ctx.dependencies.size() << "\n";
     std::cout << "Lineas totales: " << ctx.total_lines << "\n";
 
+    // ---------------------------------------------------------
+    // Persistencia del contexto
+    // ---------------------------------------------------------
+
     nlohmann::json cache;
+
     cache["root"] = ctx.root;
-    cache["language"] = adapter->language();
+
+    // Conteo global por tipo
+    cache["type_counts"] = nlohmann::json::object();
+
+    for (const auto& [category, type_map] : category_counts)
+    {
+        for (const auto& [type, count] : type_map)
+        {
+            cache["type_counts"][type] = count;
+        }
+    }
+
+    // Conteo agrupado por categoría
+    cache["category_counts"] = nlohmann::json::object();
+
+    for (const auto& [category, type_map] : category_counts)
+    {
+        cache["category_counts"][category] = nlohmann::json::object();
+
+        for (const auto& [type, count] : type_map)
+        {
+            cache["category_counts"][category][type] = count;
+        }
+    }
+
     cache["total_lines"] = ctx.total_lines;
     cache["total_files"] = ctx.files.size();
+
     cache["files"] = nlohmann::json::array();
+
     for (const auto& file : ctx.files)
     {
         nlohmann::json f;
+
         f["path"] = file.path;
-        f["language"] = file.language;
+        f["type"] = file.type;
+        f["category"] = file.category;
         f["size"] = file.size;
         f["lines"] = file.lines;
+
         cache["files"].push_back(f);
     }
 
-    std::filesystem::path cache_dir = project_root_ / ".satellite" / "context";
+    std::filesystem::path cache_dir =
+        project_root_ / ".satellite" / "context";
+
     std::filesystem::create_directories(cache_dir);
-    std::filesystem::path cache_file = cache_dir / "context.json";
+
+    std::filesystem::path cache_file =
+        cache_dir / "context.json";
 
     std::ofstream ofs(cache_file);
+
     if (ofs.is_open())
     {
         ofs << cache.dump(2);
@@ -436,7 +504,8 @@ int SatelliteCLI::cmd_context_build()
     }
     else
     {
-        std::cout << "Aviso: no se pudo escribir cache en " << cache_file << "\n";
+        std::cout << "Aviso: no se pudo escribir cache en "
+                  << cache_file << "\n";
     }
 
     return 0;
@@ -467,7 +536,7 @@ int SatelliteCLI::cmd_context_inspect()
     {
         for (const auto& f : cache["files"])
         {
-            std::cout << "  " << f["path"].get<std::string>() << " (" << f["language"].get<std::string>() << ", " << f["lines"].get<size_t>() << " lineas, " << f["size"].get<size_t>() << " bytes)\n";
+            std::cout << "  " << f["path"].get<std::string>() << " (" << f["type"].get<std::string>() << ", " << f["lines"].get<size_t>() << " lineas, " << f["size"].get<size_t>() << " bytes)\n";
         }
     }
 
