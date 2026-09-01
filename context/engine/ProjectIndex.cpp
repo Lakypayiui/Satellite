@@ -408,18 +408,10 @@ ProjectIndex ProjectIndexBuilder::build() const
         std::int64_t mtime_val = 0;
         try
         {
-            auto ft = std::filesystem::last_write_time(file_path);
+            auto ft = std::filesystem::last_write_time(root_ / file_path);
             mtime_val = static_cast<std::int64_t>(ft.time_since_epoch().count());
         }
         catch (...) {}
-        if (mtime_val <= 0)
-        {
-            mtime_val = static_cast<std::int64_t>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::system_clock::now().time_since_epoch()
-                ).count()
-            );
-        }
         indexed_file.mtime = mtime_val;
 
         idx.files.push_back(std::move(indexed_file));
@@ -432,15 +424,9 @@ ProjectIndex ProjectIndexBuilder::build() const
 
 std::vector<std::string> ProjectIndexBuilder::changed_paths(const ProjectIndex& saved, const std::filesystem::path& project_root) const
 {
-    std::unordered_map<std::string, std::int64_t> saved_mtimes;
-    for (const auto& f : saved.files)
-    {
-        saved_mtimes[f.path] = f.mtime;
-    }
-
-    const auto root = root_.lexically_normal();
+    const auto root = project_root.lexically_normal();
     const auto ignore_dirs = default_ignore_dirs();
-    std::unordered_map<std::string, std::int64_t> disk_mtimes;
+    std::unordered_map<std::string, std::filesystem::file_time_type> disk_mtimes;
 
     try
     {
@@ -448,9 +434,8 @@ std::vector<std::string> ProjectIndexBuilder::changed_paths(const ProjectIndex& 
              it != std::filesystem::recursive_directory_iterator{}; ++it)
         {
             const auto& entry = *it;
-            const auto rel_path = entry.path().lexically_relative(root);
             bool in_ignored_dir = false;
-            for (const auto& part : rel_path)
+            for (const auto& part : entry.path().lexically_relative(root))
             {
                 if (std::find(ignore_dirs.begin(), ignore_dirs.end(),
                               part.string()) != ignore_dirs.end())
@@ -470,21 +455,12 @@ std::vector<std::string> ProjectIndexBuilder::changed_paths(const ProjectIndex& 
             if (entry.is_regular_file() && should_process_file(entry.path()))
             {
                 const auto norm = normalize_path(root, entry.path());
-                std::int64_t mtime_val = 0;
+                std::filesystem::file_time_type mtime_val;
                 try
                 {
-                    auto ft = std::filesystem::last_write_time(entry.path());
-                    mtime_val = static_cast<std::int64_t>(ft.time_since_epoch().count());
+                    mtime_val = std::filesystem::last_write_time(entry.path());
                 }
                 catch (...) {}
-                if (mtime_val <= 0)
-                {
-                    mtime_val = static_cast<std::int64_t>(
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::system_clock::now().time_since_epoch()
-                        ).count()
-                    );
-                }
                 disk_mtimes[norm] = mtime_val;
             }
         }
@@ -495,22 +471,30 @@ std::vector<std::string> ProjectIndexBuilder::changed_paths(const ProjectIndex& 
 
     std::vector<std::string> result;
 
-    for (const auto& [path, saved_mtime] : saved_mtimes)
+    for (const auto& f : saved.files)
     {
-        auto it = disk_mtimes.find(path);
+        auto it = disk_mtimes.find(f.path);
         if (it == disk_mtimes.end())
         {
-            result.push_back(path);
+            result.push_back(f.path);
         }
-        else if (it->second != saved_mtime)
+        else
         {
-            result.push_back(path);
+            auto saved_ft = std::filesystem::file_time_type(
+                std::filesystem::file_time_type::duration(f.mtime)
+            );
+            if (it->second != saved_ft)
+            {
+                result.push_back(f.path);
+            }
         }
     }
 
     for (const auto& [path, disk_mtime] : disk_mtimes)
     {
-        if (saved_mtimes.find(path) == saved_mtimes.end())
+        if (std::find(result.begin(), result.end(), path) == result.end()
+            && saved.files.end() == std::find_if(saved.files.begin(), saved.files.end(),
+                [&path](const IndexedFile& f) { return f.path == path; }))
         {
             result.push_back(path);
         }

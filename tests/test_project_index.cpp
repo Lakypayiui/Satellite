@@ -110,7 +110,7 @@ void test_build_basic()
                 CHECK("math.cpp language == C++", f.language == "C++");
                 CHECK("math.cpp symbols >= 1", f.symbols.size() >= 1);
                 CHECK("math.cpp dependencies >= 1", f.dependencies.size() >= 1);
-                CHECK("math.cpp mtime > 0", f.mtime > 0);
+                CHECK("math.cpp mtime != 0 (extraído)", f.mtime != 0);
             }
             else if (f.path == "src/utils.cpp")
             {
@@ -119,7 +119,7 @@ void test_build_basic()
                 CHECK("utils.cpp language == C++", f.language == "C++");
                 CHECK("utils.cpp symbols >= 1", f.symbols.size() >= 1);
                 CHECK("utils.cpp dependencies >= 1", f.dependencies.size() >= 1);
-                CHECK("utils.cpp mtime > 0", f.mtime > 0);
+                CHECK("utils.cpp mtime != 0 (extraído)", f.mtime != 0);
             }
             else if (f.path == "app.py")
             {
@@ -128,7 +128,7 @@ void test_build_basic()
                 CHECK("app.py language == Python", f.language == "Python");
                 CHECK("app.py symbols >= 1", f.symbols.size() >= 1);
                 CHECK("app.py dependencies >= 1", f.dependencies.size() >= 1);
-                CHECK("app.py mtime > 0", f.mtime > 0);
+                CHECK("app.py mtime != 0 (extraído)", f.mtime != 0);
             }
         }
 
@@ -229,15 +229,18 @@ void test_mtime_positive()
         ProjectIndexBuilder builder(tmp_dir);
         ProjectIndex idx = builder.build();
 
-        bool all_mtime_positive = true;
+        bool all_mtime_extracted = true;
         for (const auto& f : idx.files)
         {
-            if (f.mtime <= 0)
+            // El count() nativo del file_clock puede ser negativo según el
+            // toolchain (libstdc++ usa un epoch futuro): lo importante es que
+            // se extrajo (distinto de 0) y que el roundtrip sea exacto.
+            if (f.mtime == 0)
             {
-                all_mtime_positive = false;
+                all_mtime_extracted = false;
             }
         }
-        CHECK("todos los mtime > 0", all_mtime_positive);
+        CHECK("todos los mtime extraídos (!= 0)", all_mtime_extracted);
     }
     catch (const std::exception& e)
     {

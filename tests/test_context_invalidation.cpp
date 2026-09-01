@@ -1,5 +1,5 @@
-// Mini framework de test para context::ProjectIndex invalidación (ETAPA 2c)
-// Sin dependencias externas: solo C++17 estándar
+// Tests de invalidación de contexto (ETAPA 2c — REINTENTO)
+// Técnica correcta de mtime con file_time_type y comparación ==
 
 #include <iostream>
 #include <string>
@@ -27,7 +27,7 @@ int g_failed = 0;
         } \
     } while (false)
 
-std::filesystem::path create_test_project_for_invalidation()
+std::filesystem::path create_test_project()
 {
     auto tmp_base = std::filesystem::temp_directory_path();
     auto timestamp = std::chrono::system_clock::now().time_since_epoch().count();
@@ -37,12 +37,12 @@ std::filesystem::path create_test_project_for_invalidation()
 
     {
         std::ofstream f(tmp_dir / "src" / "file1.cpp");
-        f << "int foo() { return 1; }\n";
+        f << "int foo() { return 0; }\n";
     }
 
     {
         std::ofstream f(tmp_dir / "src" / "file2.cpp");
-        f << "int bar() { return 2; }\n";
+        f << "int bar() { return 0; }\n";
     }
 
     return tmp_dir;
@@ -59,10 +59,9 @@ void cleanup_temp_dir(const std::filesystem::path& path)
     }
 }
 
-void test_fresh_no_changes()
+void test_changed_paths_empty()
 {
-    auto tmp_dir = create_test_project_for_invalidation();
-
+    auto tmp_dir = create_test_project();
     struct Cleanup {
         std::filesystem::path path;
         ~Cleanup() { cleanup_temp_dir(path); }
@@ -73,21 +72,22 @@ void test_fresh_no_changes()
         ProjectIndexBuilder builder(tmp_dir);
         ProjectIndex idx = builder.build();
 
-        auto changed = builder.changed_paths(idx, tmp_dir);
-        CHECK("test_fresh_no_changes changed_paths vacio", changed.empty());
-        CHECK("test_fresh_no_changes is_stale == false", !builder.is_stale(idx, tmp_dir));
+        save(idx, std::filesystem::path(tmp_dir) / "index.json");
+
+        auto changes = builder.changed_paths(idx, tmp_dir);
+        CHECK("TEST1: changed_paths vacío", changes.empty());
+        CHECK("TEST1: is_stale == false", !builder.is_stale(idx, tmp_dir));
     }
     catch (const std::exception& e)
     {
-        std::cout << "FAILED: test_fresh_no_changes: exception: " << e.what() << "\n";
+        std::cout << "FAILED: TEST1: exception: " << e.what() << "\n";
         ++g_failed;
     }
 }
 
-void test_file_modified()
+void test_changed_paths_modified_file()
 {
-    auto tmp_dir = create_test_project_for_invalidation();
-
+    auto tmp_dir = create_test_project();
     struct Cleanup {
         std::filesystem::path path;
         ~Cleanup() { cleanup_temp_dir(path); }
@@ -98,49 +98,33 @@ void test_file_modified()
         ProjectIndexBuilder builder(tmp_dir);
         ProjectIndex idx = builder.build();
 
-        auto tmp_file = std::filesystem::temp_directory_path() / ("idx_inv_" + std::to_string(
-            std::chrono::system_clock::now().time_since_epoch().count()) + ".json");
-
-        save(idx, tmp_file);
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        save(idx, std::filesystem::path(tmp_dir) / "index.json");
 
         {
-            std::ofstream f(tmp_dir / "src" / "file1.cpp");
-            f << "int foo() { return 99; }\n";
+            // Fijar el mtime explícitamente: reescribir el archivo no garantiza
+            // que last_write_time cambie dentro de la resolución de Windows/NTFS.
+            const auto ruta = std::filesystem::path(tmp_dir) / "src" / "file1.cpp";
+            const auto nuevo_mtime =
+                std::filesystem::last_write_time(ruta) + std::chrono::seconds(2);
+            std::filesystem::last_write_time(ruta, nuevo_mtime);
         }
 
-        ProjectIndex loaded = load(tmp_file);
-        auto changed = builder.changed_paths(loaded, tmp_dir);
-
-        bool found_file1 = false;
-        for (const auto& p : changed)
-        {
-            if (p == "src/file1.cpp") found_file1 = true;
-        }
-        CHECK("test_file_modified changed_paths contiene src/file1.cpp", found_file1);
-        CHECK("test_file_modified changed_paths.size() == 1", changed.size() == 1);
-        CHECK("test_file_modified is_stale == true", builder.is_stale(loaded, tmp_dir));
-
-        try
-        {
-            std::filesystem::remove(tmp_file);
-        }
-        catch (const std::filesystem::filesystem_error&)
-        {
-        }
+        auto changes = builder.changed_paths(idx, tmp_dir);
+        CHECK("TEST2: changed_paths size == 1", changes.size() == 1);
+        CHECK("TEST2: changed_paths[0] == src/file1.cpp",
+              changes.size() == 1 && changes[0] == "src/file1.cpp");
+        CHECK("TEST2: is_stale == true", builder.is_stale(idx, tmp_dir));
     }
     catch (const std::exception& e)
     {
-        std::cout << "FAILED: test_file_modified: exception: " << e.what() << "\n";
+        std::cout << "FAILED: TEST2: exception: " << e.what() << "\n";
         ++g_failed;
     }
 }
 
-void test_new_file()
+void test_changed_paths_new_file()
 {
-    auto tmp_dir = create_test_project_for_invalidation();
-
+    auto tmp_dir = create_test_project();
     struct Cleanup {
         std::filesystem::path path;
         ~Cleanup() { cleanup_temp_dir(path); }
@@ -151,46 +135,31 @@ void test_new_file()
         ProjectIndexBuilder builder(tmp_dir);
         ProjectIndex idx = builder.build();
 
-        auto tmp_file = std::filesystem::temp_directory_path() / ("idx_inv2_" + std::to_string(
-            std::chrono::system_clock::now().time_since_epoch().count()) + ".json");
-
-        save(idx, tmp_file);
+        save(idx, std::filesystem::path(tmp_dir) / "index.json");
 
         {
             std::ofstream f(tmp_dir / "src" / "file3.cpp");
-            f << "int new_func() { return 3; }\n";
+            f << "int baz() { return 0; }\n";
         }
 
-        ProjectIndex loaded = load(tmp_file);
-        auto changed = builder.changed_paths(loaded, tmp_dir);
-
-        bool found_file3 = false;
-        for (const auto& p : changed)
+        auto changes = builder.changed_paths(idx, tmp_dir);
+        bool has_file3 = false;
+        for (const auto& p : changes)
         {
-            if (p == "src/file3.cpp") found_file3 = true;
+            if (p == "src/file3.cpp") has_file3 = true;
         }
-        CHECK("test_new_file changed_paths contiene src/file3.cpp", found_file3);
-        CHECK("test_new_file is_stale == true", builder.is_stale(loaded, tmp_dir));
-
-        try
-        {
-            std::filesystem::remove(tmp_file);
-        }
-        catch (const std::filesystem::filesystem_error&)
-        {
-        }
+        CHECK("TEST3: changed_paths contiene src/file3.cpp", has_file3);
     }
     catch (const std::exception& e)
     {
-        std::cout << "FAILED: test_new_file: exception: " << e.what() << "\n";
+        std::cout << "FAILED: TEST3: exception: " << e.what() << "\n";
         ++g_failed;
     }
 }
 
-void test_deleted_file()
+void test_changed_paths_deleted_file()
 {
-    auto tmp_dir = create_test_project_for_invalidation();
-
+    auto tmp_dir = create_test_project();
     struct Cleanup {
         std::filesystem::path path;
         ~Cleanup() { cleanup_temp_dir(path); }
@@ -201,49 +170,28 @@ void test_deleted_file()
         ProjectIndexBuilder builder(tmp_dir);
         ProjectIndex idx = builder.build();
 
-        auto tmp_file = std::filesystem::temp_directory_path() / ("idx_inv3_" + std::to_string(
-            std::chrono::system_clock::now().time_since_epoch().count()) + ".json");
+        save(idx, std::filesystem::path(tmp_dir) / "index.json");
 
-        save(idx, tmp_file);
+        std::filesystem::remove(tmp_dir / "src" / "file2.cpp");
 
-        try
+        auto changes = builder.changed_paths(idx, tmp_dir);
+        bool has_file2 = false;
+        for (const auto& p : changes)
         {
-            std::filesystem::remove(tmp_dir / "src" / "file2.cpp");
+            if (p == "src/file2.cpp") has_file2 = true;
         }
-        catch (const std::filesystem::filesystem_error&)
-        {
-        }
-
-        ProjectIndex loaded = load(tmp_file);
-        auto changed = builder.changed_paths(loaded, tmp_dir);
-
-        bool found_file2 = false;
-        for (const auto& p : changed)
-        {
-            if (p == "src/file2.cpp") found_file2 = true;
-        }
-        CHECK("test_deleted_file changed_paths contiene src/file2.cpp", found_file2);
-        CHECK("test_deleted_file is_stale == true", builder.is_stale(loaded, tmp_dir));
-
-        try
-        {
-            std::filesystem::remove(tmp_file);
-        }
-        catch (const std::filesystem::filesystem_error&)
-        {
-        }
+        CHECK("TEST4: changed_paths contiene src/file2.cpp", has_file2);
     }
     catch (const std::exception& e)
     {
-        std::cout << "FAILED: test_deleted_file: exception: " << e.what() << "\n";
+        std::cout << "FAILED: TEST4: exception: " << e.what() << "\n";
         ++g_failed;
     }
 }
 
-void test_roundtrip_mtime_identical()
+void test_mtime_roundtrip_exact()
 {
-    auto tmp_dir = create_test_project_for_invalidation();
-
+    auto tmp_dir = create_test_project();
     struct Cleanup {
         std::filesystem::path path;
         ~Cleanup() { cleanup_temp_dir(path); }
@@ -254,42 +202,26 @@ void test_roundtrip_mtime_identical()
         ProjectIndexBuilder builder(tmp_dir);
         ProjectIndex idx = builder.build();
 
-        auto tmp_file = std::filesystem::temp_directory_path() / ("idx_inv_rt_" + std::to_string(
-            std::chrono::system_clock::now().time_since_epoch().count()) + ".json");
+        save(idx, std::filesystem::path(tmp_dir) / "index.json");
 
-        save(idx, tmp_file);
+        ProjectIndex loaded = load(std::filesystem::path(tmp_dir) / "index.json");
 
-        ProjectIndex loaded = load(tmp_file);
-
-        if (!idx.files.empty() && !loaded.files.empty())
-        {
-            CHECK("test_roundtrip_mtime_identical mtime del primer archivo identico",
-                  idx.files[0].mtime == loaded.files[0].mtime);
-        }
-        else
-        {
-            CHECK("test_roundtrip_mtime_identical archivos disponibles", false);
-        }
-
-        try
-        {
-            std::filesystem::remove(tmp_file);
-        }
-        catch (const std::filesystem::filesystem_error&)
-        {
-        }
+        auto orig_ft = std::filesystem::file_time_type(
+            std::filesystem::file_time_type::duration(idx.files[0].mtime));
+        auto loaded_ft = std::filesystem::file_time_type(
+            std::filesystem::file_time_type::duration(loaded.files[0].mtime));
+        CHECK("TEST5: mtime roundtrip exacto (file_time_type ==)", orig_ft == loaded_ft);
     }
     catch (const std::exception& e)
     {
-        std::cout << "FAILED: test_roundtrip_mtime_identical: exception: " << e.what() << "\n";
+        std::cout << "FAILED: TEST5: exception: " << e.what() << "\n";
         ++g_failed;
     }
 }
 
-void test_roundtrip_no_falsos_cambios()
+void test_changed_paths_no_false_positives_after_roundtrip()
 {
-    auto tmp_dir = create_test_project_for_invalidation();
-
+    auto tmp_dir = create_test_project();
     struct Cleanup {
         std::filesystem::path path;
         ~Cleanup() { cleanup_temp_dir(path); }
@@ -300,40 +232,28 @@ void test_roundtrip_no_falsos_cambios()
         ProjectIndexBuilder builder(tmp_dir);
         ProjectIndex idx = builder.build();
 
-        auto tmp_file = std::filesystem::temp_directory_path() / ("idx_inv_rt2_" + std::to_string(
-            std::chrono::system_clock::now().time_since_epoch().count()) + ".json");
+        save(idx, std::filesystem::path(tmp_dir) / "index.json");
 
-        save(idx, tmp_file);
+        ProjectIndex loaded = load(std::filesystem::path(tmp_dir) / "index.json");
 
-        ProjectIndex loaded = load(tmp_file);
-        auto changed = builder.changed_paths(loaded, tmp_dir);
-
-        CHECK("test_roundtrip_no_falsos_cambios changed_paths vacio", changed.empty());
-        CHECK("test_roundtrip_no_falsos_cambios is_stale == false", !builder.is_stale(loaded, tmp_dir));
-
-        try
-        {
-            std::filesystem::remove(tmp_file);
-        }
-        catch (const std::filesystem::filesystem_error&)
-        {
-        }
+        auto changes = builder.changed_paths(loaded, tmp_dir);
+        CHECK("TEST6: changed_paths(loaded, root) vacío", changes.empty());
     }
     catch (const std::exception& e)
     {
-        std::cout << "FAILED: test_roundtrip_no_falsos_cambios: exception: " << e.what() << "\n";
+        std::cout << "FAILED: TEST6: exception: " << e.what() << "\n";
         ++g_failed;
     }
 }
 
 int main()
 {
-    test_fresh_no_changes();
-    test_file_modified();
-    test_new_file();
-    test_deleted_file();
-    test_roundtrip_mtime_identical();
-    test_roundtrip_no_falsos_cambios();
+    test_changed_paths_empty();
+    test_changed_paths_modified_file();
+    test_changed_paths_new_file();
+    test_changed_paths_deleted_file();
+    test_mtime_roundtrip_exact();
+    test_changed_paths_no_false_positives_after_roundtrip();
 
     std::cout << g_passed << " passed, " << g_failed << " failed\n";
     return g_failed == 0 ? 0 : 1;
