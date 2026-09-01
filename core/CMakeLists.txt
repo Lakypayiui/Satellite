@@ -34,6 +34,8 @@ target_sources(satellite_core PRIVATE
   ../context/engine/ProjectContext.h
   ../context/engine/ContextEngine.h
   ../context/engine/ContextEngine.cpp
+  ../context/engine/ProjectIndex.h
+  ../context/engine/ProjectIndex.cpp
   ../context/optimizer/ContextOptimizer.h
   ../context/optimizer/ContextOptimizer.cpp
   ../context/adapter/ProjectAdapter.h
