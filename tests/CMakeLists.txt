@@ -25,6 +25,8 @@ add_satellite_test(test_context_engine test_context_engine.cpp)
 
 add_satellite_test(test_project_index test_project_index.cpp)
 
+add_satellite_test(test_context_invalidation test_context_invalidation.cpp)
+
 add_satellite_test(test_semantic_context test_semantic_context.cpp)
 
 add_satellite_test(test_context_optimizer test_context_optimizer.cpp)

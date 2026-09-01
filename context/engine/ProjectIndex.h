@@ -41,6 +41,8 @@ class ProjectIndexBuilder
 public:
     explicit ProjectIndexBuilder(std::filesystem::path project_root);
     ProjectIndex build() const;
+    std::vector<std::string> changed_paths(const ProjectIndex& saved, const std::filesystem::path& project_root) const;
+    bool is_stale(const ProjectIndex& saved, const std::filesystem::path& project_root) const;
 
 private:
     std::filesystem::path root_;

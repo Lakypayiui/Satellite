@@ -6,6 +6,7 @@
 #include <chrono>
 #include <sstream>
 #include <iterator>
+#include <unordered_map>
 
 namespace satellite::context
 {
@@ -427,6 +428,103 @@ ProjectIndex ProjectIndexBuilder::build() const
 
     idx.total_files = idx.files.size();
     return idx;
+}
+
+std::vector<std::string> ProjectIndexBuilder::changed_paths(const ProjectIndex& saved, const std::filesystem::path& project_root) const
+{
+    std::unordered_map<std::string, std::int64_t> saved_mtimes;
+    for (const auto& f : saved.files)
+    {
+        saved_mtimes[f.path] = f.mtime;
+    }
+
+    const auto root = root_.lexically_normal();
+    const auto ignore_dirs = default_ignore_dirs();
+    std::unordered_map<std::string, std::int64_t> disk_mtimes;
+
+    try
+    {
+        for (auto it = std::filesystem::recursive_directory_iterator(root);
+             it != std::filesystem::recursive_directory_iterator{}; ++it)
+        {
+            const auto& entry = *it;
+            const auto rel_path = entry.path().lexically_relative(root);
+            bool in_ignored_dir = false;
+            for (const auto& part : rel_path)
+            {
+                if (std::find(ignore_dirs.begin(), ignore_dirs.end(),
+                              part.string()) != ignore_dirs.end())
+                {
+                    in_ignored_dir = true;
+                    break;
+                }
+            }
+            if (in_ignored_dir)
+            {
+                if (entry.is_directory())
+                {
+                    it.disable_recursion_pending();
+                }
+                continue;
+            }
+            if (entry.is_regular_file() && should_process_file(entry.path()))
+            {
+                const auto norm = normalize_path(root, entry.path());
+                std::int64_t mtime_val = 0;
+                try
+                {
+                    auto ft = std::filesystem::last_write_time(entry.path());
+                    mtime_val = static_cast<std::int64_t>(ft.time_since_epoch().count());
+                }
+                catch (...) {}
+                if (mtime_val <= 0)
+                {
+                    mtime_val = static_cast<std::int64_t>(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch()
+                        ).count()
+                    );
+                }
+                disk_mtimes[norm] = mtime_val;
+            }
+        }
+    }
+    catch (const std::filesystem::filesystem_error&)
+    {
+    }
+
+    std::vector<std::string> result;
+
+    for (const auto& [path, saved_mtime] : saved_mtimes)
+    {
+        auto it = disk_mtimes.find(path);
+        if (it == disk_mtimes.end())
+        {
+            result.push_back(path);
+        }
+        else if (it->second != saved_mtime)
+        {
+            result.push_back(path);
+        }
+    }
+
+    for (const auto& [path, disk_mtime] : disk_mtimes)
+    {
+        if (saved_mtimes.find(path) == saved_mtimes.end())
+        {
+            result.push_back(path);
+        }
+    }
+
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+
+    return result;
+}
+
+bool ProjectIndexBuilder::is_stale(const ProjectIndex& saved, const std::filesystem::path& project_root) const
+{
+    return !changed_paths(saved, project_root).empty();
 }
 
 inline void to_json(nlohmann::json& j, const IndexedFile& f)
