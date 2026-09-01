@@ -13,7 +13,7 @@ namespace satellite::llm
 
 struct ProviderFactory
 {
-    static std::unique_ptr<ILLMProvider> create(const FrameworkConfig& config);
+    static std::unique_ptr<ILLMProvider> create(const satellite::config::FrameworkConfig& config);
 };
 
 } // namespace satellite::llm

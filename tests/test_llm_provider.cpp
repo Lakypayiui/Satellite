@@ -9,6 +9,8 @@
 #include "llm/LLMTypes.h"
 #include "llm/ILLMProvider.h"
 #include "llm/DeepSeekProvider.h"
+#include "llm/ProviderFactory.h"
+#include "config/Config.h"
 
 using namespace satellite::llm;
 
@@ -183,6 +185,52 @@ void test_deepseek_provider_network_error()
     CHECK("DeepSeekProvider network error error_message not empty", !response.error_message.empty());
 }
 
+void test_anthropic_empty_api_key()
+{
+    satellite::config::FrameworkConfig config;
+    config.llm_provider = "anthropic";
+    config.llm_api_key = "";
+    auto provider = satellite::llm::ProviderFactory::create(config);
+    CHECK("anthropic empty api_key create != nullptr", provider != nullptr);
+    if (provider)
+    {
+        LLMRequest request;
+        request.system_prompt = "sistema";
+        request.user_prompt = "usuario";
+        LLMResponse response = provider->complete(request);
+        CHECK("anthropic empty api_key ok == false", response.ok == false);
+        CHECK("anthropic empty api_key error_message contains API key", response.error_message.find("API key") != std::string::npos);
+    }
+}
+
+void test_openai_provider_name()
+{
+    satellite::config::FrameworkConfig config;
+    config.llm_provider = "openai";
+    auto provider = satellite::llm::ProviderFactory::create(config);
+    CHECK("openai create != nullptr", provider != nullptr);
+    if (provider)
+    {
+        CHECK("openai provider->name() == \"openai\"", provider->name() == "openai");
+    }
+}
+
+void test_unknown_provider_returns_nullptr()
+{
+    satellite::config::FrameworkConfig config;
+    config.llm_provider = "desconocido-xyz";
+    auto provider = satellite::llm::ProviderFactory::create(config);
+    CHECK("desconocido-xyz create == nullptr", provider == nullptr);
+}
+
+void test_deepseek_provider_factory()
+{
+    satellite::config::FrameworkConfig config;
+    config.llm_provider = "deepseek";
+    auto provider = satellite::llm::ProviderFactory::create(config);
+    CHECK("deepseek create != nullptr", provider != nullptr);
+}
+
 int main()
 {
     test_fake_provider_interface();
@@ -193,6 +241,10 @@ int main()
     test_parse_deepseek_response_no_choices();
     test_deepseek_provider_name();
     test_deepseek_provider_network_error();
+    test_anthropic_empty_api_key();
+    test_openai_provider_name();
+    test_unknown_provider_returns_nullptr();
+    test_deepseek_provider_factory();
 
     std::cout << g_passed << " passed, " << g_failed << " failed\n";
     return g_failed == 0 ? 0 : 1;

@@ -28,33 +28,7 @@ std::string OpenAICompatibleProvider::name() const
     return name_;
 }
 
-LLMResponse OpenAICompatibleProvider::complete(const LLMRequest& request)
-{
-    auto payload = build_openai_compatible_payload(request, model_);
-    std::string body = payload.dump();
-
-    std::string auth_header = "Authorization: Bearer " + api_key_;
-    std::string url = base_url_ + "/chat/completions";
-
-    std::string raw = http_post_json(url, auth_header, body);
-
-    if (raw.empty())
-    {
-        return LLMResponse{false, "", "", 0, 0, 0, "http request failed (curl)"};
-    }
-
-    try
-    {
-        auto response_json = nlohmann::json::parse(raw);
-        return parse_openai_compatible_response(response_json);
-    }
-    catch (const nlohmann::json::parse_error&)
-    {
-        return LLMResponse{false, "", "", 0, 0, 0, "invalid json response"};
-    }
-}
-
-nlohmann::json build_openai_compatible_payload(const LLMRequest& request, const std::string& model)
+static nlohmann::json build_openai_compatible_payload(const LLMRequest& request, const std::string& model)
 {
     nlohmann::json payload;
     payload["model"] = model;
@@ -79,7 +53,7 @@ nlohmann::json build_openai_compatible_payload(const LLMRequest& request, const 
     return payload;
 }
 
-LLMResponse parse_openai_compatible_response(const nlohmann::json& response_json)
+static LLMResponse parse_openai_compatible_response(const nlohmann::json& response_json)
 {
     LLMResponse response;
 
@@ -138,6 +112,32 @@ LLMResponse parse_openai_compatible_response(const nlohmann::json& response_json
     }
 
     return response;
+}
+
+LLMResponse OpenAICompatibleProvider::complete(const LLMRequest& request)
+{
+    auto payload = build_openai_compatible_payload(request, model_);
+    std::string body = payload.dump();
+
+    std::string auth_header = "Authorization: Bearer " + api_key_;
+    std::string url = base_url_ + "/chat/completions";
+
+    std::string raw = http_post_json(url, auth_header, body);
+
+    if (raw.empty())
+    {
+        return LLMResponse{false, "", "", 0, 0, 0, "http request failed (curl)"};
+    }
+
+    try
+    {
+        auto response_json = nlohmann::json::parse(raw);
+        return parse_openai_compatible_response(response_json);
+    }
+    catch (const nlohmann::json::parse_error&)
+    {
+        return LLMResponse{false, "", "", 0, 0, 0, "invalid json response"};
+    }
 }
 
 std::string OpenAICompatibleProvider::http_post_json(const std::string& url, const std::string& auth_header, const std::string& body)

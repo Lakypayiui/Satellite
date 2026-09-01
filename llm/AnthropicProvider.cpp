@@ -25,39 +25,7 @@ std::string AnthropicProvider::name() const
     return "anthropic";
 }
 
-LLMResponse AnthropicProvider::complete(const LLMRequest& request)
-{
-    // Sin API key -> error inmediato sin llamada de red
-    if (api_key_.empty())
-    {
-        return LLMResponse{false, "", "", 0, 0, 0, "Autenticación requerida: falta API key de Anthropic"};
-    }
-
-    auto payload = build_anthropic_payload(request, model_);
-    std::string body = payload.dump();
-
-    std::string url = "https://api.anthropic.com/v1/messages";
-    std::string headers = "x-api-key: " + api_key_ + "\r\nanthropic-version: 2023-06-01\r\ncontent-type: application/json";
-
-    std::string raw = http_post_json(url, headers, body);
-
-    if (raw.empty())
-    {
-        return LLMResponse{false, "", "", 0, 0, 0, "http request failed (curl)"};
-    }
-
-    try
-    {
-        auto response_json = nlohmann::json::parse(raw);
-        return parse_anthropic_response(response_json);
-    }
-    catch (const nlohmann::json::parse_error&)
-    {
-        return LLMResponse{false, "", "", 0, 0, 0, "invalid json response"};
-    }
-}
-
-nlohmann::json build_anthropic_payload(const LLMRequest& request, const std::string& model)
+static nlohmann::json build_anthropic_payload(const LLMRequest& request, const std::string& model)
 {
     nlohmann::json payload;
     payload["model"] = model;
@@ -71,7 +39,7 @@ nlohmann::json build_anthropic_payload(const LLMRequest& request, const std::str
     return payload;
 }
 
-LLMResponse parse_anthropic_response(const nlohmann::json& response_json)
+static LLMResponse parse_anthropic_response(const nlohmann::json& response_json)
 {
     LLMResponse response;
 
@@ -126,6 +94,38 @@ LLMResponse parse_anthropic_response(const nlohmann::json& response_json)
     }
 
     return response;
+}
+
+LLMResponse AnthropicProvider::complete(const LLMRequest& request)
+{
+    // Sin API key -> error inmediato sin llamada de red
+    if (api_key_.empty())
+    {
+        return LLMResponse{false, "", "", 0, 0, 0, "Autenticación requerida: falta API key de Anthropic"};
+    }
+
+    auto payload = build_anthropic_payload(request, model_);
+    std::string body = payload.dump();
+
+    std::string url = "https://api.anthropic.com/v1/messages";
+    std::string headers = "x-api-key: " + api_key_ + "\r\nanthropic-version: 2023-06-01\r\ncontent-type: application/json";
+
+    std::string raw = http_post_json(url, headers, body);
+
+    if (raw.empty())
+    {
+        return LLMResponse{false, "", "", 0, 0, 0, "http request failed (curl)"};
+    }
+
+    try
+    {
+        auto response_json = nlohmann::json::parse(raw);
+        return parse_anthropic_response(response_json);
+    }
+    catch (const nlohmann::json::parse_error&)
+    {
+        return LLMResponse{false, "", "", 0, 0, 0, "invalid json response"};
+    }
 }
 
 std::string AnthropicProvider::http_post_json(const std::string& url, const std::string& headers, const std::string& body)

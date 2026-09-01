@@ -27,7 +27,7 @@
 #include "factory/AgentFactory.h"
 #include "core/catalog/AgentCatalog.h"
 #include "orchestrator/Orchestrator.h"
-#include "llm/DeepSeekProvider.h"
+#include "llm/ProviderFactory.h"
 #include "context/optimizer/ContextOptimizer.h"
 #include <json.hpp>
 
@@ -736,7 +736,14 @@ int SatelliteCLI::cmd_run(int argc, char* argv[])
 
     satellite::core::dispatcher::Dispatcher dispatcher(registry);
     satellite::context::DefaultContextOptimizer optimizer;
-    auto provider = std::make_unique<satellite::llm::DeepSeekProvider>(key);
+    satellite::config::FrameworkConfig config;
+    config.llm_api_key_env = key;
+    auto provider = satellite::llm::ProviderFactory::create(config);
+    if (!provider)
+    {
+        std::cout << "Error: proveedor LLM desconocido en la configuración\n";
+        return 1;
+    }
     satellite::orchestrator::Orchestrator orchestrator(registry, dispatcher, optimizer, provider.get());
 
     auto adapter = satellite::context::ProjectAdapterFactory::detect(project_root_);

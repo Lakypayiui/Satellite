@@ -3,7 +3,7 @@
 namespace satellite::llm
 {
 
-std::unique_ptr<ILLMProvider> ProviderFactory::create(const FrameworkConfig& config)
+std::unique_ptr<ILLMProvider> ProviderFactory::create(const satellite::config::FrameworkConfig& config)
 {
     std::string provider = config.llm_provider;
 
