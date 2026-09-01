@@ -79,3 +79,6 @@ venv/
 
 # --- Agentes ---
 
+third_party/llama-b10739-bin-win-vulkan-x64/LICENSE-LLVM-OpenMP
+
+*.gguf

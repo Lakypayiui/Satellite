@@ -14,6 +14,7 @@ struct FrameworkConfig
     std::string llm_provider = "deepseek";
     std::string llm_model = "deepseek-chat";
     std::string llm_api_key_env = "DEEPSEEK_API_KEY";
+    std::string llm_api_key = "";
     std::string llm_base_url = "https://api.deepseek.com";
     std::uint64_t token_budget_max_tokens = 4000;
     std::string optimizer_algorithm = "default";

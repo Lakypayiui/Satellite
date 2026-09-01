@@ -12,6 +12,7 @@ void FrameworkConfig::load_defaults()
     llm_provider = "deepseek";
     llm_model = "deepseek-chat";
     llm_api_key_env = "DEEPSEEK_API_KEY";
+    llm_api_key = "";
     llm_base_url = "https://api.deepseek.com";
     token_budget_max_tokens = 4000;
     optimizer_algorithm = "default";
@@ -32,6 +33,7 @@ nlohmann::json FrameworkConfig::to_json() const
     nlohmann::json j;
     j["llm"]["provider"] = llm_provider;
     j["llm"]["model"] = llm_model;
+    j["llm"]["api_key"] = llm_api_key;
     j["llm"]["api_key_env"] = llm_api_key_env;
     j["llm"]["base_url"] = llm_base_url;
     j["token_budget"]["max_tokens"] = token_budget_max_tokens;
@@ -55,6 +57,8 @@ bool FrameworkConfig::merge_json(const nlohmann::json& j)
             llm_provider = llm["provider"].get<std::string>();
         if (llm.contains("model") && !llm["model"].get<std::string>().empty())
             llm_model = llm["model"].get<std::string>();
+        if (llm.contains("api_key") && !llm["api_key"].get<std::string>().empty())
+            llm_api_key = llm["api_key"].get<std::string>();
         if (llm.contains("api_key_env") && !llm["api_key_env"].get<std::string>().empty())
             llm_api_key_env = llm["api_key_env"].get<std::string>();
         if (llm.contains("base_url") && !llm["base_url"].get<std::string>().empty())
