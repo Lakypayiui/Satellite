@@ -1,0 +1,88 @@
+{
+  "project": {
+    "name": "Satellite",
+    "kind": "microagent-framework",
+    "language": "C++17",
+    "build_status": "24 fases completadas; 23 suites CTest verdes; binario satellite 1.0.0",
+    "distributed_as": "binario independiente + config de consumidor en .satellite/",
+    "single_dependency": "nlohmann/json v3.11.3 vendored en third_party/json/json.hpp",
+    "toolchain": "MSYS2 ucrt64 (g++ 16.1.0, cmake 4.4.2, ninja 1.13.2); scripts .sh para Linux/macOS",
+    "commands": {
+      "build": "export PATH=\"/c/Users/Ian/msys64/ucrt64/bin:$PATH\"; cmake -G Ninja -S . -B build && cmake --build build",
+      "test": "cd build && ctest --output-on-failure",
+      "benchmark": "./build/satellite_benchmark.exe"
+    }
+  },
+  "architecture": {
+    "principle": "El LLM decide, el runtime ejecuta. El LLM nunca ejecuta código: produce requests estructurados {agent_id, input}.",
+    "flow": "User → Orchestrator → LLM → AgentRegistry → Planner → ContextEngine → ContextOptimizer → Dispatcher → Microagent → Result → Orchestrator",
+    "dispatch_pipeline": "UNKNOWN_AGENT → DISABLED → INTERNAL_ERROR → VALIDATION_ERROR → execute",
+    "agent_status": "0 IDLE, 1 RUNNING, 2 SUCCESS, 3 FAILED, 4 UNKNOWN_AGENT (0=UNKNOWN_AGENT_ID)",
+    "namespaces": {
+      "core": "satellite::core::agent|registry|dispatcher|validation|agents|protocol|catalog",
+      "context": "satellite::context (engine/optimizer/adapter)",
+      "persistence": "satellite::persistence"
+    }
+  },
+  "native_agents": {
+    "ids": "1 sum (math.sum), 2 subtract (math.subtract), 3 multiply (math.multiply), 4 divide (math.divide), 5 average (math.average)",
+    "purpose": "Agentes de TEST del runtime; el framework no asume agentes de negocio."
+  },
+  "cli": {
+    "init": "convierte el repo actual en consumidor (crea .satellite/; no sobreescribe si ya existe)",
+    "agents": "lista id/nombre/capacidades/habilitado",
+    "agent_create": "spec.json → generación → compilar → tests → plugin → registrar",
+    "agent_test": "ejecuta un agente con input.json",
+    "agent_enable_disable": "persiste en .satellite/registry/",
+    "context_build_inspect": "analiza el repo y cachea .satellite/context/context.json",
+    "run": "orquestación LLM (requiere DEEPSEEK_API_KEY)",
+    "doctor": "diagnóstico del entorno y del proyecto",
+    "version": "satellite 1.0.0"
+  },
+  "context_system": {
+    "engine": "ContextEngine analiza ProjectRoot: FileInfo{path, language, size, lines, symbols[]}, DependencyInfo{from_file, target, kind, external}, ProjectContext{root, files, dependencies, total_lines, total_files}",
+    "optimizer": "DefaultContextOptimizer: scoring por keywords contra path/símbolos; selecciona todo lo que quepa en TokenBudget; stats tokens_before/after/saved, compression_ratio, relevance_score, optimization_time_ms",
+    "adapters": "IProjectAdapter + factory: C++ y Python (el heurístico C++ no capta símbolos con llaves Allman — verificar deps no símbolos)",
+    "cache": ".satellite/context/context.json"
+  },
+  "factory": {
+    "pipeline": "spec → genera .cpp → compila harness → ejecuta tests → compila plugin (.dll) → LoadLibrary → registra; cualquier fallo = NO registrar",
+    "expander": "AgentExpander: detecta capabilities faltantes por prefijo ≥3 chars; skip si ya existe (reporta en skipped)",
+    "pitfalls": [
+      "nlohmann serializa {} como null en algunos flujos → from_json de arrays null-safe",
+      "raw strings JSON con \\n literal quedan en una línea → usar saltos reales",
+      "inicializador {\"result\",...} = array; {{\"result\",...}} = objeto",
+      "argc/argv desalineados en subcomandos (índices argv[2/3/4])",
+      "DLL cargada en el proceso bloquea recompilación en Windows → test_cli usa subprocesos",
+      "rutas MSYS /c/... a cmake.exe (nativo) fallan → usar cygpath -w o relativas"
+    ]
+  },
+  "persistence": {
+    "store": "AgentStore: specs y registry en .satellite/; rebuild_agents recrea descriptores null (unregister + factory)",
+    "init": "ProjectInitializer::init(project_root, err) — idempotente",
+    "layout": ".satellite/{config, registry, agents, context, executions}"
+  },
+  "security": {
+    "policy": "SecurityPolicy valida capabilities declaradas (filesystem.read, process.execute, compiler.execute, network.request) ANTES de ejecutar; deny-by-default"
+  },
+  "observability": {
+    "logger": "ExecutionLogger: execution_id, provider, model, agent, input, output, duration_ms, status, tokens_before/after/saved, relevance_score"
+  },
+  "benchmark": {
+    "model_a": "monolítico: contexto completo 7310 tokens, latencia 0.039 ms",
+    "model_b": "microagentes + optimizer: contexto 1835 tokens (75% menos), latencia 0.53 ms, compression_ratio 0.749, success_rate 1.0",
+    "note": "tokens estimados (1 token ≈ 4 chars); proyecto sintético 20 archivos/600 funciones"
+  },
+  "tests": {
+    "count": 23,
+    "framework": "mini-framework CHECK propio, 0 dependencias",
+    "key_suites": "test_cli (38), test_portability (13), test_benchmark (12), test_context_graph",
+    "context_root": "SATELLITE_ROOT define la raíz del repo en los tests"
+  },
+  "conventions": {
+    "language": "Código y comentarios en español; mensajes de commit 'FASE N: ...'",
+    "style": "llaves Allman, C++17 (nada de C++20), sin dependencias de terceros salvo nlohmann/json",
+    "delegation": "Modificaciones de código SIEMPRE vía opencode (--model opencode/nemotron-3-ultra-free, fallback deepseek free); prompts de UNA responsabilidad; verificar en disco tras cada run",
+    "model": "Chat activo: deepseek-v4-flash vía provider headroom"
+  }
+}
