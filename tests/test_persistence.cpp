@@ -73,6 +73,7 @@ public:
     }
 };
 extern "C" IAgent* satellite_create_agent() { return new DoubleAgent(); }
+extern "C" void satellite_destroy_agent(IAgent* agent) { delete agent; }
 )AGENT";
     spec.test_cases = {
         {nlohmann::json::object({{"x", 2}}), nlohmann::json::object({{"result", 4}})}

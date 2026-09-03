@@ -49,21 +49,32 @@ class AgentFactory
 {
 public:
     AgentFactory(AgentRegistry& registry, std::filesystem::path work_dir, std::filesystem::path framework_root, std::string compiler = "g++");
+    ~AgentFactory();
 
     FactoryResult create_agent(const AgentSpec& spec);
     bool release_agent(AgentID id);
     void cleanup();
 
 private:
+    using DestroyAgentFn = void (*)(satellite::core::agent::IAgent*);
+
+    struct LoadedLibrary
+    {
+        void* handle = nullptr;
+        satellite::core::agent::IAgent* agent = nullptr;
+        DestroyAgentFn destroy = nullptr;
+    };
+
     AgentRegistry& registry_;
     std::filesystem::path work_dir_;
     std::filesystem::path framework_root_;
     std::string compiler_;
-    std::map<AgentID, void*> loaded_libs_;
+    std::map<AgentID, LoadedLibrary> loaded_libs_;
 
     bool compile(const std::vector<std::string>& sources, const std::vector<std::string>& extra_flags, std::string& output, std::string& error) const;
     std::string get_library_path(AgentID id) const;
     std::string get_test_executable_path(AgentID id) const;
+    void unload_all();
 };
 
 // Serialización de AgentSpec para persistencia

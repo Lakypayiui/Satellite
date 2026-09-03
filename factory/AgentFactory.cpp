@@ -28,6 +28,11 @@ AgentFactory::AgentFactory(AgentRegistry& registry, std::filesystem::path work_d
     std::filesystem::create_directories(work_dir_);
 }
 
+AgentFactory::~AgentFactory()
+{
+    unload_all();
+}
+
 std::string AgentFactory::get_library_path(AgentID id) const
 {
 #ifdef _WIN32
@@ -234,6 +239,7 @@ int main()
         test_index++;
     }
 
+    satellite_destroy_agent(agent);
     std::cout << passed << " passed, " << failed << " failed" << std::endl;
     return (failed == 0) ? 0 : 1;
 }
@@ -319,17 +325,21 @@ int main()
 #endif
 
     using CreateAgentFn = satellite::core::agent::IAgent* (*)();
+    using DestroyAgentFn = void (*)(satellite::core::agent::IAgent*);
     CreateAgentFn create_fn = nullptr;
+    DestroyAgentFn destroy_fn = nullptr;
 #ifdef _WIN32
     create_fn = reinterpret_cast<CreateAgentFn>(reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(handle), "satellite_create_agent")));
+    destroy_fn = reinterpret_cast<DestroyAgentFn>(reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(handle), "satellite_destroy_agent")));
 #else
     create_fn = reinterpret_cast<CreateAgentFn>(dlsym(handle, "satellite_create_agent"));
+    destroy_fn = reinterpret_cast<DestroyAgentFn>(dlsym(handle, "satellite_destroy_agent"));
 #endif
 
-    if (!create_fn)
+    if (!create_fn || !destroy_fn)
     {
         result.stage = "load_lib";
-        result.message = "Failed to resolve satellite_create_agent symbol";
+        result.message = "Failed to resolve plugin create/destroy symbols";
 #ifdef _WIN32
         FreeLibrary(static_cast<HMODULE>(handle));
 #else
@@ -366,15 +376,17 @@ int main()
     {
         result.stage = "register";
         result.message = "Duplicate agent ID or registration failed";
+    destroy_fn(agent_instance);
 #ifdef _WIN32
         FreeLibrary(static_cast<HMODULE>(handle));
 #else
+    destroy_fn(agent_instance);
         dlclose(handle);
 #endif
         return result;
     }
 
-    loaded_libs_[spec.id] = handle;
+    loaded_libs_[spec.id] = LoadedLibrary{handle, agent_instance, destroy_fn};
 
     result.ok = true;
     result.stage = "ok";
@@ -388,30 +400,36 @@ bool AgentFactory::release_agent(AgentID id)
     if (it == loaded_libs_.end())
         return false;
 
-    void* handle = it->second;
+    const LoadedLibrary loaded = it->second;
+    registry_.unregister_agent(id);
+    loaded.destroy(loaded.agent);
 #ifdef _WIN32
-    FreeLibrary(static_cast<HMODULE>(handle));
+    FreeLibrary(static_cast<HMODULE>(loaded.handle));
 #else
-    dlclose(handle);
+    dlclose(loaded.handle);
 #endif
     loaded_libs_.erase(it);
-    registry_.unregister_agent(id);
     return true;
+}
+
+void AgentFactory::unload_all()
+{
+    for (auto& [id, loaded] : loaded_libs_)
+    {
+        registry_.unregister_agent(id);
+        loaded.destroy(loaded.agent);
+#ifdef _WIN32
+        FreeLibrary(static_cast<HMODULE>(loaded.handle));
+#else
+        dlclose(loaded.handle);
+#endif
+    }
+    loaded_libs_.clear();
 }
 
 void AgentFactory::cleanup()
 {
-    for (auto& [id, handle] : loaded_libs_)
-    {
-#ifdef _WIN32
-        FreeLibrary(static_cast<HMODULE>(handle));
-#else
-        dlclose(handle);
-#endif
-        registry_.unregister_agent(id);
-    }
-    loaded_libs_.clear();
-
+    unload_all();
     if (std::filesystem::exists(work_dir_))
     {
         for (const auto& entry : std::filesystem::directory_iterator(work_dir_))

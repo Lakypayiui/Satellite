@@ -95,7 +95,7 @@ std::vector<std::string> AgentExpander::missing_capabilities(const std::string& 
 
 bool AgentExpander::generate_spec(const std::string& goal, const std::string& capability, AgentSpec& spec, std::string& error) const
 {
-    std::string prompt = "Genera la especificación de un microagente C++ para Satellite. Objetivo: " + goal + ". Capacidad requerida: " + capability + ". Responde SOLO con JSON: {\"name\": \"...\", \"description\": \"...\", \"input_schema\": {...}, \"output_schema\": {...}, \"implementation_code\": \"...\", \"test_cases\": [{\"input\": {...}, \"expected\": {...}}]}. El implementation_code es una clase que implementa satellite::core::agent::IAgent (método execute(const AgentRequest&)) + la función extern \"C\" IAgent* satellite_create_agent(). El JSON del implementation_code debe tener los saltos de línea como \\n escapados.";
+    std::string prompt = "Genera la especificación de un microagente C++ para Satellite. Objetivo: " + goal + ". Capacidad requerida: " + capability + ". Responde SOLO con JSON: {\"name\": \"...\", \"description\": \"...\", \"input_schema\": {...}, \"output_schema\": {...}, \"implementation_code\": \"...\", \"test_cases\": [{\"input\": {...}, \"expected\": {...}}]}. El implementation_code es una clase que implementa satellite::core::agent::IAgent (método execute(const AgentRequest&)) y exporta las funciones extern \"C\" IAgent* satellite_create_agent() y void satellite_destroy_agent(IAgent*). El JSON del implementation_code debe tener los saltos de línea como \\n escapados.";
 
     satellite::llm::LLMRequest request;
     request.system_prompt = "";

@@ -230,7 +230,8 @@ int main()
             "        return AgentResult{request.agent_id, AgentStatus::SUCCESS, {{\"result\", 2.0 * x}}, {}, 0.0, {}};\n"
             "    }\n"
             "};\n"
-            "extern \"C\" IAgent* satellite_create_agent() { return new DoubleAgent(); }\n";
+            "extern \"C\" IAgent* satellite_create_agent() { return new DoubleAgent(); }\n"
+            "extern \"C\" void satellite_destroy_agent(IAgent* agent) { delete agent; }\n";
         spec["test_cases"] = {
             {{"input", {{"x", 4}}}, {"expected", {{"result", 8.0}}}},
             {{"input", {{"x", -3}}}, {"expected", {{"result", -6.0}}}}
