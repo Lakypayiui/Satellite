@@ -721,13 +721,6 @@ int SatelliteCLI::cmd_run(int argc, char* argv[])
         return 1;
     }
 
-    const char* key = std::getenv("DEEPSEEK_API_KEY");
-    if (!key || std::strlen(key) == 0)
-    {
-        std::cout << "Error: DEEPSEEK_API_KEY no definida (el orquestador necesita el LLM)\n";
-        return 1;
-    }
-
     std::string goal;
     for (int i = 2; i < argc; ++i)
     {
@@ -748,24 +741,32 @@ int SatelliteCLI::cmd_run(int argc, char* argv[])
     satellite::core::dispatcher::Dispatcher dispatcher(registry);
     satellite::context::DefaultContextOptimizer optimizer;
     satellite::config::FrameworkConfig config;
-    config.llm_api_key_env = key;
+
+    auto config_path = project_root_ / ".satellite" / "config" / "config.json";
+    if (std::filesystem::exists(config_path))
+    {
+        std::string config_err;
+        if (!satellite::config::FrameworkConfig::load_from_file(config_path, config, config_err))
+        {
+            std::cout << "Error: configuración LLM inválida: " << config_err << "\n";
+            return 1;
+        }
+    }
+
+    if (config.llm_api_key.empty() && !config.llm_api_key_env.empty())
+    {
+        const char* key = std::getenv(config.llm_api_key_env.c_str());
+        if (key != nullptr)
+        {
+            config.llm_api_key = key;
+        }
+    }
+
     auto provider = satellite::llm::ProviderFactory::create(config);
     if (!provider)
     {
         std::cout << "Error: proveedor LLM desconocido en la configuración\n";
         return 1;
-    }
-
-    auto config_path = project_root_ / ".satellite" / "config" / "config.json";
-    if (std::filesystem::exists(config_path))
-    {
-        satellite::config::FrameworkConfig file_config;
-        std::string config_err;
-        if (satellite::config::FrameworkConfig::load_from_file(config_path, file_config, config_err))
-        {
-            config = file_config;
-            config.llm_api_key_env = key;
-        }
     }
 
     auto adapter = satellite::context::ProjectAdapterFactory::detect(project_root_);
