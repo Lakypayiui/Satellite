@@ -26,6 +26,8 @@ target_sources(satellite_core PRIVATE
   catalog/AgentCatalog.cpp
   ../llm/LLMTypes.h
   ../llm/ILLMProvider.h
+  ../llm/HttpClient.h
+  ../llm/HttpClient.cpp
   ../llm/DeepSeekProvider.h
   ../llm/DeepSeekProvider.cpp
   ../llm/LocalLLMProvider.h
@@ -72,6 +74,10 @@ target_include_directories(satellite_core PUBLIC
   ${PROJECT_SOURCE_DIR}/third_party/json
 )
 
+target_compile_options(satellite_core PRIVATE "-isystem${SATELLITE_TOOLCHAIN_ROOT}/include")
+
 if(NOT MSVC)
     target_link_libraries(satellite_core PRIVATE ${CMAKE_DL_LIBS})
 endif()
+
+target_link_libraries(satellite_core PRIVATE CURL::libcurl)

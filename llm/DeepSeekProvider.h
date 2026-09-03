@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llm/ILLMProvider.h"
+#include "llm/HttpClient.h"
 #include <json.hpp>
 #include <string>
 
@@ -57,7 +58,7 @@ private:
      * @param body Body JSON como string.
      * @return Respuesta cruda del servidor, o string vacío si falla curl.
      */
-    std::string http_post_json(const std::string& url, const std::string& auth_header, const std::string& body);
+    HttpResponse http_post_json(const std::string& url, const std::string& body);
 
     std::string api_key_;
     std::string base_url_;

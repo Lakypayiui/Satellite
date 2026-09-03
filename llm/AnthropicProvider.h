@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llm/ILLMProvider.h"
+#include "llm/HttpClient.h"
 #include <json.hpp>
 #include <string>
 
@@ -21,7 +22,7 @@ public:
     LLMResponse complete(const LLMRequest& request) override;
 
 private:
-    std::string http_post_json(const std::string& url, const std::string& headers, const std::string& body);
+    HttpResponse http_post_json(const std::string& url, const std::string& body);
 
     std::string api_key_;
     std::string model_;

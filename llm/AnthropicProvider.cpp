@@ -1,16 +1,5 @@
 #include "llm/AnthropicProvider.h"
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <sstream>
 #include <json.hpp>
-#include <fstream>
-#include <sstream>
-#include <filesystem>
-#include <cstdlib>
-#include <cstdio>
 
 namespace satellite::llm {
 
@@ -108,18 +97,20 @@ LLMResponse AnthropicProvider::complete(const LLMRequest& request)
     std::string body = payload.dump();
 
     std::string url = "https://api.anthropic.com/v1/messages";
-    std::string headers = "x-api-key: " + api_key_ + "\r\nanthropic-version: 2023-06-01\r\ncontent-type: application/json";
+    HttpResponse http_response = http_post_json(url, body);
 
-    std::string raw = http_post_json(url, headers, body);
-
-    if (raw.empty())
+    if (!http_response.transport_ok)
     {
-        return LLMResponse{false, "", "", 0, 0, 0, "http request failed (curl)"};
+        return LLMResponse{false, "", "", 0, 0, 0, "http request failed: " + http_response.error_message};
+    }
+    if (http_response.status_code < 200 || http_response.status_code >= 300)
+    {
+        return LLMResponse{false, "", "", 0, 0, 0, "http request returned status " + std::to_string(http_response.status_code)};
     }
 
     try
     {
-        auto response_json = nlohmann::json::parse(raw);
+        auto response_json = nlohmann::json::parse(http_response.body);
         return parse_anthropic_response(response_json);
     }
     catch (const nlohmann::json::parse_error&)
@@ -128,58 +119,10 @@ LLMResponse AnthropicProvider::complete(const LLMRequest& request)
     }
 }
 
-std::string AnthropicProvider::http_post_json(const std::string& url, const std::string& headers, const std::string& body)
+HttpResponse AnthropicProvider::http_post_json(const std::string& url, const std::string& body)
 {
-    namespace fs = std::filesystem;
-
-    static std::atomic<int> counter{0};
-    int pid = 0;
-#if defined(_WIN32)
-    pid = _getpid();
-#else
-    pid = getpid();
-#endif
-    int cnt = counter.fetch_add(1, std::memory_order_relaxed);
-
-    fs::path temp_dir = fs::temp_directory_path();
-    fs::path payload_file = temp_dir / ("satellite_payload_" + std::to_string(pid) + "_" + std::to_string(cnt) + ".json");
-    fs::path output_file = temp_dir / ("satellite_response_" + std::to_string(pid) + "_" + std::to_string(cnt) + ".txt");
-
-    {
-        std::ofstream ofs(payload_file, std::ios::binary);
-        if (!ofs)
-        {
-            return "";
-        }
-        ofs << body;
-    }
-
-    std::string cmd;
-#if defined(_WIN32)
-    cmd = "curl -s --max-time 60 -X POST \"" + url + "\" -H \"" + headers + "\" -H \"Content-Type: application/json\" --data @\"" + payload_file.string() + "\" > \"" + output_file.string() + "\" 2>nul";
-#else
-    cmd = "curl -s --max-time 60 -X POST \"" + url + "\" -H \"" + headers + "\" -H \"Content-Type: application/json\" --data @\"" + payload_file.string() + "\" > \"" + output_file.string() + "\" 2>/dev/null";
-#endif
-
-    int result = std::system(cmd.c_str());
-    (void)result;
-
-    std::string response;
-    {
-        std::ifstream ifs(output_file, std::ios::binary);
-        if (ifs)
-        {
-            std::ostringstream oss;
-            oss << ifs.rdbuf();
-            response = oss.str();
-        }
-    }
-
-    std::error_code ec;
-    fs::remove(payload_file, ec);
-    fs::remove(output_file, ec);
-
-    return response;
+    return post_json(url,
+        {{"x-api-key", api_key_}, {"anthropic-version", "2023-06-01"}}, body, 60L);
 }
 
 } // namespace satellite::llm

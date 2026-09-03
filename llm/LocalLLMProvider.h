@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llm/ILLMProvider.h"
+#include "llm/HttpClient.h"
 #include <json.hpp>
 #include <string>
 #include <cstdint>
@@ -21,7 +22,7 @@ public:
     std::uint64_t context_size() const;
 
 private:
-    std::string http_post_json(const std::string& url, const std::string& auth_header, const std::string& body);
+    HttpResponse http_post_json(const std::string& url, const std::string& body);
 
     std::string build_payload(const LLMRequest& request);
 

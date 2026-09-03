@@ -56,16 +56,20 @@ LLMResponse LocalLLMProvider::complete(const LLMRequest& request)
     std::string auth_header = "Authorization: Bearer " + api_key_;
     std::string url = base_url_ + "/v1/chat/completions";
 
-    std::string raw = http_post_json(url, auth_header, body);
+    HttpResponse http_response = http_post_json(url, body);
 
-    if (raw.empty())
+    if (!http_response.transport_ok)
     {
-        return LLMResponse{false, "", "", 0, 0, 0, "http request failed (curl)"};
+        return LLMResponse{false, "", "", 0, 0, 0, "http request failed: " + http_response.error_message};
+    }
+    if (http_response.status_code < 200 || http_response.status_code >= 300)
+    {
+        return LLMResponse{false, "", "", 0, 0, 0, "http request returned status " + std::to_string(http_response.status_code)};
     }
 
     try
     {
-        auto response_json = nlohmann::json::parse(raw);
+        auto response_json = nlohmann::json::parse(http_response.body);
         if (response_json.contains("error"))
         {
             return LLMResponse{false, "", "", 0, 0, 0,
@@ -108,59 +112,10 @@ LLMResponse LocalLLMProvider::complete(const LLMRequest& request)
     }
 }
 
-std::string LocalLLMProvider::http_post_json(const std::string& url,
-                                               const std::string& auth_header,
+HttpResponse LocalLLMProvider::http_post_json(const std::string& url,
                                                const std::string& body)
 {
-    namespace fs = std::filesystem;
-
-    static std::atomic<int> counter{0};
-    int pid = 0;
-#if defined(_WIN32)
-    pid = _getpid();
-#else
-    pid = getpid();
-#endif
-    int cnt = counter.fetch_add(1, std::memory_order_relaxed);
-
-    fs::path temp_dir = fs::temp_directory_path();
-    fs::path payload_file = temp_dir / ("satellite_local_payload_" + std::to_string(pid) + "_" + std::to_string(cnt) + ".json");
-    fs::path output_file = temp_dir / ("satellite_local_response_" + std::to_string(pid) + "_" + std::to_string(cnt) + ".txt");
-
-    {
-        std::ofstream ofs(payload_file, std::ios::binary);
-        if (!ofs)
-        {
-            return {};
-        }
-        ofs << body;
-    }
-
-    std::string cmd;
-#if defined(_WIN32)
-    cmd = "curl -s --max-time 120 -X POST \"" + url + "\" -H \"Content-Type: application/json\" -H \"" + auth_header + "\" --data @\"" + payload_file.string() + "\" > \"" + output_file.string() + "\" 2>nul";
-#else
-    cmd = "curl -s --max-time 120 -X POST \"" + url + "\" -H \"Content-Type: application/json\" -H \"" + auth_header + "\" --data @\"" + payload_file.string() + "\" > \"" + output_file.string() + "\" 2>/dev/null";
-#endif
-
-    std::system(cmd.c_str());
-
-    std::string response;
-    {
-        std::ifstream ifs(output_file, std::ios::binary);
-        if (ifs)
-        {
-            std::ostringstream oss;
-            oss << ifs.rdbuf();
-            response = oss.str();
-        }
-    }
-
-    std::error_code ec;
-    fs::remove(payload_file, ec);
-    fs::remove(output_file, ec);
-
-    return response;
+    return post_json(url, {{"Authorization", "Bearer " + api_key_}}, body, 120L);
 }
 
 } // namespace satellite::llm
