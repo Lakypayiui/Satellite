@@ -3,6 +3,8 @@
 
 #include <iostream>
 #include <string>
+#include <atomic>
+#include <thread>
 #include <vector>
 
 #include <json.hpp>
@@ -70,7 +72,7 @@ void test_register_three_agents()
     CHECK("has_agent(2) == true", registry.has_agent(2));
     CHECK("has_agent(3) == true", registry.has_agent(3));
 
-    const AgentDescriptor* found = registry.find_agent(2);
+    const auto found = registry.find_agent(2);
     CHECK("find_agent(2)->name == \"agent_2\"", found != nullptr && found->name == "agent_2");
 
     CHECK("list_agents().size() == 3", registry.list_agents().size() == 3);
@@ -104,7 +106,7 @@ void test_find_agent_fields_intact()
 
     registry.register_agent(desc);
 
-    const AgentDescriptor* found = registry.find_agent(42);
+    const auto found = registry.find_agent(42);
 
     CHECK("find_agent returns correct version", found != nullptr && found->version == "2.5.0");
     CHECK("find_agent returns correct capabilities[0]", found != nullptr && found->capabilities.size() > 0 && found->capabilities[0] == "cap.a");
@@ -191,6 +193,44 @@ void test_disabled_agent_in_list()
     CHECK("Disabled agent 5 still in list_agents", has_id_5);
 }
 
+void test_concurrent_access()
+{
+    AgentRegistry registry;
+    std::atomic<bool> failed{false};
+    std::vector<std::thread> workers;
+
+    for (AgentID worker = 0; worker < 4; ++worker)
+    {
+        workers.emplace_back([&registry, &failed, worker]()
+        {
+            const AgentID base_id = 1000 + worker * 100;
+            for (AgentID offset = 0; offset < 25; ++offset)
+            {
+                const AgentID id = base_id + offset;
+                if (!registry.register_agent(make_descriptor(id, "concurrent"))
+                    || !registry.has_agent(id) || !registry.find_agent(id))
+                {
+                    failed = true;
+                }
+                registry.disable_agent(id);
+                if (registry.is_enabled(id))
+                {
+                    failed = true;
+                }
+                registry.enable_agent(id);
+            }
+        });
+    }
+
+    for (auto& worker : workers)
+    {
+        worker.join();
+    }
+
+    CHECK("Concurrent access: no operation failed", !failed);
+    CHECK("Concurrent access: all agents registered", registry.list_agents().size() == 100);
+}
+
 int main()
 {
     test_empty_registry();
@@ -201,6 +241,7 @@ int main()
     test_enable_disable();
     test_list_agents_sorted();
     test_disabled_agent_in_list();
+    test_concurrent_access();
 
     std::cout << g_passed << " passed, " << g_failed << " failed\n";
     return g_failed == 0 ? 0 : 1;

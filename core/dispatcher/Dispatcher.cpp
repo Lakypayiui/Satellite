@@ -28,7 +28,7 @@ satellite::core::agent::AgentResult Dispatcher::dispatch(const satellite::core::
     using satellite::core::agent::AgentErrorCode;
     using satellite::core::agent::UNKNOWN_AGENT_ID;
 
-    const satellite::core::agent::AgentDescriptor* desc = registry_.find_agent(request.agent_id);
+    const auto desc = registry_.find_agent(request.agent_id);
     if (desc == nullptr)
     {
         return AgentResult

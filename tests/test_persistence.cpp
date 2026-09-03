@@ -147,7 +147,7 @@ void test_case_3_registry_persistente()
 
     CHECK("Caso 3: reg2 has_agent 1..5", reg2.has_agent(1) && reg2.has_agent(2) && reg2.has_agent(3) && reg2.has_agent(4) && reg2.has_agent(5));
 
-    const AgentDescriptor* d1 = reg2.find_agent(1);
+    const auto d1 = reg2.find_agent(1);
     CHECK("Caso 3: find_agent(1)->name == sum", d1 && d1->name == "sum");
     CHECK("Caso 3: is_enabled(3) == false", reg2.is_enabled(3) == false);
     CHECK("Caso 3: is_enabled(1) == true", reg2.is_enabled(1) == true);

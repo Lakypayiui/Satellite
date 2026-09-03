@@ -172,7 +172,7 @@ void test_happy_path()
     CHECK("Happy path: dispatch SUCCESS", result.status == AgentStatus::SUCCESS);
     CHECK("Happy path: output result == 10.0", result.output["result"] == 10.0);
 
-    const AgentDescriptor* desc = reg.find_agent(100);
+    const auto desc = reg.find_agent(100);
     CHECK("Happy path: capability math.double", desc && desc->capabilities.size() > 0 && desc->capabilities[0] == "math.double");
 
     factory.cleanup();

@@ -135,7 +135,18 @@ void test_missing_capabilities()
     for (const auto& c : caps2) {
         if (c == "sumar") { has_sumar = true; break; }
     }
-    CHECK("missing_capabilities: NO contiene 'sumar' (math.sum existe)", !has_sumar);
+    CHECK("missing_capabilities: 'sumar' no coincide por substring", has_sumar);
+
+    std::vector<std::string> partial_matches = expander.missing_capabilities("subcadena averiguar");
+    bool has_subcadena = false;
+    bool has_averiguar = false;
+    for (const auto& capability : partial_matches)
+    {
+        has_subcadena = has_subcadena || capability == "subcadena";
+        has_averiguar = has_averiguar || capability == "averiguar";
+    }
+    CHECK("missing_capabilities: 'subcadena' no coincide con 'subtract'", has_subcadena);
+    CHECK("missing_capabilities: 'averiguar' no coincide con 'average'", has_averiguar);
 
     fac.cleanup();
     std::filesystem::remove_all(workdir);
@@ -165,7 +176,7 @@ void test_expand_first_time()
     CHECK("expand first: created.size() == 1", res.created.size() == 1);
     CHECK("expand first: agent registered", reg.has_agent(res.created[0]) == true);
 
-    const AgentDescriptor* desc = reg.find_agent(res.created[0]);
+    const auto desc = reg.find_agent(res.created[0]);
     bool cap_factorial = false;
     if (desc) {
         for (const auto& c : desc->capabilities) {

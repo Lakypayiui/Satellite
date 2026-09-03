@@ -2,11 +2,13 @@
 
 // Registro canónico de capacidades del runtime Satellite (Fase 2).
 // Gestiona la inscripción, consulta y estado habilitado/deshabilitado de agentes.
-// No incluye mutex, serialización JSON, observers ni callbacks (FASE 15).
+// Las operaciones del registro son seguras para consultas y modificaciones concurrentes.
 
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <memory>
+#include <shared_mutex>
 
 #include "core/agent/AgentID.h"
 #include "core/agent/AgentDescriptor.h"
@@ -21,8 +23,9 @@ using satellite::core::agent::UNKNOWN_AGENT_ID;
 class AgentRegistry
 {
 private:
-    std::unordered_map<AgentID, AgentDescriptor> registry_;
+    std::unordered_map<AgentID, std::shared_ptr<const AgentDescriptor>> registry_;
     std::unordered_set<AgentID> disabled_;
+    mutable std::shared_mutex mutex_;
 
 public:
     // Inscribe un agente. Rechaza id == UNKNOWN_AGENT_ID (0) → false.
@@ -33,7 +36,7 @@ public:
     bool unregister_agent(AgentID id);
 
     // Busca un agente por id. nullptr si no existe (sin distinguir habilitado/deshabilitado).
-    const AgentDescriptor* find_agent(AgentID id) const;
+    std::shared_ptr<const AgentDescriptor> find_agent(AgentID id) const;
 
     // Comprueba si existe un agente (habilitado o no).
     bool has_agent(AgentID id) const;

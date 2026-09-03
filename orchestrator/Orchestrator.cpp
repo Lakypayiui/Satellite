@@ -117,7 +117,7 @@ OrchestrationResult Orchestrator::run_plan(const std::vector<OrchestrationStep>&
         step_results.push_back(step_result);
 
         // Summary: una línea por paso "paso <i>: agent <nombre o id> -> <status>"
-        const satellite::core::agent::AgentDescriptor* desc = registry_.find_agent(step.agent_id);
+        const auto desc = registry_.find_agent(step.agent_id);
         std::string agent_name = desc ? desc->name : "id_" + std::to_string(step.agent_id);
         result.summary += "paso " + std::to_string(i) + ": agent " + agent_name + " -> " + std::string(satellite::core::agent::to_string(step_result.status));
         if (i + 1 < plan.size())
@@ -272,7 +272,7 @@ AgentResult Orchestrator::execute_step(const OrchestrationStep& step,
                                        const TokenBudget& budget) const
 {
     // 1. find_agent(step.agent_id) en registry_ → si no existe: AgentResult con UNKNOWN_AGENT
-    const satellite::core::agent::AgentDescriptor* desc = registry_.find_agent(step.agent_id);
+    const auto desc = registry_.find_agent(step.agent_id);
     if (!desc)
     {
         AgentResult result;
