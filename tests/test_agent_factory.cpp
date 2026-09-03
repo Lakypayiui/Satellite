@@ -86,6 +86,7 @@ public:
     }
 };
 extern "C" IAgent* satellite_create_agent() { return new DoubleAgent(); }
+extern "C" void satellite_destroy_agent(IAgent* agent) { delete agent; }
 )AGENT";
     }
     else
@@ -104,6 +105,7 @@ public:
     }
 };
 extern "C" IAgent* satellite_create_agent() { return new DoubleAgent(); }
+extern "C" void satellite_destroy_agent(IAgent* agent) { delete agent; }
 )AGENT";
     }
 
@@ -133,6 +135,7 @@ public:
     }
 };
 extern "C" IAgent* satellite_create_agent() { return new DoubleAgent(); }
+extern "C" void satellite_destroy_agent(IAgent* agent) { delete agent; }
 )AGENT";
     return spec;
 }

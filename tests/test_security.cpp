@@ -131,12 +131,17 @@ void test_validate_agent()
     bool valid2 = p2.validate_agent(desc1, denied);
     CHECK("validate_agent both allowed: returns true", valid2 == true);
 
-    // Descriptor con capabilities VACÍAS
+    // Un descriptor sin capabilities requiere una regla explícita.
     AgentDescriptor desc_empty;
     desc_empty.capabilities = {};
 
     bool valid3 = p1.validate_agent(desc_empty, denied);
-    CHECK("validate_agent empty caps: returns true", valid3 == true);
+    CHECK("validate_agent empty caps: returns false by default", valid3 == false);
+    CHECK("validate_agent empty caps: denied == agent.no_capabilities", denied == SecurityPolicy::no_capabilities_capability);
+
+    p1.set_allowed(SecurityPolicy::no_capabilities_capability, true);
+    bool valid4 = p1.validate_agent(desc_empty, denied);
+    CHECK("validate_agent empty caps: explicit rule returns true", valid4 == true);
 }
 
 void test_dispatcher_deny_default()

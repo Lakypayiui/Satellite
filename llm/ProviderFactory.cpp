@@ -9,7 +9,7 @@ std::unique_ptr<ILLMProvider> ProviderFactory::create(const satellite::config::F
 
     if (provider == "deepseek")
     {
-        return std::make_unique<DeepSeekProvider>(config.llm_api_key_env, config.llm_base_url, config.llm_model);
+        return std::make_unique<DeepSeekProvider>(config.llm_api_key, config.llm_base_url, config.llm_model);
     }
     else if (provider == "openai" || provider == "openai-compatible")
     {
