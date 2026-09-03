@@ -24,6 +24,8 @@
 #include "security/SecurityPolicy.h"
 #include "context/adapter/ProjectAdapter.h"
 #include "context/engine/ProjectContext.h"
+#include "context/engine/ProjectIndex.h"
+#include "context/engine/SemanticContext.h"
 #include "factory/AgentFactory.h"
 #include "core/catalog/AgentCatalog.h"
 #include "orchestrator/Orchestrator.h"
@@ -53,7 +55,8 @@ int SatelliteCLI::run(int argc, char* argv[])
         std::cout << "  agent enable <id>            Habilita un agente\n";
         std::cout << "  agent disable <id>           Deshabilita un agente\n";
         std::cout << "  doctor                       Ejecuta diagnósticos del entorno\n";
-        std::cout << "  context build                Construye el contexto del proyecto\n";
+        std::cout << "  context build                Construye el contexto del proyecto (indice con mtimes)\n";
+        std::cout << "  context get --paths <archivos>  Contexto semantico bajo demanda\n";
         std::cout << "  context inspect              Inspecciona el contexto guardado\n";
         std::cout << "  agent create <spec.json>     Crea un agente desde spec\n";
         std::cout << "  agent test <id> [input.json] Prueba un agente\n";
@@ -118,6 +121,10 @@ int SatelliteCLI::run(int argc, char* argv[])
         {
             return cmd_context_build();
         }
+        else if (ctx_sub == "get")
+        {
+            return cmd_context_get(argc - 3, argv + 3);
+        }
         else if (ctx_sub == "inspect")
         {
             return cmd_context_inspect();
@@ -125,7 +132,7 @@ int SatelliteCLI::run(int argc, char* argv[])
         else
         {
             std::cout << "Subcomando desconocido: " << ctx_sub << "\n";
-            std::cout << "Uso: satellite context build|inspect\n";
+            std::cout << "Uso: satellite context build|get|inspect\n";
             return 1;
         }
     }
@@ -382,170 +389,172 @@ int SatelliteCLI::cmd_doctor()
 
 int SatelliteCLI::cmd_context_build()
 {
-    satellite::context::ContextEngine engine(project_root_);
-    satellite::context::ProjectContext ctx = engine.build();
+    auto index_path = project_root_ / ".satellite" / "context" / "index.json";
+    std::filesystem::create_directories(project_root_ / ".satellite" / "context");
 
-    size_t total_symbols = 0;
+    satellite::context::ProjectIndex saved_index;
+    bool has_cached = false;
 
-    std::map<std::string, std::map<std::string, size_t>> category_counts;
-
-    for (const auto& file : ctx.files)
+    if (std::filesystem::exists(index_path))
     {
-        total_symbols += file.symbols.size();
-
-        if (!file.type.empty() && !file.category.empty())
+        try
         {
-            category_counts[file.category][file.type]++;
+            saved_index = satellite::context::load(index_path);
+            has_cached = true;
+        }
+        catch (const std::exception& e)
+        {
+            std::cout << "Advertencia: indice cacheado invalido (" << e.what() << "), reconstruyendo.\n";
         }
     }
 
-    // Categorías en el orden deseado.
-    const std::vector<std::string> category_order = {
-        "Code",
-        "Configuration",
-        "Markup"
-    };
+    satellite::context::ProjectIndexBuilder builder(project_root_);
 
-    const std::map<std::string, std::string> category_labels = {
-        {"Code", "Código"},
-        {"Configuration", "Configuración"},
-        {"Markup", "Markup"}
-    };
-
-    // Mostrar categorías.
-    for (const auto& category : category_order)
+    if (has_cached && !builder.is_stale(saved_index, project_root_))
     {
-        auto it = category_counts.find(category);
-
-        if (it == category_counts.end() || it->second.empty())
-        {
-            continue;
-        }
-
-        std::cout << category_labels.at(category) << ":\n";
-
-        for (const auto& [type, count] : it->second)
-        {
-            std::cout << "  " << type << ": " << count << "\n";
-        }
-
-        std::cout << "\n";
+        std::cout << "Contexto al dia. Sin escaneo (indice cacheado).\n";
+        std::cout << "Archivos: " << saved_index.total_files << ", Lineas: " << saved_index.total_lines << "\n";
+        return 0;
     }
 
-    std::cout << "Archivos: " << ctx.files.size() << "\n";
-    std::cout << "Simbolos: " << total_symbols << "\n";
-    std::cout << "Dependencias: " << ctx.dependencies.size() << "\n";
-    std::cout << "Lineas totales: " << ctx.total_lines << "\n";
-
-    // ---------------------------------------------------------
-    // Persistencia del contexto
-    // ---------------------------------------------------------
-
-    nlohmann::json cache;
-
-    cache["root"] = ctx.root;
-
-    // Conteo global por tipo
-    cache["type_counts"] = nlohmann::json::object();
-
-    for (const auto& [category, type_map] : category_counts)
+    if (has_cached)
     {
-        for (const auto& [type, count] : type_map)
+        auto changes = builder.changed_paths(saved_index, project_root_);
+        std::cout << "Indice obsoleto. Archivos modificados (" << changes.size() << "):\n";
+        for (const auto& p : changes)
         {
-            cache["type_counts"][type] = count;
+            std::cout << "  - " << p << "\n";
         }
     }
 
-    // Conteo agrupado por categoría
-    cache["category_counts"] = nlohmann::json::object();
+    satellite::context::ProjectIndex idx = builder.build();
+    satellite::context::save(idx, index_path);
 
-    for (const auto& [category, type_map] : category_counts)
-    {
-        cache["category_counts"][category] = nlohmann::json::object();
-
-        for (const auto& [type, count] : type_map)
-        {
-            cache["category_counts"][category][type] = count;
-        }
-    }
-
-    cache["total_lines"] = ctx.total_lines;
-    cache["total_files"] = ctx.files.size();
-
-    cache["files"] = nlohmann::json::array();
-
-    for (const auto& file : ctx.files)
-    {
-        nlohmann::json f;
-
-        f["path"] = file.path;
-        f["type"] = file.type;
-        f["category"] = file.category;
-        f["size"] = file.size;
-        f["lines"] = file.lines;
-
-        cache["files"].push_back(f);
-    }
-
-    std::filesystem::path cache_dir =
-        project_root_ / ".satellite" / "context";
-
-    std::filesystem::create_directories(cache_dir);
-
-    std::filesystem::path cache_file =
-        cache_dir / "context.json";
-
-    std::ofstream ofs(cache_file);
-
-    if (ofs.is_open())
-    {
-        ofs << cache.dump(2);
-        ofs.close();
-    }
-    else
-    {
-        std::cout << "Aviso: no se pudo escribir cache en "
-                  << cache_file << "\n";
-    }
+    std::cout << "Indice construido: " << idx.total_files << " archivos, "
+              << idx.total_lines << " lineas.\n";
+    std::cout << "Guardado en: " << index_path << "\n";
 
     return 0;
 }
 
 int SatelliteCLI::cmd_context_inspect()
 {
-    std::filesystem::path cache_file = project_root_ / ".satellite" / "context" / "context.json";
-    if (!std::filesystem::exists(cache_file))
+    auto index_path = project_root_ / ".satellite" / "context" / "index.json";
+    if (!std::filesystem::exists(index_path))
     {
         std::cout << "Error: ejecuta primero: satellite context build\n";
         return 1;
     }
 
-    std::ifstream ifs(cache_file);
-    nlohmann::json cache;
     try
     {
-        ifs >> cache;
+        satellite::context::ProjectIndex idx = satellite::context::load(index_path);
+
+        std::cout << "Root: " << idx.root << "\n";
+        std::cout << "Archivos: " << idx.total_files << ", Lineas: " << idx.total_lines << "\n";
+        std::cout << "Timestamp: " << idx.build_timestamp << "\n";
+
+        for (const auto& f : idx.files)
+        {
+            std::cout << "  " << f.path << " (" << f.language << ", "
+                      << f.lines << " lineas, " << f.size << " bytes, "
+                      << "mtime=" << f.mtime << ")\n";
+            for (const auto& sym : f.symbols)
+            {
+                std::cout << "    simbolo: " << sym << "\n";
+            }
+            for (const auto& dep : f.dependencies)
+            {
+                std::cout << "    deps: " << dep << "\n";
+            }
+        }
     }
     catch (const std::exception& e)
     {
-        std::cout << "Error: cache corrupto: " << e.what() << "\n";
+        std::cout << "Error: " << e.what() << "\n";
         return 1;
     }
 
-    if (cache.contains("files"))
+    return 0;
+}
+
+int SatelliteCLI::cmd_context_get(int argc, char* argv[])
+{
+    std::vector<std::string> paths;
+    std::size_t max_chars = 0;
+
+    for (int i = 0; i < argc; ++i)
     {
-        for (const auto& f : cache["files"])
+        std::string arg = argv[i];
+        if (arg == "--paths")
         {
-            std::cout << "  " << f["path"].get<std::string>() << " (" << f["type"].get<std::string>() << ", " << f["lines"].get<size_t>() << " lineas, " << f["size"].get<size_t>() << " bytes)\n";
+            while (i + 1 < argc)
+            {
+                std::string next = argv[i + 1];
+                if (next == "--max-chars" || next == "--")
+                {
+                    break;
+                }
+                paths.push_back(next);
+                ++i;
+            }
+        }
+        else if (arg == "--max-chars" && i + 1 < argc)
+        {
+            max_chars = static_cast<std::size_t>(std::stoul(argv[i + 1]));
         }
     }
 
-    if (cache.contains("dependencies"))
+    if (paths.empty())
     {
-        for (const auto& d : cache["dependencies"])
+        std::cout << "Uso: satellite context get --paths <archivos...>\n";
+        std::cout << "Opciones:\n";
+        std::cout << "  --paths a.cpp b.hpp   archivos a cargar (relativos al proyecto)\n";
+        std::cout << "  --max-chars N         presupuesto maximo de caracteres\n";
+        return 1;
+    }
+
+    auto index_path = project_root_ / ".satellite" / "context" / "index.json";
+    if (!std::filesystem::exists(index_path))
+    {
+        std::cout << "Error: ejecuta primero: satellite context build\n";
+        return 1;
+    }
+
+    try
+    {
+        satellite::context::ProjectIndex idx = satellite::context::load(index_path);
+        satellite::context::IncrementalContextBuilder ib(project_root_);
+
+        satellite::context::SemanticContext ctx;
+        if (max_chars > 0)
         {
-            std::cout << "  " << d["from"].get<std::string>() << " -> " << d["target"].get<std::string>() << " (" << d["kind"].get<std::string>() << ")\n";
+            ctx = ib.build_for_paths(idx, paths, max_chars);
         }
+        else
+        {
+            ctx = ib.build_for_paths(idx, paths);
+        }
+
+        if (ctx.files.empty())
+        {
+            std::cout << "No se encontro contexto para los caminos especificados.\n";
+            return 1;
+        }
+
+        for (const auto& sf : ctx.files)
+        {
+            std::cout << "Archivo: " << sf.path << " (" << sf.language << ")\n";
+            std::cout << sf.content << "\n";
+        }
+
+        std::cout << "\nTotal archivos: " << ctx.files.size()
+                  << ", Total chars: " << ctx.total_chars << "\n";
+    }
+    catch (const std::exception& e)
+    {
+        std::cout << "Error: " << e.what() << "\n";
+        return 1;
     }
 
     return 0;

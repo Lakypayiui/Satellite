@@ -30,6 +30,7 @@ private:
     // FASE 20 parte B:
     int cmd_context_build();
     int cmd_context_inspect();
+    int cmd_context_get(int argc, char* argv[]);
     int cmd_agent_create(int argc, char* argv[]);
     int cmd_agent_test(int argc, char* argv[]);
     int cmd_run(int argc, char* argv[]);

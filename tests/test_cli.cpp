@@ -163,12 +163,18 @@ int main()
         run_cli(proj, {"init"});
         auto [rc, out] = run_cli(proj, {"context", "build"});
         CHECK("context build: exit 0", rc == 0);
-        CHECK("context build: detecta C++", out.find("C++") != std::string::npos);
-        CHECK("context build: cache json", fs::exists(proj / ".satellite" / "context" / "context.json"));
+        CHECK("context build: indice creado", out.find("Indice construido") != std::string::npos);
+        CHECK("context build: cache json", fs::exists(proj / ".satellite" / "context" / "index.json"));
 
         auto [rc2, out2] = run_cli(proj, {"context", "inspect"});
         CHECK("context inspect: exit 0", rc2 == 0);
         CHECK("context inspect: muestra main.cpp", out2.find("main.cpp") != std::string::npos);
+
+        // build segundo llamado -> cache hit (proj aún existe)
+        auto [rc4, out4] = run_cli(proj, {"context", "build"});
+        CHECK("context build cache hit: exit 0", rc4 == 0);
+        CHECK("context build cache hit: sin escaneo", out4.find("Sin escaneo") != std::string::npos);
+
         safe_remove_all(proj);
 
         // inspect sin build previo -> error
