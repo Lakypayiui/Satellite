@@ -21,6 +21,13 @@ std::unique_ptr<ILLMProvider> ProviderFactory::create(const satellite::config::F
     {
         return std::make_unique<AnthropicProvider>(config.llm_api_key, config.llm_model);
     }
+    else if (provider == "local")
+    {
+        std::string base_url = "http://localhost:" + std::to_string(config.local_llm_port);
+        std::string api_key = config.local_llm_api_key;
+        return std::make_unique<LocalLLMProvider>(base_url, api_key, config.llm_model,
+                                                    config.local_llm_context_size);
+    }
 
     return nullptr;
 }

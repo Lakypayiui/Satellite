@@ -23,6 +23,13 @@ struct FrameworkConfig
     std::string logging_level = "info";
     std::map<std::string, bool> security_allow;
 
+    bool use_local_llm = false;
+    std::string local_llm_path = "third_party/llama-b10739-bin-win-vulkan-x64/llama-server.exe";
+    std::string local_llm_model = "third_party/llama-b10739-bin-win-vulkan-x64/gemma-4-E2B-it-Q5_K_M.gguf";
+    std::uint64_t local_llm_context_size = 131072;
+    std::uint16_t local_llm_port = 8080;
+    std::string local_llm_api_key = "";
+
     void load_defaults();
     nlohmann::json to_json() const;
     bool merge_json(const nlohmann::json& j);

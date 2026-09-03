@@ -30,6 +30,8 @@
 #include "core/catalog/AgentCatalog.h"
 #include "orchestrator/Orchestrator.h"
 #include "llm/ProviderFactory.h"
+#include "context/LocalPreprocessor.h"
+#include "llm/LocalLLMProvider.h"
 #include "context/optimizer/ContextOptimizer.h"
 #include <json.hpp>
 
@@ -753,15 +755,54 @@ int SatelliteCLI::cmd_run(int argc, char* argv[])
         std::cout << "Error: proveedor LLM desconocido en la configuración\n";
         return 1;
     }
-    satellite::orchestrator::Orchestrator orchestrator(registry, dispatcher, optimizer, provider.get());
+
+    auto config_path = project_root_ / ".satellite" / "config" / "config.json";
+    if (std::filesystem::exists(config_path))
+    {
+        satellite::config::FrameworkConfig file_config;
+        std::string config_err;
+        if (satellite::config::FrameworkConfig::load_from_file(config_path, file_config, config_err))
+        {
+            config = file_config;
+            config.llm_api_key_env = key;
+        }
+    }
 
     auto adapter = satellite::context::ProjectAdapterFactory::detect(project_root_);
     satellite::context::ProjectContext proj = adapter ? adapter->build_context(project_root_) : satellite::context::ProjectContext{};
 
+    std::string refined_goal = goal;
+    if (config.use_local_llm)
+    {
+        satellite::llm::LocalLLMProvider local_provider(
+            "http://localhost:" + std::to_string(config.local_llm_port),
+            config.local_llm_api_key,
+            config.local_llm_model,
+            config.local_llm_context_size);
+
+        satellite::context::LocalPreprocessor preprocessor(
+            &local_provider,
+            proj,
+            project_root_);
+
+        auto result = preprocessor.preprocess(goal);
+
+        if (result.needs_user_input)
+        {
+            refined_goal = result.user_prompt;
+        }
+        else
+        {
+            refined_goal = result.refined_prompt;
+        }
+    }
+
+    satellite::orchestrator::Orchestrator orchestrator(registry, dispatcher, optimizer, provider.get());
+
     satellite::core::catalog::AgentCatalog catalog(registry);
     satellite::core::protocol::TokenBudget token_budget{4000};
 
-    auto result = orchestrator.execute_goal(goal, proj, token_budget, catalog);
+    auto result = orchestrator.execute_goal(refined_goal, proj, token_budget, catalog);
 
     std::cout << result.summary << "\n";
 
