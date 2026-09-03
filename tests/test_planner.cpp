@@ -13,6 +13,7 @@
 #include "core/registry/AgentRegistry.h"
 #include "llm/ILLMProvider.h"
 #include "llm/LLMTypes.h"
+#include "llm/JsonExtraction.h"
 
 using namespace satellite::planner;
 using namespace satellite::core::agent;
@@ -255,6 +256,17 @@ void test_plan_goal()
     CHECK("plan_goal: 1 step", plan.steps.size() == 1);
     CHECK("plan_goal: step agent_id 1", plan.steps[0].agent_id == 1);
 
+    // Los modelos pueden envolver el JSON en un bloque Markdown.
+    FakeProvider provider_markdown;
+    provider_markdown.set_response(LLMResponse{
+        true,
+        "```json\n{\"goal\":\"g\",\"steps\":[{\"agent_id\":1,\"input\":{\"a\":1,\"b\":2}}]}\n```",
+        "", 0, 0, 0, ""
+    });
+    err.clear();
+    CHECK("plan_goal: markdown JSON returns true",
+          planner.plan_goal("test", catalog, provider_markdown, plan, err));
+
     // 2. FakeProvider con text "no json" → false
     FakeProvider provider_bad_json;
     provider_bad_json.set_response(LLMResponse{
@@ -275,6 +287,8 @@ void test_plan_goal()
     err.clear();
     CHECK("plan_goal: llm error returns false", !planner.plan_goal("test", catalog, provider_fail, plan, err));
     CHECK("plan_goal: err contains boom", err.find("boom") != std::string::npos);
+
+    CHECK("extract_json_substring: array", extract_json_substring("```json\n[1, 2]\n```") == "[1, 2]");
 }
 
 void test_llm_provider_polymorphism()

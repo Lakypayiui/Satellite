@@ -1,4 +1,5 @@
 #include "Planner.h"
+#include "llm/JsonExtraction.h"
 
 #include <algorithm>
 #include <queue>
@@ -288,8 +289,8 @@ bool Planner::plan_goal(const std::string& goal, const AgentCatalog& catalog, IL
         return false;
     }
 
-    // Parse JSON con nlohmann::json::parse con nullptr, false (no exception)
-    nlohmann::json j = nlohmann::json::parse(response.text, nullptr, false);
+    const std::string json_text = satellite::llm::extract_json_substring(response.text);
+    nlohmann::json j = nlohmann::json::parse(json_text, nullptr, false);
     if (j.is_discarded())
     {
         error = "invalid plan JSON";
