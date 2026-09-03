@@ -45,16 +45,16 @@ void test_register_native_agents()
     CHECK("has_agent(5) true", registry.has_agent(5));
 
     // 2. find_agent nombres correctos
-    const AgentDescriptor* d1 = registry.find_agent(1);
-    const AgentDescriptor* d4 = registry.find_agent(4);
-    const AgentDescriptor* d5 = registry.find_agent(5);
+    const auto d1 = registry.find_agent(1);
+    const auto d4 = registry.find_agent(4);
+    const auto d5 = registry.find_agent(5);
 
     CHECK("find_agent(1)->name == \"sum\"", d1 != nullptr && d1->name == "sum");
     CHECK("find_agent(4)->name == \"divide\"", d4 != nullptr && d4->name == "divide");
     CHECK("find_agent(5)->name == \"average\"", d5 != nullptr && d5->name == "average");
 
     // 3. capabilities correctas
-    const AgentDescriptor* d3 = registry.find_agent(3);
+    const auto d3 = registry.find_agent(3);
     CHECK("find_agent(3)->capabilities[0] == \"math.multiply\"", d3 != nullptr && d3->capabilities.size() >= 1 && d3->capabilities[0] == "math.multiply");
     CHECK("find_agent(1)->capabilities[0] == \"math.sum\"", d1 != nullptr && d1->capabilities.size() >= 1 && d1->capabilities[0] == "math.sum");
     CHECK("find_agent(2)->capabilities[0] == \"math.subtract\"", registry.find_agent(2) != nullptr && registry.find_agent(2)->capabilities.size() >= 1 && registry.find_agent(2)->capabilities[0] == "math.subtract");

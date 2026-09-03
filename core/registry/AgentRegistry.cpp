@@ -4,6 +4,7 @@
 #include "core/registry/AgentRegistry.h"
 
 #include <algorithm>
+#include <mutex>
 
 using satellite::core::agent::AgentID;
 using satellite::core::agent::AgentDescriptor;
@@ -19,17 +20,19 @@ bool AgentRegistry::register_agent(const AgentDescriptor& descriptor)
         return false;
     }
 
+    std::unique_lock lock(mutex_);
     if (registry_.find(descriptor.id) != registry_.end())
     {
         return false;
     }
 
-    registry_.emplace(descriptor.id, descriptor);
+    registry_.emplace(descriptor.id, std::make_shared<const AgentDescriptor>(descriptor));
     return true;
 }
 
 bool AgentRegistry::unregister_agent(AgentID id)
 {
+    std::unique_lock lock(mutex_);
     auto it = registry_.find(id);
     if (it == registry_.end())
     {
@@ -41,29 +44,32 @@ bool AgentRegistry::unregister_agent(AgentID id)
     return true;
 }
 
-const AgentDescriptor* AgentRegistry::find_agent(AgentID id) const
+std::shared_ptr<const AgentDescriptor> AgentRegistry::find_agent(AgentID id) const
 {
+    std::shared_lock lock(mutex_);
     auto it = registry_.find(id);
     if (it == registry_.end())
     {
-        return nullptr;
+        return {};
     }
-    return &it->second;
+    return it->second;
 }
 
 bool AgentRegistry::has_agent(AgentID id) const
 {
+    std::shared_lock lock(mutex_);
     return registry_.find(id) != registry_.end();
 }
 
 std::vector<AgentDescriptor> AgentRegistry::list_agents() const
 {
+    std::shared_lock lock(mutex_);
     std::vector<AgentDescriptor> result;
     result.reserve(registry_.size());
 
     for (const auto& pair : registry_)
     {
-        result.push_back(pair.second);
+        result.push_back(*pair.second);
     }
 
     std::sort(result.begin(), result.end(),
@@ -77,6 +83,7 @@ std::vector<AgentDescriptor> AgentRegistry::list_agents() const
 
 bool AgentRegistry::enable_agent(AgentID id)
 {
+    std::unique_lock lock(mutex_);
     if (registry_.find(id) == registry_.end())
     {
         return false;
@@ -88,6 +95,7 @@ bool AgentRegistry::enable_agent(AgentID id)
 
 bool AgentRegistry::disable_agent(AgentID id)
 {
+    std::unique_lock lock(mutex_);
     if (registry_.find(id) == registry_.end())
     {
         return false;
@@ -99,6 +107,7 @@ bool AgentRegistry::disable_agent(AgentID id)
 
 bool AgentRegistry::is_enabled(AgentID id) const
 {
+    std::shared_lock lock(mutex_);
     if (registry_.find(id) == registry_.end())
     {
         return false;

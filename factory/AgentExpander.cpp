@@ -11,6 +11,22 @@
 namespace satellite::factory
 {
 
+namespace
+{
+
+bool matches_capability_name(const std::string& token, const std::string& capability)
+{
+    if (token == capability)
+    {
+        return true;
+    }
+
+    const std::size_t separator = capability.rfind('.');
+    return separator != std::string::npos && token == capability.substr(separator + 1);
+}
+
+} // namespace
+
 AgentExpander::AgentExpander(AgentRegistry& registry, AgentCatalog& catalog, AgentFactory& factory, ILLMProvider& llm)
     : registry_(registry)
     , catalog_(catalog)
@@ -79,7 +95,7 @@ std::vector<std::string> AgentExpander::missing_capabilities(const std::string& 
         bool found = false;
         for (const auto& existing : existing_capabilities)
         {
-            if (existing.find(token) != std::string::npos || (token.size() >= 3 && existing.find(token.substr(0, 3)) != std::string::npos))
+            if (matches_capability_name(token, existing))
             {
                 found = true;
                 break;
@@ -222,7 +238,7 @@ ExpansionResult AgentExpander::expand(const std::string& goal, std::string& erro
         bool covered = false;
         for (const auto& existing : existing_capabilities)
         {
-            if (existing.find(word) != std::string::npos || (word.size() >= 3 && existing.find(word.substr(0, 3)) != std::string::npos))
+            if (matches_capability_name(word, existing))
             {
                 covered = true;
                 break;
