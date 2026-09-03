@@ -42,7 +42,13 @@ bool SecurityPolicy::validate_agent(const satellite::core::agent::AgentDescripto
 {
     if (descriptor.capabilities.empty())
     {
-        return true;
+        if (is_allowed(no_capabilities_capability))
+        {
+            return true;
+        }
+
+        denied_capability = no_capabilities_capability;
+        return false;
     }
 
     for (const auto& cap : descriptor.capabilities)

@@ -177,8 +177,8 @@ Orchestrator
   `tokens_after`, `tokens_saved`, and `relevance_score`.
 - **Full CLI** — `satellite init`, `agents`, `agent create/test/enable/disable`,
   `context build/inspect`, `run`, `doctor`, `--version`.
-- **Installable product** — reproducible CMake build, vendored single
-  dependency (`nlohmann/json`), `cmake --install`, versioned (1.0.0).
+- **Installable product** — reproducible CMake build, libcurl for HTTP and the
+  vendored `nlohmann/json` dependency, `cmake --install`, versioned (1.0.0).
 - **Portability proven by tests** — the same binary drives a C++ project and a
   Python project without any framework change.
 
@@ -260,7 +260,8 @@ agent end-to-end.
 
 - C++17 compiler (GCC 9+, Clang, or MSVC)
 - CMake ≥ 3.16 (Ninja or Makefiles)
-- No external dependencies: `nlohmann/json` is vendored in `third_party/`
+- libcurl (required for HTTP providers)
+- `nlohmann/json` is vendored in `third_party/`
 - For LLM features: a `DEEPSEEK_API_KEY` (or any provider implementing `ILLMProvider`)
 
 ---
@@ -276,7 +277,7 @@ ctest --test-dir build          # run the full test suite
 cmake --install build --prefix <install-dir>
 ```
 
-The build is reproducible: C++17, a single vendored header-only dependency,
+The build is reproducible: C++17, libcurl plus the vendored JSON dependency,
 and no network access at build time.
 
 ---
@@ -370,7 +371,7 @@ Satellite/
 | `Orchestrator` | Never executes code directly — delegates to the Dispatcher. |
 | `AgentFactory` | spec → code → compile → harness tests → plugin (DLL) → register; any failure = not registered. |
 | `AgentExpander` | Auto-expansion: detects missing capabilities, skips existing ones. |
-| `SecurityPolicy` | Validates agent capabilities before execution (deny-by-default). |
+| `SecurityPolicy` | Validates agent capabilities before execution (deny-by-default); agents without capabilities require the explicit `agent.no_capabilities` rule. |
 | `AgentStore` | Persistence of specs and registry state in the consumer's `.satellite/`. |
 | `ExecutionLogger` | Per-execution records incl. token metrics. |
 | `ProjectInitializer` | `satellite init` logic. |
