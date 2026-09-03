@@ -1,6 +1,7 @@
 // AgentExpander.cpp: implementación de la expansión automática de catálogo (Fase 14).
 
 #include "AgentExpander.h"
+#include "llm/JsonExtraction.h"
 
 #include <algorithm>
 #include <cctype>
@@ -110,7 +111,8 @@ bool AgentExpander::generate_spec(const std::string& goal, const std::string& ca
         return false;
     }
 
-    nlohmann::json json_spec = nlohmann::json::parse(response.text, nullptr, false);
+    const std::string json_text = satellite::llm::extract_json_substring(response.text);
+    nlohmann::json json_spec = nlohmann::json::parse(json_text, nullptr, false);
     if (json_spec.is_discarded())
     {
         error = "invalid spec JSON";

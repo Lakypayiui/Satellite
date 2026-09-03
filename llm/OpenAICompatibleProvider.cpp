@@ -130,6 +130,10 @@ LLMResponse OpenAICompatibleProvider::complete(const LLMRequest& request)
     {
         return LLMResponse{false, "", "", 0, 0, 0, "invalid json response"};
     }
+    catch (const std::exception& exception)
+    {
+        return LLMResponse{false, "", "", 0, 0, 0, "invalid response: " + std::string(exception.what())};
+    }
 }
 
 HttpResponse OpenAICompatibleProvider::http_post_json(const std::string& url, const std::string& body)
