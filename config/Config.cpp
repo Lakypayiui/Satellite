@@ -20,6 +20,13 @@ void FrameworkConfig::load_defaults()
     agent_storage_dir = ".satellite";
     logging_level = "info";
 
+    use_local_llm = false;
+    local_llm_path = "third_party/llama-b10739-bin-win-vulkan-x64/llama-server.exe";
+    local_llm_model = "third_party/llama-b10739-bin-win-vulkan-x64/gemma-4-E2B-it-Q5_K_M.gguf";
+    local_llm_context_size = 131072;
+    local_llm_port = 8080;
+    local_llm_api_key = "";
+
     security_allow.clear();
     security_allow["filesystem.read"] = true;
     security_allow["filesystem.write"] = false;
@@ -44,6 +51,16 @@ nlohmann::json FrameworkConfig::to_json() const
     for (const auto& [cap, allowed] : security_allow)
     {
         j["security"]["allow"][cap] = allowed;
+    }
+    if (use_local_llm)
+    {
+        j["local_llm"]["enabled"] = true;
+        j["local_llm"]["path"] = local_llm_path;
+        j["local_llm"]["model"] = local_llm_model;
+        j["local_llm"]["context_size"] = local_llm_context_size;
+        j["local_llm"]["port"] = local_llm_port;
+        if (!local_llm_api_key.empty())
+            j["local_llm"]["api_key"] = local_llm_api_key;
     }
     return j;
 }
@@ -109,6 +126,23 @@ bool FrameworkConfig::merge_json(const nlohmann::json& j)
         }
     }
 
+    if (j.contains("local_llm"))
+    {
+        const auto& llm = j["local_llm"];
+        if (llm.contains("enabled") && llm["enabled"].get<bool>())
+            use_local_llm = true;
+        if (llm.contains("path") && !llm["path"].get<std::string>().empty())
+            local_llm_path = llm["path"].get<std::string>();
+        if (llm.contains("model") && !llm["model"].get<std::string>().empty())
+            local_llm_model = llm["model"].get<std::string>();
+        if (llm.contains("context_size"))
+            local_llm_context_size = llm["context_size"].get<std::uint64_t>();
+        if (llm.contains("port"))
+            local_llm_port = llm["port"].get<std::uint16_t>();
+        if (llm.contains("api_key") && !llm["api_key"].get<std::string>().empty())
+            local_llm_api_key = llm["api_key"].get<std::string>();
+    }
+
     return true;
 }
 
@@ -162,7 +196,7 @@ nlohmann::json ProjectConfig::to_json() const
     if (!adapter_language.empty())
         j["adapter"]["language"] = adapter_language;
     if (!logging_level.empty())
-        j["logging"]["level"] = logging_level;
+    j["logging"]["level"] = logging_level;
     for (const auto& [cap, allowed] : security_allow)
     {
         j["security"]["allow"][cap] = allowed;

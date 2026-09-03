@@ -28,15 +28,19 @@ target_sources(satellite_core PRIVATE
   ../llm/ILLMProvider.h
   ../llm/DeepSeekProvider.h
   ../llm/DeepSeekProvider.cpp
-   ../llm/OpenAICompatibleProvider.cpp
-   ../llm/AnthropicProvider.cpp
-   ../llm/ProviderFactory.cpp
+  ../llm/LocalLLMProvider.h
+  ../llm/LocalLLMProvider.cpp
+  ../llm/OpenAICompatibleProvider.cpp
+  ../llm/AnthropicProvider.cpp
+  ../llm/ProviderFactory.cpp
   ../context/engine/ProjectContext.h
   ../context/engine/ContextEngine.h
   ../context/engine/ContextEngine.cpp
   ../context/engine/ProjectIndex.h
   ../context/engine/ProjectIndex.cpp
   ../context/engine/SemanticContext.cpp
+  ../context/LocalPreprocessor.h
+  ../context/LocalPreprocessor.cpp
   ../context/optimizer/ContextOptimizer.h
   ../context/optimizer/ContextOptimizer.cpp
   ../context/adapter/ProjectAdapter.h

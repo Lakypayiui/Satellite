@@ -2,6 +2,7 @@
 
 #include "llm/ILLMProvider.h"
 #include "llm/DeepSeekProvider.h"
+#include "llm/LocalLLMProvider.h"
 #include "llm/OpenAICompatibleProvider.h"
 #include "llm/AnthropicProvider.h"
 #include "config/Config.h"
