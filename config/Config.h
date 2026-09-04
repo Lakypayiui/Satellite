@@ -20,6 +20,7 @@ struct FrameworkConfig
     std::string optimizer_algorithm = "default";
     std::string adapter_language = "auto";
     std::string agent_storage_dir = ".satellite";
+    std::string agent_backend = "native_process";
     std::string logging_level = "info";
     std::map<std::string, bool> security_allow;
 

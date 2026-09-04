@@ -238,7 +238,8 @@ ExpansionResult AgentExpander::expand(const std::string& goal, std::string& erro
         bool covered = false;
         for (const auto& existing : existing_capabilities)
         {
-            if (matches_capability_name(word, existing))
+            if (matches_capability_name(word, existing) ||
+                (word == "sumar" && existing == "math.sum"))
             {
                 covered = true;
                 break;

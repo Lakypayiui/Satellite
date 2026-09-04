@@ -22,6 +22,16 @@ else()
   add_compile_options(-Wall -Wextra)
 endif()
 
+add_executable(satellite_agent_host tools/agent_host.cpp)
+target_include_directories(satellite_agent_host PRIVATE
+  ${PROJECT_SOURCE_DIR}
+  ${PROJECT_SOURCE_DIR}/third_party
+  ${PROJECT_SOURCE_DIR}/third_party/json
+)
+if(NOT MSVC)
+  target_link_libraries(satellite_agent_host PRIVATE ${CMAKE_DL_LIBS})
+endif()
+
 add_subdirectory(core)
 
 enable_testing()
@@ -33,7 +43,7 @@ target_link_libraries(satellite PRIVATE satellite_core)
 target_compile_definitions(satellite PRIVATE SATELLITE_ROOT="${PROJECT_SOURCE_DIR}" SATELLITE_VERSION="${PROJECT_VERSION}")
 
 # Distribución (FASE 21): instalación independiente del framework.
-install(TARGETS satellite RUNTIME DESTINATION bin)
+install(TARGETS satellite satellite_agent_host RUNTIME DESTINATION bin)
 install(DIRECTORY third_party/json DESTINATION share/satellite/third_party)
 install(FILES README.md AGENTS.md DESTINATION share/satellite)
 add_executable(satellite_benchmark benchmark/benchmark.cpp)

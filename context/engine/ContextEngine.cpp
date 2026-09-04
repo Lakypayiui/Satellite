@@ -68,7 +68,7 @@ ProjectContext ContextEngine::build() const
         }
 
         const auto file_size = ifs.tellg();
-        if (file_size > 1024 * 1024)
+        if (file_size <= 0 || file_size > 1024 * 1024)
         {
             continue;
         }

@@ -53,6 +53,8 @@ target_sources(satellite_core PRIVATE
   ../planner/Planner.cpp
   ../factory/AgentFactory.h
   ../factory/AgentFactory.cpp
+  ../factory/ProcessAgentProxy.h
+  ../factory/ProcessAgentProxy.cpp
   ../factory/AgentPlugin.h
   ../factory/AgentExpander.h
   ../factory/AgentExpander.cpp

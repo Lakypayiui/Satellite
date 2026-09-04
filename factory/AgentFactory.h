@@ -2,10 +2,11 @@
 
 // Fábrica de microagentes: pipeline determinista que toma una AgentSpec (especificación + código + tests)
 // y produce un agente registrado en el AgentRegistry.
-// Fases: validate → write code → compile test harness → run tests → compile shared lib → load lib → register.
+// Fases: validate → write code → compile test harness → run tests → compile shared lib → register proxy.
 
 #include <json.hpp>
 #include <filesystem>
+#include <memory>
 #include <map>
 #include <string>
 #include <vector>
@@ -14,6 +15,8 @@
 #include "core/agent/AgentDescriptor.h"
 #include "core/agent/AgentID.h"
 #include "core/registry/AgentRegistry.h"
+#include "factory/ProcessAgentProxy.h"
+#include "factory/AgentExecutionBackend.h"
 
 namespace satellite::factory
 {
@@ -48,7 +51,11 @@ struct FactoryResult
 class AgentFactory
 {
 public:
-    AgentFactory(AgentRegistry& registry, std::filesystem::path work_dir, std::filesystem::path framework_root, std::string compiler = "g++");
+    AgentFactory(AgentRegistry& registry,
+                 std::filesystem::path work_dir,
+                 std::filesystem::path framework_root,
+                 std::string compiler = "g++",
+                 AgentExecutionBackend backend = AgentExecutionBackend::NativeProcess);
     ~AgentFactory();
 
     FactoryResult create_agent(const AgentSpec& spec);
@@ -56,20 +63,12 @@ public:
     void cleanup();
 
 private:
-    using DestroyAgentFn = void (*)(satellite::core::agent::IAgent*);
-
-    struct LoadedLibrary
-    {
-        void* handle = nullptr;
-        satellite::core::agent::IAgent* agent = nullptr;
-        DestroyAgentFn destroy = nullptr;
-    };
-
     AgentRegistry& registry_;
     std::filesystem::path work_dir_;
     std::filesystem::path framework_root_;
     std::string compiler_;
-    std::map<AgentID, LoadedLibrary> loaded_libs_;
+    AgentExecutionBackend backend_;
+    std::map<AgentID, std::unique_ptr<ProcessAgentProxy>> loaded_agents_;
 
     bool compile(const std::vector<std::string>& sources, const std::vector<std::string>& extra_flags, std::string& output, std::string& error) const;
     std::string get_library_path(AgentID id) const;

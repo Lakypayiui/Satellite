@@ -36,6 +36,7 @@ bool ProjectInitializer::init(const std::filesystem::path& project_root, std::st
     config["token_budget"]["max_tokens"] = 4000;
     config["optimizer"]["algorithm"] = "default";
     config["adapter"]["language"] = "auto";
+    config["execution"]["backend"] = "native_process";
     config["security"]["allow"]["filesystem.read"] = true;
     config["security"]["allow"]["filesystem.write"] = false;
     config["security"]["allow"]["process.execute"] = false;

@@ -154,6 +154,9 @@ Orchestrator
 - **Auto-expansion** — if a capability is missing, the Agent Factory generates
   the agent (spec → code → compile → test → plugin → register) and only
   registers it if every stage succeeds.
+- **Selectable execution backend** — generated native agents use the isolated
+  `native_process` backend by default. `execution.backend: "wasm"` is reserved
+  for a configured WASM runtime and fails explicitly until one is installed.
 - **Context Engine for any repository** — receives a `ProjectRoot` and analyzes
   files, directories, symbols, functions, classes, includes/imports, and
   dependencies. Works with repos A, B, C… without framework changes.
@@ -369,7 +372,7 @@ Satellite/
 | `ProjectAdapter` | `IProjectAdapter` + factory; detects C++/Python projects. |
 | `Planner` | Validates plans; Kahn topological order; cycle detection. |
 | `Orchestrator` | Never executes code directly — delegates to the Dispatcher. |
-| `AgentFactory` | spec → code → compile → harness tests → plugin (DLL) → register; any failure = not registered. |
+| `AgentFactory` | spec → code → compile → harness tests → native process proxy → register; any failure = not registered. |
 | `AgentExpander` | Auto-expansion: detects missing capabilities, skips existing ones. |
 | `SecurityPolicy` | Validates agent capabilities before execution (deny-by-default); agents without capabilities require the explicit `agent.no_capabilities` rule. |
 | `AgentStore` | Persistence of specs and registry state in the consumer's `.satellite/`. |

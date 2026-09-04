@@ -18,6 +18,7 @@
 #include "llm/LLMTypes.h"
 #include "core/protocol/Protocol.h"
 #include "observability/ExecutionLog.h"
+#include "planner/Planner.h"
 
 namespace satellite::orchestrator
 {
@@ -56,7 +57,7 @@ OrchestrationResult Orchestrator::run_plan(const std::vector<OrchestrationStep>&
         }
     }
 
-    // Validación: dependencias fuera de rango (>= plan.size() o auto-referencia)
+    // Validación: dependencias dentro del rango y ya resueltas
     for (std::size_t i = 0; i < plan.size(); ++i)
     {
         for (AgentID dep_idx : plan[i].dependencies)
@@ -67,10 +68,11 @@ OrchestrationResult Orchestrator::run_plan(const std::vector<OrchestrationStep>&
                 result.summary = "paso " + std::to_string(i) + ": dependencia " + std::to_string(dep_idx) + " fuera de rango";
                 return result;
             }
-            if (static_cast<std::size_t>(dep_idx) == i)
+            if (static_cast<std::size_t>(dep_idx) >= i)
             {
                 result.ok = false;
-                result.summary = "paso " + std::to_string(i) + ": auto-referencia en dependencias";
+                result.summary = "paso " + std::to_string(i) + ": dependencia " + std::to_string(dep_idx) +
+                                 " no resuelta previamente (orden invalido o ciclo)";
                 return result;
             }
         }
@@ -172,8 +174,8 @@ OrchestrationResult Orchestrator::execute_goal(const std::string& goal,
         return OrchestrationResult{false, {}, "invalid plan JSON"};
     }
 
-    std::vector<OrchestrationStep> plan;
-    plan.reserve(j["steps"].size());
+    std::vector<OrchestrationStep> raw_steps;
+    raw_steps.reserve(j["steps"].size());
 
     for (const auto& step_json : j["steps"])
     {
@@ -182,10 +184,58 @@ OrchestrationResult Orchestrator::execute_goal(const std::string& goal,
         step.input = step_json.value("input", nlohmann::json::object());
         step.dependencies = step_json.value("dependencies", std::vector<AgentID>{});
         step.description = step_json.value("description", std::string{});
-        plan.push_back(std::move(step));
+        raw_steps.push_back(std::move(step));
     }
 
-    return run_plan(plan, project, budget);
+    satellite::planner::Planner planner;
+    satellite::planner::Plan formal_plan;
+    formal_plan.goal = goal;
+    formal_plan.steps.reserve(raw_steps.size());
+
+    for (std::size_t idx = 0; idx < raw_steps.size(); ++idx)
+    {
+        satellite::planner::PlanStep formal_step;
+        formal_step.agent_id = raw_steps[idx].agent_id;
+        formal_step.input = raw_steps[idx].input;
+        formal_step.order = idx;
+        formal_step.description = raw_steps[idx].description;
+        for (AgentID dependency : raw_steps[idx].dependencies)
+        {
+            formal_step.dependencies.push_back(static_cast<std::size_t>(dependency));
+        }
+        formal_plan.steps.push_back(std::move(formal_step));
+    }
+
+    std::vector<std::size_t> order;
+    std::string plan_error;
+    if (!planner.validate(formal_plan, plan_error))
+    {
+        return OrchestrationResult{false, {}, "Error en plan: " + plan_error};
+    }
+    if (!planner.execution_order(formal_plan, order, plan_error))
+    {
+        return OrchestrationResult{false, {}, "Error en plan: " + plan_error};
+    }
+
+    std::unordered_map<std::size_t, std::size_t> old_to_new_idx;
+    for (std::size_t new_idx = 0; new_idx < order.size(); ++new_idx)
+    {
+        old_to_new_idx[order[new_idx]] = new_idx;
+    }
+
+    std::vector<OrchestrationStep> ordered_plan;
+    ordered_plan.reserve(order.size());
+    for (std::size_t old_idx : order)
+    {
+        OrchestrationStep step = raw_steps[old_idx];
+        for (AgentID& dependency : step.dependencies)
+        {
+            dependency = static_cast<AgentID>(old_to_new_idx.at(static_cast<std::size_t>(dependency)));
+        }
+        ordered_plan.push_back(std::move(step));
+    }
+
+    return run_plan(ordered_plan, project, budget);
 }
 
 std::vector<std::string> Orchestrator::detect_missing_capabilities(const std::string& goal,
