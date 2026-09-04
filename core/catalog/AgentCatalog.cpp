@@ -94,7 +94,7 @@ std::string AgentCatalog::to_prompt() const
 
 std::string AgentCatalog::describe_agent(AgentID id) const
 {
-    const auto* desc = registry_.find_agent(id);
+    const auto desc = registry_.find_agent(id);
     if (!desc || !registry_.is_enabled(id))
     {
         return "(no disponible)";

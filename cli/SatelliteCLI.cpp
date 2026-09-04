@@ -218,7 +218,7 @@ int SatelliteCLI::cmd_agent_info(int argc, char* argv[])
     satellite::persistence::AgentStore store(project_root_);
     store.load_registry(registry);
 
-    const satellite::core::agent::AgentDescriptor* d = registry.find_agent(id);
+    const auto d = registry.find_agent(id);
     if (!d)
     {
         std::cout << "Agente " << id << " no existe\n";
@@ -679,7 +679,7 @@ int SatelliteCLI::cmd_agent_test(int argc, char* argv[])
     auto specs = store.load_specs();
     for (const auto& spec : specs)
     {
-        const auto* desc = registry.find_agent(spec.id);
+        const auto desc = registry.find_agent(spec.id);
         if (desc && desc->agent == nullptr)
         {
             registry.unregister_agent(spec.id);
