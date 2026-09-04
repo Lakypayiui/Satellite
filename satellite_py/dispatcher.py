@@ -47,11 +47,45 @@ def dispatch(
             "error": input_error,
         }
 
-    result = agent_host_bridge.run_agent(
-        descriptor.library_path,
-        request,
-        agent_host_bin=agent_host_bin,
-    )
+    if descriptor.library_path:
+        result = agent_host_bridge.run_agent(
+            descriptor.library_path,
+            request,
+            agent_host_bin=agent_host_bin,
+        )
+    else:
+        # Sin library_path: agente nativo 1-5 (in-process en C++) o descriptor
+        # sin plugin. Se delega la ejecución al binario C++ (dispatch-step),
+        # que registra nativos + registry y reconstruye agentes custom.
+        from .runtime.cpp_cli_bridge import available, run_cpp_json
+
+        if not available():
+            return {
+                "agent_id": agent_id,
+                "status": "FAILED",
+                "error": (
+                    f"agent {agent_id} no tiene library_path y el binario C++ "
+                    "(build/satellite) no está disponible para ejecutarlo"
+                ),
+            }
+        try:
+            cpp_result = run_cpp_json(
+                ["dispatch-step"],
+                {
+                    "agent_id": agent_id,
+                    "input": request.get("input") or {},
+                    "context": request.get("context") or {},
+                },
+                timeout=120,
+            )
+        except Exception as error:  # noqa: BLE001 - traducir a resultado
+            return {"agent_id": agent_id, "status": "FAILED", "error": str(error)}
+        result = {
+            "agent_id": agent_id,
+            "status": "SUCCESS" if cpp_result.get("ok") else "FAILED",
+            "output": cpp_result.get("output"),
+            "error": cpp_result.get("error"),
+        }
     if result.get("status") == "SUCCESS":
         output_error = validate_output(result.get("output"), descriptor.output_schema)
         if output_error is not None:

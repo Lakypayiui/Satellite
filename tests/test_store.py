@@ -21,6 +21,24 @@ def test_store_roundtrips_descriptors(tmp_path):
     assert not loaded[0].enabled
 
 
+def test_store_roundtrips_complements(tmp_path):
+    store = AgentStore(tmp_path)
+    descriptor = AgentDescriptor(id=6, name="gen", capabilities=["code.gen"], complements=["compile", "lint"])
+    store.save_descriptor(descriptor)
+    loaded = store.load_descriptors()
+    assert loaded[0].complements == ["compile", "lint"]
+
+
+def test_store_descriptor_without_complements_defaults_empty(tmp_path):
+    store = AgentStore(tmp_path)
+    (tmp_path / ".satellite" / "agents").mkdir(parents=True)
+    (tmp_path / ".satellite" / "agents" / "agent_9.json").write_text(
+        '{"id": 9, "name": "legacy"}', encoding="utf-8"
+    )
+    loaded = store.load_descriptors()
+    assert loaded[0].complements == []
+
+
 def test_store_ignores_corrupt_agent_files(tmp_path):
     store = AgentStore(tmp_path)
     store.ensure_dirs()

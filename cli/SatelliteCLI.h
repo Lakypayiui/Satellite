@@ -34,6 +34,12 @@ private:
     int cmd_agent_create(int argc, char* argv[]);
     int cmd_agent_test(int argc, char* argv[]);
     int cmd_run(int argc, char* argv[]);
+
+    // Unificación con el runtime Python: despacha UN request (agent_id+input)
+    // por stdin (JSON) y devuelve el AgentResult como JSON por stdout. Permite
+    // que satellite_py ejecute agentes nativos 1-5 (in-process en C++) y
+    // agentes reconstruidos desde specs dentro del binario C++.
+    int cmd_dispatch_step();
 };
 
 } // namespace satellite::cli
