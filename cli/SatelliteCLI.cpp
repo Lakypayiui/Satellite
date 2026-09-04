@@ -798,7 +798,7 @@ int SatelliteCLI::cmd_run(int argc, char* argv[])
             proj,
             project_root_);
 
-        auto result = preprocessor.preprocess(goal);
+        auto result = preprocessor.preprocess(goal, config.local_llm_max_rounds);
 
         if (result.needs_user_input)
         {

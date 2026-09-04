@@ -27,6 +27,7 @@ void FrameworkConfig::load_defaults()
     local_llm_context_size = 131072;
     local_llm_port = 8080;
     local_llm_api_key = "";
+    local_llm_max_rounds = 3;
 
     security_allow.clear();
     security_allow["filesystem.read"] = true;
@@ -63,6 +64,7 @@ nlohmann::json FrameworkConfig::to_json() const
         j["local_llm"]["port"] = local_llm_port;
         if (!local_llm_api_key.empty())
             j["local_llm"]["api_key"] = local_llm_api_key;
+        j["local_llm"]["max_rounds"] = local_llm_max_rounds;
     }
     return j;
 }
@@ -150,6 +152,7 @@ bool FrameworkConfig::merge_json(const nlohmann::json& j)
             local_llm_port = llm["port"].get<std::uint16_t>();
         if (llm.contains("api_key") && !llm["api_key"].get<std::string>().empty())
             local_llm_api_key = llm["api_key"].get<std::string>();
+        local_llm_max_rounds = j["local_llm"].value("max_rounds", local_llm_max_rounds);
     }
 
     return true;

@@ -35,6 +35,7 @@ Satellite turns any repository into an LLM-orchestrated, microagent-driven devel
 - [Components](#components)
 - [Benchmark: monolithic vs microagents](#benchmark-monolithic-vs-microagents)
 - [Portability](#portability)
+- [Local LLM preprocessing](#local-llm-preprocessing)
 - [Testing](#testing)
 - [Roadmap / limitations](#roadmap--limitations)
 
@@ -165,8 +166,23 @@ Orchestrator
   is needed to solve the task. The algorithm is pluggable.
 - **Project adapters** — `IProjectAdapter` abstraction with built-in C++ and
   Python adapters; designed to grow to JavaScript, TypeScript, Java, etc.
-- **LLM abstraction** — `ILLMProvider` interface with a DeepSeek adapter;
-  provider-agnostic by design.
+- **LLM abstraction** — `ILLMProvider` interface with four providers selected
+  via `llm.provider` / `SATELLITE_LLM_PROVIDER` and created by
+  `ProviderFactory`: DeepSeek, any OpenAI-compatible API, Anthropic (Claude),
+  and a local server (llama.cpp/Ollama-style, via `LocalLLMProvider`).
+  Provider-agnostic by design.
+- **Python runtime** — the `satellite_py/` package ports the runtime core to
+  Python (Typer CLI, planner, orchestrator, dispatcher, registry, security,
+  validation, persistence), plus bridge agents (`runtime/`) that expose the
+  native agent host and the agent factory to the Python side. Validated by a
+  30-test pytest suite that mirrors the C++ behavior (including the planner's
+  `order`-based topological tie-breaking).
+- **Local LLM preprocessing** — an optional local model (Gemma served by
+  llama.cpp) sits in front of the big model: it receives the goal first,
+  decides what project context is needed, and refines the prompt before the
+  main provider (DeepSeek/Claude/…) ever sees it. The local model never
+  executes anything — it only emits structured decisions that the runtime
+  interprets. See [Local LLM preprocessing](#local-llm-preprocessing).
 - **Agent catalog** — compact capability catalog (id, name, description,
   schemas, capabilities) sent to the LLM — no source code, minimal tokens.
 - **Security by capabilities** — every agent declares capabilities
@@ -265,7 +281,11 @@ agent end-to-end.
 - CMake ≥ 3.16 (Ninja or Makefiles)
 - libcurl (required for HTTP providers)
 - `nlohmann/json` is vendored in `third_party/`
-- For LLM features: a `DEEPSEEK_API_KEY` (or any provider implementing `ILLMProvider`)
+- For LLM features: an API key for the configured provider
+  (`DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`), or a local
+  server for `llm.provider = "local"` (no key required by default).
+- For the Python runtime: Python 3.10+ with the dependencies in
+  `requirements.txt` (`typer`, `jsonschema`, `pytest`, ...).
 
 ---
 
@@ -337,7 +357,7 @@ Satellite/
 │   └── catalog/           #   Compact agent catalog for the LLM
 ├── orchestrator/          # Goal → plan → execute → analyze
 ├── planner/               # Plan validation and topological execution order
-├── llm/                   # ILLMProvider + DeepSeek adapter
+├── llm/                   # ILLMProvider + DeepSeek, OpenAI-compatible, Anthropic, Local providers
 ├── context/
 │   ├── engine/            #   Project analysis (files, symbols, deps)
 │   ├── optimizer/         #   Token-aware context selection (pluggable)
@@ -347,13 +367,23 @@ Satellite/
 ├── persistence/           # AgentStore, ProjectInitializer (.satellite/)
 ├── observability/         # ExecutionLogger (executions + token metrics)
 ├── config/                # Framework config vs project config (merged)
-├── cli/                   # `satellite` executable
+├── cli/                   # `satellite` executable (C++)
+├── satellite_py/          # Python runtime port
+│   ├── cli.py             #   Typer-based CLI
+│   ├── planner.py         #   Plan + topological order (same semantics as C++)
+│   ├── orchestrator.py    #   Plan execution through the dispatcher
+│   ├── dispatcher.py      #   Deterministic dispatch + bridge to native agents
+│   ├── registry.py        #   Agent registry
+│   ├── security.py        #   Capability policy
+│   ├── validation.py     #   JSON Schema validation (jsonschema)
+│   ├── store.py           #   .satellite/ persistence
+│   └── runtime/           #   Bridge agents (agent_host_bridge, factory_bridge)
 ├── benchmark/             # Monolithic vs microagents benchmark
 ├── examples/
 │   ├── sample-project/    # Consumer example (FASE 22)
 │   ├── project_a/         # Portability test: C++ project
 │   └── project_b/         # Portability test: Python project
-├── tests/                 # 23 CTest suites (mini test framework, no deps)
+├── tests/                 # CTest suites (C++) + pytest suite (Python runtime)
 └── third_party/json/      # nlohmann/json (vendored, header-only)
 ```
 
@@ -370,7 +400,8 @@ Satellite/
 | `ContextEngine` | Language-aware project analysis (C++ and Python parsers). |
 | `ContextOptimizer` | `optimize(Task, AgentDescriptor, ProjectContext, TokenBudget) → ContextSelection`; tracks `tokens_before/after/saved`, `compression_ratio`, `relevance_score`, `optimization_time_ms`. |
 | `ProjectAdapter` | `IProjectAdapter` + factory; detects C++/Python projects. |
-| `Planner` | Validates plans; Kahn topological order; cycle detection. |
+| `Planner` | Validates plans (self-dependency, bounds, duplicate deps, order permutation); Kahn topological order with `order`-based tie-breaking; cycle detection. |
+| `ProviderFactory` | Creates the configured LLM provider: DeepSeek, OpenAI-compatible, Anthropic, or local. |
 | `Orchestrator` | Never executes code directly — delegates to the Dispatcher. |
 | `AgentFactory` | spec → code → compile → harness tests → native process proxy → register; any failure = not registered. |
 | `AgentExpander` | Auto-expansion: detects missing capabilities, skips existing ones. |
@@ -426,19 +457,133 @@ Verified by `tests/test_portability.cpp` (13 checks).
 
 ---
 
+## Local LLM preprocessing
+
+An optional small, local model sits **in front of** the big model (DeepSeek,
+Claude, …): it receives the user's goal first, decides what project context
+is actually needed, and only then lets the request through — already refined
+and with just the right context. The local model never executes anything
+(the determinism rule applies to it too): it only produces *structured
+decisions* that the runtime interprets.
+
+### The four pieces
+
+1. **The local model, served by llama.cpp** — `third_party/llama-b10739-bin-win-vulkan-x64/`
+   ships the binaries (ggml with CPU fallback + Vulkan, so it runs without a
+   dedicated GPU) and the configured default model
+   (`config.local_llm_model`, a GGUF under that directory).
+
+2. **`LocalLLMProvider`** ([llm/LocalLLMProvider.h](llm/LocalLLMProvider.h)) —
+   a regular `ILLMProvider` that talks HTTP to the llama.cpp server the same
+   way `DeepSeekProvider` talks to DeepSeek. Thanks to `ProviderFactory`, the
+   rest of the framework cannot tell whether the LLM is local or remote.
+
+3. **`LocalPreprocessor`** ([context/LocalPreprocessor.h](context/LocalPreprocessor.h)) —
+   the heart of the feature. Its contract with the runtime is two structs:
+
+   ```cpp
+   struct NeedInfo {          // what the local model says it needs
+       std::string category;
+       std::vector<std::string> files_needed;
+       std::vector<std::string> symbols_needed;
+       std::string description;
+   };
+   struct Result {            // the final preprocessing decision
+       std::string refined_prompt;              // rewritten/compacted goal
+       bool needs_user_input = false;           // is the USER missing info?
+       std::string user_prompt;                 // clarifying question
+       std::vector<std::string> missing_info;   // missing context categories
+   };
+   ```
+
+4. **The integration** — [SatelliteCLI.cpp](cli/SatelliteCLI.cpp#L788) hooks
+   preprocessing into `satellite run` when `use_local_llm` is enabled, and the
+   incremental context layer (`IncrementalContextBuilder`,
+   [context/engine/SemanticContext.h](context/engine/SemanticContext.h)) serves
+   the requested context on demand (index + mtime-based invalidation).
+
+### Request flow
+
+```
+ user ──goal──▶ [1] LocalPreprocessor.preprocess(goal)
+                     │  sends the goal to the local model with a system prompt
+                     │  that asks it to DECIDE, not to act
+                     ▼
+           ┌── needs_user_input? ──yes──▶ ask the user (user_prompt) → re-enter
+           │ no
+           ▼
+     missing_info empty? ──no──▶ [2] Satellite fetches the missing context
+           │                          (files/symbols from the incremental index)
+           ▼ yes
+     [3] Final prompt = refined_prompt + freshly fetched context
+           │
+           ▼
+     [4] The BIG model (via ProviderFactory) reasons and orchestrates
+           │
+           ▼
+     [5] The Dispatcher executes the agents (deterministic runtime)
+```
+
+Key design point: everything the local model produces is structured data
+(categories, files, flags), parsed by the runtime (`llm/JsonExtraction.h`) and
+turned into real calls to the context system. It never emits commands to run.
+
+### Configuration
+
+```json
+{
+  "use_local_llm": true,
+  "local_llm": {
+    "port": 8080,
+    "model": "third_party/llama-b10739-bin-win-vulkan-x64/gemma-4-E2B-it-Q5_K_M.gguf",
+    "context_size": 8192
+  }
+}
+```
+
+Defaults live in [config/Config.h](config/Config.h#L27). When
+`use_local_llm` is `false` (the default), `satellite run` skips preprocessing
+entirely and sends the goal straight to the configured provider.
+
+### Known limitations / open points
+
+- Preprocessing is a **single pass**; an iterative "is this enough? → ask for
+  more" loop is not implemented yet.
+- The mapping from `missing_info` to the incremental context fetch and the
+  final merge into `refined_prompt` is intentionally simple.
+- Activation policy (every `run` vs. only large goals vs. token-budget
+  threshold) is currently all-or-nothing via `use_local_llm`.
+- The bundled default model is a small edge-class model; decision quality vs.
+  API cost savings should be validated per use case.
+
+---
+
 ## Testing
 
-- **23 CTest suites**, 100% passing (0 failures, 0 build errors).
-- Mini test framework with **zero test dependencies** (plain C++17).
-- Tests cover: agent core (43 checks), registry, validation, dispatcher,
-  native agents, protocol, LLM provider, catalog, context engine, context
-  optimizer, project adapter, orchestrator, planner, agent factory (real
-  runtime compilation with g++), auto-expansion, persistence, project
+### C++ (CTest)
+
+- CTest suites covering: agent core (43 checks), registry, validation,
+  dispatcher, native agents, protocol, LLM provider, catalog, context engine,
+  context optimizer, project adapter, orchestrator, planner, agent factory
+  (real runtime compilation with g++), auto-expansion, persistence, project
   initializer, config, security, observability, CLI (end-to-end with the real
   binary), benchmark, and portability.
+- Mini test framework with **zero test dependencies** (plain C++17).
 
 ```bash
 cmake --build build && ctest --test-dir build --output-on-failure
+```
+
+### Python runtime (pytest)
+
+The `satellite_py` port has its own test suite (30 tests, 100% passing)
+mirroring the C++ semantics: planner topological order (respecting the
+`order` field of each step), orchestrator abort-on-failed-dependency,
+validation error paths, dispatcher, registry, security, store, expander, CLI,
+and the native bridges.
+
+```bash
+python -m pytest tests/ -q        # inside the repo, with requirements.txt installed
 ```
 
 ---
@@ -447,7 +592,6 @@ cmake --build build && ctest --test-dir build --output-on-failure
 
 - [ ] Real tokenizer integration (provider-accurate token counts).
 - [ ] Additional project adapters (JavaScript, TypeScript, Java).
-- [ ] Additional LLM providers (OpenAI, Anthropic, local models).
 - [ ] Process-level isolation for LLM-generated agents (per-agent sandboxing).
 
 ---
