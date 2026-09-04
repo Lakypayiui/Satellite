@@ -18,8 +18,8 @@ class PlanStep:
 
 @dataclass
 class Plan:
-    goal: str = ""
     steps: list[PlanStep] = field(default_factory=list)
+    goal: str = ""
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -101,10 +101,10 @@ class Planner:
             if len(step.dependencies) != len(set(step.dependencies)):
                 raise ValueError(f"step {index}: duplicate dependency")
             for dependency in step.dependencies:
-                if dependency < 0 or dependency >= count:
-                    raise ValueError(f"step {index}: dependency {dependency} out of bounds")
                 if dependency == index:
                     raise ValueError(f"step {index}: dependency cannot be self")
+                if dependency < 0 or dependency >= count:
+                    raise ValueError(f"step {index}: dependency {dependency} out of bounds")
             orders.append(step.order)
         if sorted(orders) != list(range(count)):
             raise ValueError("invalid order")
@@ -112,16 +112,36 @@ class Planner:
 
     @staticmethod
     def execution_order(plan: Plan) -> list[int]:
-        from graphlib import CycleError, TopologicalSorter
+        # Kahn con desempate por el campo ``order`` de cada paso,
+        # replicando el comportamiento del planner C++.
+        import heapq
 
-        graph = {
-            index: set(step.dependencies)
-            for index, step in enumerate(plan.steps)
-        }
-        try:
-            return list(TopologicalSorter(graph).static_order())
-        except CycleError as error:
-            raise ValueError("cycle detected in plan dependencies") from error
+        indegree = {index: 0 for index in range(len(plan.steps))}
+        dependents: dict[int, list[int]] = {index: [] for index in range(len(plan.steps))}
+        for index, step in enumerate(plan.steps):
+            for dependency in step.dependencies:
+                dependents[dependency].append(index)
+                indegree[index] += 1
+
+        ready = [
+            (plan.steps[index].order, index)
+            for index, degree in indegree.items()
+            if degree == 0
+        ]
+        heapq.heapify(ready)
+
+        result: list[int] = []
+        while ready:
+            _, index = heapq.heappop(ready)
+            result.append(index)
+            for dependent in dependents[index]:
+                indegree[dependent] -= 1
+                if indegree[dependent] == 0:
+                    heapq.heappush(ready, (plan.steps[dependent].order, dependent))
+
+        if len(result) != len(plan.steps):
+            raise ValueError("cycle detected in plan dependencies")
+        return result
 
     def _complete(self, prompt: str) -> str:
         if self.client is None:

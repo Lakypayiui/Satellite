@@ -14,7 +14,7 @@ def test_topological_order_and_cycle_detection():
         PlanStep(2, dependencies=[1], order=1),
     ])
     assert Planner.execution_order(plan) == [1, 2, 0]
-    cycle = Plan(steps=[PlanStep(1, dependencies=[1], order=0)])
+    cycle = Plan(steps=[PlanStep(1, dependencies=[0], order=0)])
     with pytest.raises(ValueError, match="dependency cannot be self"):
         Planner().validate(cycle)
 

@@ -30,6 +30,7 @@ struct FrameworkConfig
     std::uint64_t local_llm_context_size = 131072;
     std::uint16_t local_llm_port = 8080;
     std::string local_llm_api_key = "";
+    std::uint16_t local_llm_max_rounds = 3;
 
     void load_defaults();
     nlohmann::json to_json() const;
