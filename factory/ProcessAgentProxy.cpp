@@ -2,13 +2,11 @@
 
 #include <atomic>
 #include <array>
-#include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <memory>
 #include <sstream>
 #include <system_error>
-#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -141,6 +139,8 @@ satellite::core::agent::AgentResult ProcessAgentProxy::execute(
                             std::to_string(++request_counter);
     const std::filesystem::path request_path =
         std::filesystem::temp_directory_path() / ("satellite_request_" + request_id + ".json");
+    const std::filesystem::path output_path =
+        std::filesystem::temp_directory_path() / ("satellite_response_" + request_id + ".log");
 
     {
         std::ofstream request_file(request_path, std::ios::binary);
@@ -162,12 +162,13 @@ satellite::core::agent::AgentResult ProcessAgentProxy::execute(
     HANDLE request_handle = CreateFileW(
         widen_path(request_path.string()).c_str(), GENERIC_READ, FILE_SHARE_READ,
         &security_attributes, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    HANDLE output_read = nullptr;
-    HANDLE output_write = nullptr;
+    HANDLE output_handle = INVALID_HANDLE_VALUE;
     if (request_handle != INVALID_HANDLE_VALUE &&
-        CreatePipe(&output_read, &output_write, &security_attributes, 0))
+        (output_handle = CreateFileW(
+            widen_path(output_path.string()).c_str(), GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, &security_attributes,
+            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr)) != INVALID_HANDLE_VALUE)
     {
-        SetHandleInformation(output_read, HANDLE_FLAG_INHERIT, 0);
         std::wstring command_line = L"\"" + widen_path(host_path.string()) + L"\" \"" +
                                     widen_path(library_path_.string()) + L"\"";
         std::vector<wchar_t> mutable_command(command_line.begin(), command_line.end());
@@ -177,50 +178,22 @@ satellite::core::agent::AgentResult ProcessAgentProxy::execute(
         startup_info.cb = sizeof(startup_info);
         startup_info.dwFlags = STARTF_USESTDHANDLES;
         startup_info.hStdInput = request_handle;
-        startup_info.hStdOutput = output_write;
-        startup_info.hStdError = output_write;
+        startup_info.hStdOutput = output_handle;
+        startup_info.hStdError = output_handle;
         PROCESS_INFORMATION process_info{};
 
         const BOOL started = CreateProcessW(
             nullptr, mutable_command.data(), nullptr, nullptr, TRUE,
             CREATE_NO_WINDOW, nullptr, nullptr, &startup_info, &process_info);
-        CloseHandle(output_write);
+        const DWORD create_error = started ? ERROR_SUCCESS : GetLastError();
+        CloseHandle(output_handle);
+        output_handle = INVALID_HANDLE_VALUE;
 
         if (started)
         {
-            std::array<char, 4096> buffer{};
-            DWORD bytes_read = 0;
             constexpr DWORD timeout_ms = 10000;
-            const auto deadline = std::chrono::steady_clock::now() +
-                                  std::chrono::milliseconds(timeout_ms);
-            bool timed_out = false;
-            while (std::chrono::steady_clock::now() < deadline)
+            if (WaitForSingleObject(process_info.hProcess, timeout_ms) == WAIT_TIMEOUT)
             {
-                DWORD available = 0;
-                if (!PeekNamedPipe(output_read, nullptr, 0, nullptr, &available, nullptr))
-                {
-                    break;
-                }
-                if (available == 0)
-                {
-                    DWORD wait_result = WaitForSingleObject(process_info.hProcess, 25);
-                    if (wait_result == WAIT_OBJECT_0)
-                    {
-                        break;
-                    }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                    continue;
-                }
-                const DWORD to_read = (available < buffer.size()) ? available : static_cast<DWORD>(buffer.size());
-                if (!ReadFile(output_read, buffer.data(), to_read, &bytes_read, nullptr) || bytes_read == 0)
-                {
-                    break;
-                }
-                output.append(buffer.data(), bytes_read);
-            }
-            if (WaitForSingleObject(process_info.hProcess, 0) != WAIT_OBJECT_0)
-            {
-                timed_out = true;
                 TerminateProcess(process_info.hProcess, 1);
                 WaitForSingleObject(process_info.hProcess, INFINITE);
                 status = -2;
@@ -231,24 +204,29 @@ satellite::core::agent::AgentResult ProcessAgentProxy::execute(
                 GetExitCodeProcess(process_info.hProcess, &exit_code);
                 status = static_cast<int>(exit_code);
             }
-            if (timed_out)
-                status = -2;
             CloseHandle(process_info.hThread);
             CloseHandle(process_info.hProcess);
         }
         else
         {
             status = -1;
+            output = "CreateProcessW failed: " + std::to_string(create_error);
         }
-        CloseHandle(output_read);
     }
     else
     {
         status = -1;
-        if (output_read != nullptr) CloseHandle(output_read);
-        if (output_write != nullptr) CloseHandle(output_write);
     }
+    if (output_handle != INVALID_HANDLE_VALUE) CloseHandle(output_handle);
     if (request_handle != INVALID_HANDLE_VALUE) CloseHandle(request_handle);
+    {
+        std::ifstream output_file(output_path, std::ios::binary);
+        if (output_file)
+        {
+            output.assign((std::istreambuf_iterator<char>(output_file)),
+                          std::istreambuf_iterator<char>());
+        }
+    }
 #else
     const std::string command = shell_quote(host_path.string()) + " " +
                                 shell_quote(library_path_.string()) + " < " +
@@ -266,11 +244,12 @@ satellite::core::agent::AgentResult ProcessAgentProxy::execute(
 #endif
     std::error_code remove_error;
     std::filesystem::remove(request_path, remove_error);
+    std::filesystem::remove(output_path, remove_error);
 
     if (status == -1)
     {
         return failed_result(agent_id_, satellite::core::agent::AgentErrorCode::EXECUTION_FAILED,
-                             "failed to start agent process");
+                             output.empty() ? "failed to start agent process" : output);
     }
     if (status == -2)
     {
@@ -280,7 +259,7 @@ satellite::core::agent::AgentResult ProcessAgentProxy::execute(
     if (status != 0)
     {
         return failed_result(agent_id_, satellite::core::agent::AgentErrorCode::EXECUTION_FAILED,
-                             "agent process failed");
+                             output.empty() ? "agent process failed" : "agent process failed: " + output);
     }
 
     const std::size_t line_end = output.find_last_of("\r\n");

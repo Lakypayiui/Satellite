@@ -10,6 +10,7 @@
 #include <json.hpp>
 #include "factory/AgentFactory.h"
 #include "core/registry/AgentRegistry.h"
+#include "core/agents/NativeAgents.h"
 #include "core/dispatcher/Dispatcher.h"
 #include "core/catalog/AgentCatalog.h"
 #include "core/agent/AgentRequest.h"
@@ -228,7 +229,7 @@ void test_process_crash_isolated()
 {
     std::filesystem::path workdir = make_temp_workdir();
     AgentRegistry reg;
-    register_native_agents(reg);
+    satellite::core::agents::register_native_agents(reg);
 
     AgentFactory factory(reg, workdir, SATELLITE_ROOT, "g++");
     FactoryResult created = factory.create_agent(make_crashing_spec(104));
