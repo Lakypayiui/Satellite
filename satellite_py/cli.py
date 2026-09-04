@@ -35,6 +35,14 @@ def _require_project() -> AgentStore:
     return store
 
 
+# Directorios ignorados al indexar (mismo conjunto que el ContextEngine C++).
+_IGNORED_DIRS = {
+    ".git", "build", "node_modules", ".satellite", ".agent",
+    "out", "dist", ".venv", "venv", "__pycache__", "CMakeFiles",
+    ".idea", ".vscode", "build-make", "build2", "build_vs",
+}
+
+
 def _cpp_available() -> bool:
     """True si el binario C++ (backend de delegación) está disponible."""
     from .runtime.cpp_cli_bridge import available
@@ -129,7 +137,10 @@ def agent_create(spec_path: str) -> None:
 
 
 @agent_app.command("test")
-def agent_test(agent_id: int, input_file: str | None = None) -> None:
+def agent_test(
+    agent_id: int,
+    input_file: str | None = typer.Argument(None, help="Archivo JSON con el input (opcional)"),
+) -> None:
     """Run an agent once (delegated to the C++ CLI: rebuild + dispatch)."""
     _delegate_requires_cpp()
     args = ["agent", "test", str(agent_id)]
@@ -140,19 +151,16 @@ def agent_test(agent_id: int, input_file: str | None = None) -> None:
 
 @agent_app.command("expand")
 def agent_expand(goal: str, capability: str) -> None:
-    """Expand a missing capability: generate a spec with the LLM and compile it."""
+    """Expand a missing capability via the C++ factory (needs DEEPSEEK_API_KEY)."""
     store = _require_project()
     try:
         from .expander import AgentExpander
-        from .llm import load_llm_config
         from .registry import AgentRegistry
 
-        config_path = store.state_root / "config" / "config.json"
-        client = load_llm_config(config_path).create_client()
         registry = AgentRegistry()
         for descriptor in store.load_registry().list_agents():
             registry.register_agent(descriptor)
-        expander = AgentExpander(registry, client=client)
+        expander = AgentExpander(registry)
         descriptor = expander.expand(goal, capability)
         store.save_registry(registry)
         typer.echo(f"Agente {descriptor.id} ({descriptor.name}) creado y registrado")
@@ -170,7 +178,7 @@ def context_build() -> None:
         typer.echo("Error: proyecto no inicializado. Ejecuta: satellite init")
         raise typer.Exit(1)
     files = []
-    ignored = {".git", ".satellite", "build", "build-make", "build2", "build_vs", ".venv"}
+    ignored = _IGNORED_DIRS
     for path in store.project_root.rglob("*"):
         if not path.is_file() or any(part in ignored for part in path.parts):
             continue

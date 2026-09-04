@@ -79,3 +79,57 @@ install(TARGETS satellite satellite_factory_cli satellite_agent_host
   RUNTIME DESTINATION bin)
 install(DIRECTORY third_party/json DESTINATION share/satellite/third_party)
 install(FILES README.md AGENTS.md DESTINATION share/satellite)
+
+# ===========================================================================
+# DLLs de runtime junto a los binarios (MinGW/MSYS2)
+#
+# Los ejecutables dependen de las DLLs de runtime de MinGW (libstdc++-6,
+# libgcc_s_seh-1, libwinpthread-1) y de libcurl-4 (con sus dependencias
+# transitivas: ssl, crypto, brotli, idn2, psl, ssh2, nghttp2, zstd, ...).
+# Sin ellas, el binario falla con STATUS_DLL_NOT_FOUND al ejecutarse fuera
+# del entorno MSYS2. Este target copia al dir de build las DLLs que existan
+# en el toolchain (mismo dir que el compilador), junto a los .exe.
+# ===========================================================================
+if(WIN32 AND NOT MSVC)
+  get_filename_component(SATELLITE_TOOLCHAIN_BIN "${CMAKE_CXX_COMPILER}" DIRECTORY)
+  file(GLOB SATELLITE_RUNTIME_DLLS
+    "${SATELLITE_TOOLCHAIN_BIN}/libstdc++-6.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libgcc_s_seh-1.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libgcc_s_*.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libwinpthread-1.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libcurl-4.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libssl-3-x64.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libcrypto-3-x64.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libbrotli*.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libidn2-*.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libpsl-*.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libssh2-*.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libnghttp2-*.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libnghttp3-*.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libngtcp2*.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libzstd.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libzstd-*.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/zlib1.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libunistring-*.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libiconv-*.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libintl-*.dll"
+    "${SATELLITE_TOOLCHAIN_BIN}/libcares-*.dll"
+  )
+  if(SATELLITE_RUNTIME_DLLS)
+    add_custom_command(TARGET satellite POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${SATELLITE_RUNTIME_DLLS}
+        $<TARGET_FILE_DIR:satellite>
+      COMMENT "Copiando DLLs de runtime junto a satellite")
+    add_custom_command(TARGET satellite_agent_host POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${SATELLITE_RUNTIME_DLLS}
+        $<TARGET_FILE_DIR:satellite_agent_host>
+      COMMENT "Copiando DLLs de runtime junto a satellite_agent_host")
+    add_custom_command(TARGET satellite_factory_cli POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${SATELLITE_RUNTIME_DLLS}
+        $<TARGET_FILE_DIR:satellite_factory_cli>
+      COMMENT "Copiando DLLs de runtime junto a satellite_factory_cli")
+  endif()
+endif()

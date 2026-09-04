@@ -21,6 +21,13 @@ from typing import Any
 from .context_schema import ContextResult, NeedInfo  # vocabulario neutro (E6)
 from .llm import LLMClient, LLMConfig, load_llm_config
 
+# Directorios ignorados al indexar/escaneo (mismo conjunto que el C++).
+_IGNORED_DIRS = {
+    ".git", "build", "node_modules", ".satellite", ".agent",
+    "out", "dist", ".venv", "venv", "__pycache__", "CMakeFiles",
+    ".idea", ".vscode", "build-make", "build2", "build_vs",
+}
+
 _SYSTEM_PROMPT = (
     "Eres un preprocesador de contexto. Analizas tareas de desarrollo y decides "
     "que contexto del proyecto hace falta. Responde SOLO con JSON: "
@@ -272,7 +279,7 @@ class ContextPreprocessor:
             if not path.is_file():
                 continue
             parts = path.parts
-            if any(part in {".git", ".satellite", "build", "build-make", "build2", "build_vs", ".venv"} for part in parts):
+            if any(part in _IGNORED_DIRS for part in parts):
                 continue
             relative = path.relative_to(self.project_root).as_posix()
             for wanted in list(wanted_files):
