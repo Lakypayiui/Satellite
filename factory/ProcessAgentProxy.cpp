@@ -2,11 +2,13 @@
 
 #include <atomic>
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <memory>
 #include <sstream>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -188,15 +190,49 @@ satellite::core::agent::AgentResult ProcessAgentProxy::execute(
         {
             std::array<char, 4096> buffer{};
             DWORD bytes_read = 0;
-            while (ReadFile(output_read, buffer.data(), static_cast<DWORD>(buffer.size()),
-                             &bytes_read, nullptr) && bytes_read > 0)
+            constexpr DWORD timeout_ms = 10000;
+            const auto deadline = std::chrono::steady_clock::now() +
+                                  std::chrono::milliseconds(timeout_ms);
+            bool timed_out = false;
+            while (std::chrono::steady_clock::now() < deadline)
             {
+                DWORD available = 0;
+                if (!PeekNamedPipe(output_read, nullptr, 0, nullptr, &available, nullptr))
+                {
+                    break;
+                }
+                if (available == 0)
+                {
+                    DWORD wait_result = WaitForSingleObject(process_info.hProcess, 25);
+                    if (wait_result == WAIT_OBJECT_0)
+                    {
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    continue;
+                }
+                const DWORD to_read = (available < buffer.size()) ? available : static_cast<DWORD>(buffer.size());
+                if (!ReadFile(output_read, buffer.data(), to_read, &bytes_read, nullptr) || bytes_read == 0)
+                {
+                    break;
+                }
                 output.append(buffer.data(), bytes_read);
             }
-            WaitForSingleObject(process_info.hProcess, INFINITE);
-            DWORD exit_code = 1;
-            GetExitCodeProcess(process_info.hProcess, &exit_code);
-            status = static_cast<int>(exit_code);
+            if (WaitForSingleObject(process_info.hProcess, 0) != WAIT_OBJECT_0)
+            {
+                timed_out = true;
+                TerminateProcess(process_info.hProcess, 1);
+                WaitForSingleObject(process_info.hProcess, INFINITE);
+                status = -2;
+            }
+            else
+            {
+                DWORD exit_code = 1;
+                GetExitCodeProcess(process_info.hProcess, &exit_code);
+                status = static_cast<int>(exit_code);
+            }
+            if (timed_out)
+                status = -2;
             CloseHandle(process_info.hThread);
             CloseHandle(process_info.hProcess);
         }
@@ -235,6 +271,11 @@ satellite::core::agent::AgentResult ProcessAgentProxy::execute(
     {
         return failed_result(agent_id_, satellite::core::agent::AgentErrorCode::EXECUTION_FAILED,
                              "failed to start agent process");
+    }
+    if (status == -2)
+    {
+        return failed_result(agent_id_, satellite::core::agent::AgentErrorCode::TIMEOUT,
+                             "agent process timed out");
     }
     if (status != 0)
     {
