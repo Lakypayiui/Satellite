@@ -152,7 +152,7 @@ bool FrameworkConfig::merge_json(const nlohmann::json& j)
             local_llm_port = llm["port"].get<std::uint16_t>();
         if (llm.contains("api_key") && !llm["api_key"].get<std::string>().empty())
             local_llm_api_key = llm["api_key"].get<std::string>();
-        local_llm_max_rounds = j["local_llm"].value("max_rounds", local_llm_max_rounds);
+        local_llm_max_rounds = llm.value("max_rounds", local_llm_max_rounds);
     }
 
     return true;
