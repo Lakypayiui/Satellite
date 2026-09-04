@@ -18,6 +18,10 @@ class AgentDescriptor:
     capabilities: list[str] = field(default_factory=list)
     library_path: str = ""
     enabled: bool = True
+    # Complementos: capabilities de agentes a los que este agente pasa su
+    # output DIRECTAMENTE (sin volver al orquestador) cuando tiene éxito.
+    # Vacío = agente hoja (el resultado vuelve al orquestador).
+    complements: list[str] = field(default_factory=list)
 
 
 class AgentRegistry:

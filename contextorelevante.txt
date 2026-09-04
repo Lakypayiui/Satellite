@@ -1,0 +1,9 @@
+l subconjunto del conocimiento del proyecto que la tarea actual necesita para poder decidir y ejecutar — recortado por la tarea, no por tamaño. Lo opuesto a "pasárselo todo al modelo".
+
+En Satellite hay 3 niveles que se confunden fácilmente:
+
+Nivel	Qué es	Costo	Siempre disponible
+Índice estructural	Archivos, símbolos, dependencias (el esqueleto: index.json)	Barato	Sí — sirve para descubrir qué podría ser relevante
+Contexto relevante	El subgrafo de archivos/símbolos que la tarea menciona o necesita (el .context/graph.json: nodos y aristas relacionados con lo que pide la tarea)	Medio	No — se calcula por tarea
+Contexto semántico	El contenido de ese subgrafo (código real de los archivos seleccionados)	Caro	No — solo bajo demanda (E2: context get --paths)
+"Contexto relevante" vive en el nivel del medio: la selección de qué nodos del grafo del proyecto tocan la tarea.

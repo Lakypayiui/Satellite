@@ -138,6 +138,10 @@ int SatelliteCLI::run(int argc, char* argv[])
             return 1;
         }
     }
+    else if (subcommand == "dispatch-step")
+    {
+        return cmd_dispatch_step();
+    }
     else if (subcommand == "run")
     {
         return cmd_run(argc, argv);
@@ -830,6 +834,82 @@ int SatelliteCLI::cmd_run(int argc, char* argv[])
     }
 
     return 0;
+}
+
+int SatelliteCLI::cmd_dispatch_step()
+{
+    satellite::persistence::AgentStore store(project_root_);
+    if (!store.has_state())
+    {
+        std::cout << nlohmann::json{{"ok", false}, {"error", "proyecto no inicializado"}}.dump() << '\n';
+        return 1;
+    }
+
+    nlohmann::json request;
+    try
+    {
+        std::string input;
+        if (!std::getline(std::cin, input))
+        {
+            std::cout << nlohmann::json{{"ok", false}, {"error", "missing request"}}.dump() << '\n';
+            return 1;
+        }
+        request = nlohmann::json::parse(input);
+    }
+    catch (const std::exception& error)
+    {
+        std::cout << nlohmann::json{{"ok", false}, {"error", std::string("invalid request: ") + error.what()}}.dump() << '\n';
+        return 1;
+    }
+
+    const satellite::core::agent::AgentID agent_id = request.value("agent_id", satellite::core::agent::UNKNOWN_AGENT_ID);
+    nlohmann::json input = request.value("input", nlohmann::json::object());
+    nlohmann::json context = request.value("context", nlohmann::json::object());
+
+    satellite::core::registry::AgentRegistry registry;
+    satellite::core::agents::register_native_agents(registry);
+    store.load_registry(registry);
+
+    std::filesystem::path work_dir = project_root_ / ".satellite" / "agents" / "work";
+    std::error_code ec;
+    std::filesystem::create_directories(work_dir, ec);
+    satellite::factory::AgentFactory factory(registry, work_dir, framework_root_, "g++");
+    store.rebuild_agents(registry, factory);
+
+    // Reconstruir agentes custom cuyo descriptor quedó sin implementación.
+    auto specs = store.load_specs();
+    for (const auto& spec : specs)
+    {
+        const auto desc = registry.find_agent(spec.id);
+        if (desc && desc->agent == nullptr)
+        {
+            registry.unregister_agent(spec.id);
+            factory.create_agent(spec);
+        }
+    }
+
+    satellite::core::dispatcher::Dispatcher dispatcher(registry);
+    satellite::core::agent::AgentRequest req;
+    req.agent_id = agent_id;
+    req.input = input;
+    req.context = context;
+    req.token_budget.max_tokens = 4000;
+
+    satellite::core::agent::AgentResult result = dispatcher.dispatch(req);
+
+    nlohmann::json response = {
+        {"ok", result.status == satellite::core::agent::AgentStatus::SUCCESS},
+        {"agent_id", result.agent_id},
+        {"status", static_cast<int>(result.status)},
+        {"output", result.output},
+        {"duration_ms", result.duration_ms}
+    };
+    if (result.error)
+    {
+        response["error"] = {{"code", static_cast<int>(result.error->code)}, {"message", result.error->message}};
+    }
+    std::cout << response.dump() << '\n';
+    return (result.status == satellite::core::agent::AgentStatus::SUCCESS ? 0 : 1);
 }
 
 } // namespace satellite::cli

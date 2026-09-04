@@ -105,6 +105,7 @@ def _descriptor_to_dict(descriptor: AgentDescriptor) -> dict[str, Any]:
         "capabilities": descriptor.capabilities,
         "library_path": descriptor.library_path,
         "enabled": descriptor.enabled,
+        "complements": descriptor.complements,
     }
 
 
@@ -120,4 +121,5 @@ def _descriptor_from_dict(value: dict[str, Any]) -> AgentDescriptor:
         capabilities=value.get("capabilities", []),
         library_path=value.get("library_path", ""),
         enabled=value.get("enabled", True),
+        complements=list(value.get("complements", []) or []),
     )

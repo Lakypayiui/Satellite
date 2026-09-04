@@ -14,6 +14,9 @@ class PlanStep:
     conditions: list[str] = field(default_factory=list)
     order: int = 0
     description: str = ""
+    # Contexto que esta subtarea necesita del proyecto (lo declara el planner).
+    # Formato: {"paths": ["ruta/a.cpp", ...], "symbols": ["NombreClase", ...]}
+    context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -68,7 +71,11 @@ class Planner:
             f"{catalog_prompt}\nObjetivo: {goal}\n"
             'Responde SOLO con JSON: {"goal": "...", "steps": '
             '[{"agent_id": N, "input": {...}, "dependencies": [índices], '
-            '"description": "..."}]}. Usa solo agentes del catálogo.'
+            '"description": "...", "context": {"paths": ["ruta"], '
+            '"symbols": ["Simbolo"]}}]}. '
+            '"context" indica qué archivos/símbolos del proyecto necesita esa '
+            "subtarea (paths/symbols vacíos si no requiere contexto). "
+            "Usa solo agentes del catálogo."
         )
 
     def plan_goal(self, goal: str, catalog_prompt: str) -> Plan:
@@ -85,6 +92,7 @@ class Planner:
                     conditions=step.get("conditions", []),
                     order=step.get("order", index),
                     description=step.get("description", ""),
+                    context=step.get("context", {}),
                 )
                 for index, step in enumerate(payload.get("steps", []))
             ],
@@ -146,6 +154,10 @@ class Planner:
     def _complete(self, prompt: str) -> str:
         if self.client is None:
             raise RuntimeError("planner requires an Anthropic/OpenAI client")
+        # Cliente unificado (satellite_py.llm.LLMClient): usa complete().
+        complete = getattr(self.client, "complete", None)
+        if callable(complete) and not hasattr(self.client, "chat") and not hasattr(self.client, "messages"):
+            return complete("", prompt, max_tokens=1500)
         if self.provider in {"anthropic", "claude"}:
             response = self.client.messages.create(
                 model=os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-latest"),
