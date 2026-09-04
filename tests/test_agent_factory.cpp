@@ -3,12 +3,14 @@
 #include <iostream>
 #include <string>
 #include <filesystem>
+#include <cstdlib>
 #include <vector>
 #include <utility>
 
 #include <json.hpp>
 #include "factory/AgentFactory.h"
 #include "core/registry/AgentRegistry.h"
+#include "core/agents/NativeAgents.h"
 #include "core/dispatcher/Dispatcher.h"
 #include "core/catalog/AgentCatalog.h"
 #include "core/agent/AgentRequest.h"
@@ -140,6 +142,36 @@ extern "C" void satellite_destroy_agent(IAgent* agent) { delete agent; }
     return spec;
 }
 
+AgentSpec make_crashing_spec(AgentID id)
+{
+    AgentSpec spec = make_double_spec(id, true);
+    spec.implementation_code = R"AGENT(
+#include "core/agent/IAgent.h"
+#include "core/agent/AgentRequest.h"
+#include "core/agent/AgentResult.h"
+#include <json.hpp>
+#include <cstdlib>
+using namespace satellite::core::agent;
+class CrashingAgent : public IAgent {
+public:
+    AgentResult execute(const AgentRequest& request) override {
+        if (request.input.value("crash", false)) std::abort();
+        return AgentResult{request.agent_id, AgentStatus::SUCCESS, {{"result", 1.0}}, {}, 0.0, {}};
+    }
+};
+extern "C" IAgent* satellite_create_agent() { return new CrashingAgent(); }
+extern "C" void satellite_destroy_agent(IAgent* agent) { delete agent; }
+)AGENT";
+    spec.input_schema = nlohmann::json{
+        {"type", "object"},
+        {"properties", {{"crash", {{"type", "boolean"}}}}}
+    };
+    spec.test_cases = {
+        {nlohmann::json::object({{"crash", false}}), nlohmann::json::object({{"result", 1.0}})}
+    };
+    return spec;
+}
+
 AgentSpec make_invalid_spec(AgentID id)
 {
     AgentSpec spec = make_double_spec(id, true);
@@ -189,6 +221,39 @@ void test_syntax_error()
     CHECK("Syntax error: ok == false", r.ok == false);
     CHECK("Syntax error: stage == compile_test", r.stage == "compile_test");
     CHECK("Syntax error: not registered", reg.has_agent(101) == false);
+
+    factory.cleanup();
+}
+
+void test_process_crash_isolated()
+{
+    std::filesystem::path workdir = make_temp_workdir();
+    AgentRegistry reg;
+    satellite::core::agents::register_native_agents(reg);
+
+    AgentFactory factory(reg, workdir, SATELLITE_ROOT, "g++");
+    FactoryResult created = factory.create_agent(make_crashing_spec(104));
+    CHECK("Process crash: agent created", created.ok == true);
+
+    Dispatcher disp(reg);
+    AgentRequest request;
+    request.agent_id = 104;
+    request.input = nlohmann::json::object({{"crash", true}});
+    request.context = nlohmann::json::object();
+    request.metadata = nlohmann::json::object();
+    request.token_budget = TokenBudget{0};
+    request.execution_metadata = ExecutionMetadata{};
+
+    AgentResult result = disp.dispatch(request);
+    CHECK("Process crash: returns FAILED", result.status == AgentStatus::FAILED);
+    CHECK("Process crash: reports EXECUTION_FAILED",
+          result.error.has_value() && result.error->code == AgentErrorCode::EXECUTION_FAILED);
+
+    AgentRequest native_request;
+    native_request.agent_id = 1;
+    native_request.input = nlohmann::json::object({{"a", 2}, {"b", 3}});
+    AgentResult native_result = disp.dispatch(native_request);
+    CHECK("Process crash: host process survives", native_result.status == AgentStatus::SUCCESS);
 
     factory.cleanup();
 }
@@ -327,6 +392,7 @@ void test_catalog_inclusion()
 int main()
 {
     test_happy_path();
+    test_process_crash_isolated();
     test_syntax_error();
     test_run_tests_failure();
     test_invalid_spec();
