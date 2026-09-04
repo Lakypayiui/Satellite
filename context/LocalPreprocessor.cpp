@@ -4,6 +4,7 @@
 #include <json.hpp>
 #include <algorithm>
 #include <cctype>
+#include <iostream>
 #include <sstream>
 
 namespace satellite::context
@@ -196,6 +197,8 @@ std::string LocalPreprocessor::gather_from_user(const NeedInfo& needs)
     {
         oss << "- Informacion adicional del proyecto: ";
     }
+    std::cout << oss.str() << std::flush;
+
     std::string user_input;
     std::getline(std::cin, user_input);
     return user_input;

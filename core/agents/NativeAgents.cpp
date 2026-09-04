@@ -17,7 +17,8 @@ AgentResult SumAgent::execute(const AgentRequest& request)
             AgentStatus::FAILED,
             nlohmann::json(),
             AgentError{AgentErrorCode::INVALID_REQUEST, "missing required input"},
-            0.0
+            0.0,
+            {}
         };
     }
 
@@ -33,7 +34,8 @@ AgentResult SumAgent::execute(const AgentRequest& request)
         AgentStatus::SUCCESS,
         output,
         std::nullopt,
-        0.0
+        0.0,
+        {}
     };
 }
 
@@ -85,7 +87,8 @@ AgentResult SubtractAgent::execute(const AgentRequest& request)
             AgentStatus::FAILED,
             nlohmann::json(),
             AgentError{AgentErrorCode::INVALID_REQUEST, "missing required input"},
-            0.0
+            0.0,
+            {}
         };
     }
 
@@ -101,7 +104,8 @@ AgentResult SubtractAgent::execute(const AgentRequest& request)
         AgentStatus::SUCCESS,
         output,
         std::nullopt,
-        0.0
+        0.0,
+        {}
     };
 }
 
@@ -153,7 +157,8 @@ AgentResult MultiplyAgent::execute(const AgentRequest& request)
             AgentStatus::FAILED,
             nlohmann::json(),
             AgentError{AgentErrorCode::INVALID_REQUEST, "missing required input"},
-            0.0
+            0.0,
+            {}
         };
     }
 
@@ -169,7 +174,8 @@ AgentResult MultiplyAgent::execute(const AgentRequest& request)
         AgentStatus::SUCCESS,
         output,
         std::nullopt,
-        0.0
+        0.0,
+        {}
     };
 }
 
@@ -221,7 +227,8 @@ AgentResult DivideAgent::execute(const AgentRequest& request)
             AgentStatus::FAILED,
             nlohmann::json(),
             AgentError{AgentErrorCode::INVALID_REQUEST, "missing required input"},
-            0.0
+            0.0,
+            {}
         };
     }
 
@@ -236,7 +243,8 @@ AgentResult DivideAgent::execute(const AgentRequest& request)
             AgentStatus::FAILED,
             nlohmann::json(),
             AgentError{AgentErrorCode::EXECUTION_FAILED, "division by zero"},
-            0.0
+            0.0,
+            {}
         };
     }
 
@@ -249,7 +257,8 @@ AgentResult DivideAgent::execute(const AgentRequest& request)
         AgentStatus::SUCCESS,
         output,
         std::nullopt,
-        0.0
+        0.0,
+        {}
     };
 }
 
@@ -301,7 +310,8 @@ AgentResult AverageAgent::execute(const AgentRequest& request)
             AgentStatus::FAILED,
             nlohmann::json(),
             AgentError{AgentErrorCode::INVALID_REQUEST, "missing required input"},
-            0.0
+            0.0,
+            {}
         };
     }
 
@@ -315,7 +325,8 @@ AgentResult AverageAgent::execute(const AgentRequest& request)
             AgentStatus::FAILED,
             nlohmann::json(),
             AgentError{AgentErrorCode::EXECUTION_FAILED, "empty values"},
-            0.0
+            0.0,
+            {}
         };
     }
 
@@ -337,7 +348,8 @@ AgentResult AverageAgent::execute(const AgentRequest& request)
         AgentStatus::SUCCESS,
         output,
         std::nullopt,
-        0.0
+        0.0,
+        {}
     };
 }
 

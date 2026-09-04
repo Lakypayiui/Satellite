@@ -578,7 +578,6 @@ int SatelliteCLI::cmd_agent_create(int argc, char* argv[])
     }
 
     std::filesystem::path spec_path = argv[3];
-    std::cout << "DEBUG CLI: spec_path = " << spec_path << "\n" << std::flush;
     std::ifstream ifs(spec_path);
     if (!ifs.is_open())
     {
@@ -587,18 +586,14 @@ int SatelliteCLI::cmd_agent_create(int argc, char* argv[])
     }
 
     std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
-    std::cout << "DEBUG CLI: content length = " << content.length() << "\n" << std::flush;
     nlohmann::json j = nlohmann::json::parse(content, nullptr, false);
-    std::cout << "DEBUG CLI: json parsed, discarded = " << j.is_discarded() << "\n" << std::flush;
     if (j.is_discarded())
     {
         std::cout << "Error: spec.json inválido\n";
         return 1;
     }
 
-    std::cout << "DEBUG CLI: getting AgentSpec\n" << std::flush;
     satellite::factory::AgentSpec spec = j.get<satellite::factory::AgentSpec>();
-    std::cout << "DEBUG CLI: got AgentSpec, test_cases size = " << spec.test_cases.size() << "\n" << std::flush;
     if (spec.name.empty())
     {
         std::cout << "Error: spec inválida (falta name)\n";
@@ -732,15 +727,9 @@ int SatelliteCLI::cmd_run(int argc, char* argv[])
     satellite::core::agents::register_native_agents(registry);
     store.load_registry(registry);
 
-    std::filesystem::path work_dir = project_root_ / ".satellite" / "agents" / "work";
-    std::filesystem::create_directories(work_dir);
-
-    satellite::factory::AgentFactory factory(registry, work_dir, framework_root_, "g++");
-    store.rebuild_agents(registry, factory);
-
-    satellite::core::dispatcher::Dispatcher dispatcher(registry);
     satellite::context::DefaultContextOptimizer optimizer;
     satellite::config::FrameworkConfig config;
+    config.load_defaults();
 
     auto config_path = project_root_ / ".satellite" / "config" / "config.json";
     if (std::filesystem::exists(config_path))
@@ -753,6 +742,22 @@ int SatelliteCLI::cmd_run(int argc, char* argv[])
         }
     }
 
+    std::filesystem::path work_dir = project_root_ / ".satellite" / "agents" / "work";
+    std::filesystem::create_directories(work_dir);
+
+    satellite::factory::AgentFactory factory(
+        registry,
+        work_dir,
+        framework_root_,
+        "g++",
+        satellite::factory::agent_execution_backend_from_string(config.agent_backend));
+    store.rebuild_agents(registry, factory);
+
+    satellite::security::SecurityPolicy security_policy;
+    security_policy.load_defaults();
+    security_policy.from_config(config.security_allow);
+    satellite::core::dispatcher::Dispatcher dispatcher(registry, &security_policy);
+
     if (config.llm_api_key.empty() && !config.llm_api_key_env.empty())
     {
         const char* key = std::getenv(config.llm_api_key_env.c_str());
@@ -760,6 +765,13 @@ int SatelliteCLI::cmd_run(int argc, char* argv[])
         {
             config.llm_api_key = key;
         }
+    }
+
+    if (config.llm_provider == "deepseek" && config.llm_api_key.empty())
+    {
+        std::cout << "Error: DEEPSEEK API key not configured (set "
+                  << config.llm_api_key_env << ")\n";
+        return 1;
     }
 
     auto provider = satellite::llm::ProviderFactory::create(config);

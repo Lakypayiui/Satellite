@@ -18,6 +18,7 @@ void FrameworkConfig::load_defaults()
     optimizer_algorithm = "default";
     adapter_language = "auto";
     agent_storage_dir = ".satellite";
+    agent_backend = "native_process";
     logging_level = "info";
 
     use_local_llm = false;
@@ -47,6 +48,7 @@ nlohmann::json FrameworkConfig::to_json() const
     j["optimizer"]["algorithm"] = optimizer_algorithm;
     j["adapter"]["language"] = adapter_language;
     j["storage"]["agent_dir"] = agent_storage_dir;
+    j["execution"]["backend"] = agent_backend;
     j["logging"]["level"] = logging_level;
     for (const auto& [cap, allowed] : security_allow)
     {
@@ -108,6 +110,13 @@ bool FrameworkConfig::merge_json(const nlohmann::json& j)
         std::string val = j["storage"]["agent_dir"].get<std::string>();
         if (!val.empty())
             agent_storage_dir = val;
+    }
+
+    if (j.contains("execution") && j["execution"].contains("backend"))
+    {
+        std::string val = j["execution"]["backend"].get<std::string>();
+        if (val == "native_process" || val == "wasm")
+            agent_backend = val;
     }
 
     if (j.contains("logging") && j["logging"].contains("level"))

@@ -120,17 +120,17 @@ int main()
     // pasos de microagentes: sum + divide + average (como haría el orquestador)
     int success = 0;
     int total = 3;
-    AgentResult r1 = dispatcher.dispatch(AgentRequest{1, {{"a", 10}, {"b", 5}}, {}, {}, {}});
+        AgentResult r1 = dispatcher.dispatch(AgentRequest{1, {{"a", 10}, {"b", 5}}, {}, {}, {}, {}});
     if (r1.status == AgentStatus::SUCCESS)
     {
         ++success;
     }
-    AgentResult r2 = dispatcher.dispatch(AgentRequest{4, {{"a", 10}, {"b", 2}}, {}, {}, {}});
+    AgentResult r2 = dispatcher.dispatch(AgentRequest{4, {{"a", 10}, {"b", 2}}, {}, {}, {}, {}});
     if (r2.status == AgentStatus::SUCCESS)
     {
         ++success;
     }
-    AgentResult r3 = dispatcher.dispatch(AgentRequest{5, {{"values", {1.0, 2.0, 3.0}}}, {}, {}, {}});
+    AgentResult r3 = dispatcher.dispatch(AgentRequest{5, {{"values", {1.0, 2.0, 3.0}}}, {}, {}, {}, {}});
     if (r3.status == AgentStatus::SUCCESS)
     {
         ++success;
@@ -139,6 +139,8 @@ int main()
     double b_latency_ms = std::chrono::duration<double, std::milli>(t3 - t2).count();
 
     std::size_t b_tokens = sel.estimated_tokens;
+    (void)a_tokens;
+    (void)b_tokens;
 
     // ===== Reporte =====
     // La comparación de tokens usa la MISMA base (estimación del optimizador):

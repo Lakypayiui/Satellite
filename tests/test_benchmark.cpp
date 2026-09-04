@@ -81,17 +81,17 @@ int main()
         register_native_agents(reg);
         Dispatcher disp(reg);
 
-        AgentResult r1 = disp.dispatch(AgentRequest{1, {{"a", 10}, {"b", 5}}, {}, {}, {}});
+        AgentResult r1 = disp.dispatch(AgentRequest{1, {{"a", 10}, {"b", 5}}, {}, {}, {}, {}});
         CHECK("agente sum: SUCCESS", r1.status == AgentStatus::SUCCESS);
         CHECK("agente sum: resultado 15", r1.output["result"] == 15.0);
 
-        AgentResult r2 = disp.dispatch(AgentRequest{5, {{"values", {1.0, 2.0, 3.0}}}, {}, {}, {}});
+        AgentResult r2 = disp.dispatch(AgentRequest{5, {{"values", {1.0, 2.0, 3.0}}}, {}, {}, {}, {}});
         CHECK("agente average: SUCCESS", r2.status == AgentStatus::SUCCESS);
         CHECK("agente average: resultado 2", r2.output["result"] == 2.0);
 
         // MODELO A (monolítico) recibiría todo el contexto: aquí solo se verifica
         // que el runtime es determinista (mismo input → mismo output).
-        AgentResult r3 = disp.dispatch(AgentRequest{1, {{"a", 10}, {"b", 5}}, {}, {}, {}});
+        AgentResult r3 = disp.dispatch(AgentRequest{1, {{"a", 10}, {"b", 5}}, {}, {}, {}, {}});
         CHECK("determinismo: mismo input → mismo output", r3.output == r1.output);
     }
 

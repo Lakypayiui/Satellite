@@ -1,4 +1,5 @@
 #include "AgentFactory.h"
+#include "factory/ProcessAgentProxy.h"
 
 #include <json.hpp>
 #include <fstream>
@@ -10,20 +11,19 @@
 #include <memory>
 #include <array>
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <dlfcn.h>
-#endif
-
 namespace satellite::factory
 {
 
-AgentFactory::AgentFactory(AgentRegistry& registry, std::filesystem::path work_dir, std::filesystem::path framework_root, std::string compiler)
+AgentFactory::AgentFactory(AgentRegistry& registry,
+                           std::filesystem::path work_dir,
+                           std::filesystem::path framework_root,
+                           std::string compiler,
+                           AgentExecutionBackend backend)
     : registry_(registry)
     , work_dir_(std::move(work_dir))
     , framework_root_(std::move(framework_root))
     , compiler_(std::move(compiler))
+    , backend_(backend)
 {
     std::filesystem::create_directories(work_dir_);
 }
@@ -58,7 +58,7 @@ bool AgentFactory::compile(const std::vector<std::string>& sources, const std::v
 
     for (const auto& flag : extra_flags)
     {
-        cmd << " " << flag;
+        cmd << " \"" << flag << "\"";
     }
 
     cmd << " -I\"" << framework_root_.string() << "\"";
@@ -100,6 +100,13 @@ FactoryResult AgentFactory::create_agent(const AgentSpec& spec)
     FactoryResult result;
     result.agent_id = spec.id;
 
+    if (backend_ == AgentExecutionBackend::Wasm)
+    {
+        result.stage = "backend";
+        result.message = "WASM backend selected but no WASM runtime is configured";
+        return result;
+    }
+
     if (spec.id == UNKNOWN_AGENT_ID)
     {
         result.stage = "validate";
@@ -139,6 +146,8 @@ FactoryResult AgentFactory::create_agent(const AgentSpec& spec)
 
     std::string agent_cpp = (work_dir_ / ("agent_" + std::to_string(spec.id) + ".cpp")).string();
     std::string test_cpp = (work_dir_ / ("test_agent_" + std::to_string(spec.id) + ".cpp")).string();
+    std::string test_json_path = std::filesystem::absolute(
+        work_dir_ / ("test_cases_" + std::to_string(spec.id) + ".json")).string();
 
     {
         std::ofstream ofs(agent_cpp);
@@ -159,12 +168,39 @@ FactoryResult AgentFactory::create_agent(const AgentSpec& spec)
         }
         std::string test_cases_str = test_cases_json.dump();
 
+        std::ofstream tj(test_json_path);
+        if (!tj)
+        {
+            result.stage = "validate";
+            result.message = "Failed to write test cases file";
+            return result;
+        }
+        tj << test_cases_str;
+        if (!tj)
+        {
+            result.stage = "validate";
+            result.message = "Failed to write test cases file";
+            return result;
+        }
+
+        std::string escaped_test_json_path;
+        escaped_test_json_path.reserve(test_json_path.size());
+        for (char c : test_json_path)
+        {
+            if (c == '\\' || c == '"')
+            {
+                escaped_test_json_path += '\\';
+            }
+            escaped_test_json_path += c;
+        }
+
         std::string harness = R"HARNESS(
 #include "core/agent/AgentRequest.h"
 #include "core/agent/AgentResult.h"
 #include "core/agent/IAgent.h"
 #include "factory/AgentPlugin.h"
 #include <json.hpp>
+#include <fstream>
 #include <iostream>
 #include <cmath>
 
@@ -183,9 +219,30 @@ int main()
         return 1;
     }
 
-    const json TEST_CASES = json::parse()HARNESS";
+    const std::string TEST_CASES_PATH = ")HARNESS";
+        harness += escaped_test_json_path;
+        harness += R"HARNESS(";
+    std::ifstream test_cases_file(TEST_CASES_PATH);
+    if (!test_cases_file)
+    {
+        std::cerr << "FAILED: could not open test cases file" << std::endl;
+        satellite_destroy_agent(agent);
+        return 1;
+    }
 
-        harness += "R\"JSON(" + test_cases_str + ")JSON\");\n";
+    json TEST_CASES;
+    try
+    {
+        test_cases_file >> TEST_CASES;
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "FAILED: could not parse test cases file: " << error.what() << std::endl;
+        satellite_destroy_agent(agent);
+        return 1;
+    }
+
+    )HARNESS";
 
         harness += R"HARNESS(
 
@@ -271,7 +328,8 @@ int main()
     {
         std::array<char, 128> buffer;
         std::string result_str;
-        std::unique_ptr<FILE, decltype(&pclose)> pipe(popen((test_exe + " 2>&1").c_str(), "r"), pclose);
+        std::string test_cmd = "\"" + test_exe + "\" 2>&1";
+        std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(test_cmd.c_str(), "r"), pclose);
         if (!pipe)
         {
             result.stage = "run_tests";
@@ -304,62 +362,7 @@ int main()
     }
 
     std::string lib_path = get_library_path(spec.id);
-    void* handle = nullptr;
-#ifdef _WIN32
-    std::wstring wlib_path(lib_path.begin(), lib_path.end());
-    handle = LoadLibraryW(wlib_path.c_str());
-    if (!handle)
-    {
-        result.stage = "load_lib";
-        result.message = "LoadLibraryW failed: " + std::to_string(GetLastError());
-        return result;
-    }
-#else
-    handle = dlopen(lib_path.c_str(), RTLD_LAZY);
-    if (!handle)
-    {
-        result.stage = "load_lib";
-        result.message = std::string("dlopen failed: ") + dlerror();
-        return result;
-    }
-#endif
-
-    using CreateAgentFn = satellite::core::agent::IAgent* (*)();
-    using DestroyAgentFn = void (*)(satellite::core::agent::IAgent*);
-    CreateAgentFn create_fn = nullptr;
-    DestroyAgentFn destroy_fn = nullptr;
-#ifdef _WIN32
-    create_fn = reinterpret_cast<CreateAgentFn>(reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(handle), "satellite_create_agent")));
-    destroy_fn = reinterpret_cast<DestroyAgentFn>(reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(handle), "satellite_destroy_agent")));
-#else
-    create_fn = reinterpret_cast<CreateAgentFn>(dlsym(handle, "satellite_create_agent"));
-    destroy_fn = reinterpret_cast<DestroyAgentFn>(dlsym(handle, "satellite_destroy_agent"));
-#endif
-
-    if (!create_fn || !destroy_fn)
-    {
-        result.stage = "load_lib";
-        result.message = "Failed to resolve plugin create/destroy symbols";
-#ifdef _WIN32
-        FreeLibrary(static_cast<HMODULE>(handle));
-#else
-        dlclose(handle);
-#endif
-        return result;
-    }
-
-    satellite::core::agent::IAgent* agent_instance = create_fn();
-    if (!agent_instance)
-    {
-        result.stage = "load_lib";
-        result.message = "satellite_create_agent returned null";
-#ifdef _WIN32
-        FreeLibrary(static_cast<HMODULE>(handle));
-#else
-        dlclose(handle);
-#endif
-        return result;
-    }
+    auto agent_proxy = std::make_unique<ProcessAgentProxy>(spec.id, lib_path, framework_root_);
 
     AgentDescriptor desc;
     desc.id = spec.id;
@@ -370,23 +373,16 @@ int main()
     desc.output_schema = spec.output_schema;
     desc.context_requirements = spec.context_requirements;
     desc.capabilities = spec.capabilities;
-    desc.agent = agent_instance;
+    desc.agent = agent_proxy.get();
 
     if (!registry_.register_agent(desc))
     {
         result.stage = "register";
         result.message = "Duplicate agent ID or registration failed";
-    destroy_fn(agent_instance);
-#ifdef _WIN32
-        FreeLibrary(static_cast<HMODULE>(handle));
-#else
-    destroy_fn(agent_instance);
-        dlclose(handle);
-#endif
         return result;
     }
 
-    loaded_libs_[spec.id] = LoadedLibrary{handle, agent_instance, destroy_fn};
+    loaded_agents_[spec.id] = std::move(agent_proxy);
 
     result.ok = true;
     result.stage = "ok";
@@ -396,35 +392,22 @@ int main()
 
 bool AgentFactory::release_agent(AgentID id)
 {
-    auto it = loaded_libs_.find(id);
-    if (it == loaded_libs_.end())
+    auto it = loaded_agents_.find(id);
+    if (it == loaded_agents_.end())
         return false;
 
-    const LoadedLibrary loaded = it->second;
     registry_.unregister_agent(id);
-    loaded.destroy(loaded.agent);
-#ifdef _WIN32
-    FreeLibrary(static_cast<HMODULE>(loaded.handle));
-#else
-    dlclose(loaded.handle);
-#endif
-    loaded_libs_.erase(it);
+    loaded_agents_.erase(it);
     return true;
 }
 
 void AgentFactory::unload_all()
 {
-    for (auto& [id, loaded] : loaded_libs_)
+        for (auto& [id, loaded] : loaded_agents_)
     {
         registry_.unregister_agent(id);
-        loaded.destroy(loaded.agent);
-#ifdef _WIN32
-        FreeLibrary(static_cast<HMODULE>(loaded.handle));
-#else
-        dlclose(loaded.handle);
-#endif
     }
-    loaded_libs_.clear();
+        loaded_agents_.clear();
 }
 
 void AgentFactory::cleanup()
