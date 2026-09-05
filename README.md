@@ -586,6 +586,41 @@ and the native bridges.
 python -m pytest tests/ -q        # inside the repo, with requirements.txt installed
 ```
 
+## Web interface
+
+Satellite ships a local web console (`satellite_py/web`) that exposes the same
+runtime through a browser: agent graph, code editor, file explorer and a model
+menu per role (context / orchestrator / agents). It is an orchestrating UI —
+the execution still runs through the Python runtime + C++ engine.
+
+```bash
+python -m satellite_py.web            # http://127.0.0.1:7900
+SATELLITE_WEB_PORT=7901 python -m satellite_py.web   # puerto custom
+SATELLITE_WEB_ROOT=/ruta/al/proyecto python -m satellite_py.web  # proyecto distinto al cwd
+```
+
+Capabilities:
+
+- **Grafo de agentes**: nodos = agentes registrados (nativos y plugins), aristas =
+  capabilities de complemento (output que se encadena directo sin volver al
+  orquestador). Click en un nodo → capabilities, context_requirements,
+  library/nativo y toggle bloquear/desbloquear (persistido en
+  `.satellite/registry/agents.json`; un agente bloqueado desaparece del
+  catálogo del planner).
+- **Editor + explorador**: Monaco editor, guardado vía API, árbol de archivos
+  del proyecto (ignora venv/build/.satellite/...).
+- **Menú de modelos**: selectores por rol que escriben `llm.context`,
+  `llm.orchestrator` y `llm.agents` en `config.json` (precedencia:
+  rol → `llm` global → env).
+- **Run en vivo**: `POST /api/run` ejecuta el pipeline completo (preprocess →
+  compresión semántica neutra → plan → pasos con dispatch) en background y
+  expone eventos por `GET /api/run/{id}` (preprocess, compressed, plan_start,
+  step_started/step_result, done/error).
+
+API: `/api/system`, `/api/agents`, `/api/agents/{id}`, `/api/agents/{id}/enabled`,
+`/api/files`, `/api/file`, `/api/config`, `/api/config/roles`, `/api/run`, ...
+Tests de la web en `tests/test_web.py`.
+
 ---
 
 ## Roadmap / limitations

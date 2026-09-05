@@ -41,6 +41,14 @@ class AgentRegistry:
         """Return a descriptor by ID, or None when it is not registered."""
         return self._agents.get(agent_id)
 
+    def set_enabled(self, agent_id: int, enabled: bool) -> bool:
+        """Enable/disable an agent (web UI "bloquear"); False on unknown ID."""
+        descriptor = self._agents.get(agent_id)
+        if descriptor is None:
+            return False
+        descriptor.enabled = enabled
+        return True
+
     def list_agents(self) -> list[AgentDescriptor]:
         """Return all registered descriptors in ascending ID order."""
         return [self._agents[agent_id] for agent_id in sorted(self._agents)]

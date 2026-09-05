@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -157,6 +158,10 @@ def load_llm_config(config_path: str | Path | None = None) -> LLMConfig:
             except (OSError, ValueError):
                 data = {}
 
+    return _resolve_from_data(data)
+
+
+def _resolve_from_data(data: Mapping[str, Any]) -> LLMConfig:
     llm = data.get("llm", {}) if isinstance(data.get("llm"), dict) else {}
     local_llm = data.get("local_llm", {}) if isinstance(data.get("local_llm"), dict) else {}
     use_local = bool(data.get("use_local_llm", False))
@@ -169,7 +174,7 @@ def load_llm_config(config_path: str | Path | None = None) -> LLMConfig:
         api_key = llm.get("api_key") or _key_from_env(llm.get("api_key_env")) or os.getenv("ANTHROPIC_API_KEY", "")
         return LLMConfig(provider="anthropic", model=str(model), api_key=api_key)
 
-    # OpenAI-wire providers (openai, openai-compatible, deepseek, local).
+    # OpenAI-wire providers (openai, openai-compatible, local, llama.cpp).
     if provider in {"local", "llama.cpp"} or use_local:
         port = local_llm.get("port", 8080)
         model = (
@@ -194,6 +199,32 @@ def load_llm_config(config_path: str | Path | None = None) -> LLMConfig:
         return LLMConfig(provider=provider, model=str(model), base_url=str(base_url), api_key=api_key)
     # Cualquier otro provider se trata como compatible con OpenAI.
     return LLMConfig(provider="openai-compatible", model=str(model), base_url=str(base_url), api_key=api_key)
+
+
+# Sub-roles con los que la UI/web expone selectores independientes de provider.
+_ROLES = ("context", "orchestrator", "agents")
+
+
+def llm_role_config(data: Mapping[str, Any] | None, role: str) -> LLMConfig:
+    """Resolved settings for a role (context/preprocess, orchestrator, agents).
+
+    Precedence: ``llm.<role>.*`` -> ``llm.*`` (global) -> env -> default. If the
+    role section is absent, the global settings are used unchanged.
+    """
+    data = data or {}
+    base = data.get("llm") or {}
+    if not isinstance(base, Mapping):
+        base = {}
+    role_section = base.get(role) if isinstance(base.get(role), Mapping) else {}
+    base_section = {k: v for k, v in base.items() if k not in _ROLES}
+    merged_llm = {**base_section, **dict(role_section)}
+    return _resolve_from_data(
+        {
+            "llm": merged_llm,
+            "local_llm": data.get("local_llm") if isinstance(data.get("local_llm"), dict) else {},
+            "use_local_llm": bool(data.get("use_local_llm", False)),
+        }
+    )
 
 
 def _key_from_env(env_name: Any) -> str:
