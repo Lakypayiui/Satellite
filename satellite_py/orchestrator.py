@@ -440,6 +440,7 @@ def execute_goal(
     session_dir: str | None = None,
     max_rounds: int = 3,
     resume_session: str | None = None,
+    context_client: Any = None,
 ) -> dict[str, Any]:
     """Plan a goal with the LLM and execute it through the dispatcher.
 
@@ -479,11 +480,12 @@ def execute_goal(
 
         root = Path(project_root)
         config_path = root / ".satellite" / "config" / "config.json"
-        client = None
-        try:
-            client = load_llm_config(config_path).create_client()
-        except Exception:  # noqa: BLE001 - sin proveedor no hay capa semántica
-            client = None
+        client = context_client
+        if client is None:
+            try:
+                client = load_llm_config(config_path).create_client()
+            except Exception:  # noqa: BLE001 - sin proveedor no hay capa semántica
+                client = None
         resolver = ContextPreprocessor(
             client=client or planner.client,
             project_root=root,
