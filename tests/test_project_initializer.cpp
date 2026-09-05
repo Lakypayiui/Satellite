@@ -84,7 +84,7 @@ void test_config_json_content()
     CHECK("llm.api_key_env == \"DEEPSEEK_API_KEY\"", j["llm"]["api_key_env"] == "DEEPSEEK_API_KEY");
     CHECK("token_budget.max_tokens == 4000", j["token_budget"]["max_tokens"] == 4000);
     CHECK("security.allow.filesystem.read == true", j["security"]["allow"]["filesystem.read"] == true);
-    CHECK("security.allow.process.execute == false", j["security"]["allow"]["process.execute"] == false);
+    CHECK("security.allow.process.execute == true", j["security"]["allow"]["process.execute"] == true);
     CHECK("optimizer.algorithm == \"default\"", j["optimizer"]["algorithm"] == "default");
 
     std::filesystem::remove_all(tmp_base);

@@ -4,6 +4,24 @@ import json
 import subprocess
 from typing import Any
 
+# Mapeo del enum AgentStatus C++ a strings (el host devuelve el número).
+_CPP_STATUS_NAMES = {
+    0: "IDLE",
+    1: "RUNNING",
+    2: "SUCCESS",
+    3: "FAILED",
+    4: "UNKNOWN_AGENT",
+    5: "VALIDATION_ERROR",
+    6: "DISABLED",
+    7: "TIMEOUT",
+}
+
+
+def _normalize_status(result: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(result.get("status"), int):
+        result["status"] = _CPP_STATUS_NAMES.get(result["status"], "UNKNOWN")
+    return result
+
 
 def run_agent(
     library_path: str,
@@ -31,4 +49,4 @@ def run_agent(
     result = json.loads(output)
     if not isinstance(result, dict):
         raise RuntimeError("agent_host returned a non-object JSON value")
-    return result
+    return _normalize_status(result)

@@ -98,7 +98,8 @@ def test_resolves_symbols_via_index(tmp_path):
     assert "def helper():" in client.calls[1]
 
 
-def test_unresolvable_after_last_round_asks_user(tmp_path):
+def test_unresolvable_falls_back_to_general_view(tmp_path):
+    """Archivos inexistentes → vista general del índice (no bloquea)."""
     _write_project(tmp_path, {"main.py": "print('hi')\n"})
     _write_index(tmp_path, [("main.py", "print('hi')\n", [])])
     client = _FakeClient(
@@ -106,20 +107,37 @@ def test_unresolvable_after_last_round_asks_user(tmp_path):
     )
     preprocessor = ContextPreprocessor(client=client, project_root=tmp_path, max_rounds=1)
     result = preprocessor.preprocess("documentar el codigo")
-    assert result.needs_user_input
-    assert "docs/guide.md" in result.user_prompt
+    # No pregunta al usuario: cae a la vista general y termina con contexto.
+    assert not result.needs_user_input
+    assert "main.py" in result.refined_prompt
 
 
-def test_missing_file_reported_when_nothing_resolved(tmp_path):
+def test_explicit_user_input_category_asks_user(tmp_path):
+    """Solo category user_input con pregunta real dispara la pregunta."""
     _write_project(tmp_path, {"main.py": "print('hi')\n"})
     _write_index(tmp_path, [("main.py", "print('hi')\n", [])])
     client = _FakeClient(
-        ['{"category": "x", "files_needed": ["nope.txt"], "description": "no existe"}']
+        ['{"category": "user_input", "description": "¿Qué ruta de salida quieres usar?"}']
     )
-    preprocessor = ContextPreprocessor(client=client, project_root=tmp_path, max_rounds=1)
-    result = preprocessor.preprocess("algo")
+    preprocessor = ContextPreprocessor(client=client, project_root=tmp_path, max_rounds=3)
+    result = preprocessor.preprocess("generar informe")
     assert result.needs_user_input
-    assert any("nope.txt" in info for info in result.missing_info)
+    assert "ruta de salida" in result.user_prompt
+
+
+def test_explain_task_gets_general_view_without_model_asking(tmp_path):
+    """'Explica el proyecto' inyecta la vista general sin depender del LLM."""
+    _write_project(tmp_path, {"main.py": "print('hola')\n", "README.md": "# Mi proyecto\n"})
+    client = _FakeClient(
+        ['{"category": "general", "sufficient": true, "description": "con esto basta"}']
+    )
+    preprocessor = ContextPreprocessor(client=client, project_root=tmp_path, max_rounds=2)
+    result = preprocessor.preprocess("explica de que trata este proyecto")
+    assert not result.needs_user_input
+    # La vista general llegó al modelo en la primera llamada.
+    assert "README.md" in client.calls[0]
+    assert "main.py" in client.calls[0]
+    assert not result.needs_user_input
 
 
 def test_user_input_is_used_in_next_round(tmp_path):
@@ -207,3 +225,24 @@ def test_stale_paths_reports_missing_file_and_missing_index_entry(tmp_path):
     # Archivo en disco pero sin entrada en el índice (mtime desconocido)
     (tmp_path / "b.py").write_text("x\n", encoding="utf-8")
     assert preprocessor.stale_paths(["b.py"]) == ["b.py"]
+
+
+def test_meta_task_skips_llm_and_returns_generic_context(tmp_path):
+    """'¿Qué puedes hacer?' no llama al modelo ni escanea el proyecto."""
+    client = _FakeClient([])  # sin respuestas: si se llama, estalla
+    preprocessor = ContextPreprocessor(client=client, project_root=tmp_path, max_rounds=3)
+    result = preprocessor.preprocess("¿Qué puedes hacer?")
+    assert not result.needs_user_input
+    assert not client.calls  # cero llamadas al LLM
+    assert "Satellite" in result.refined_prompt
+    assert "microagentes" in result.refined_prompt
+
+
+def test_meta_task_detection_phrases():
+    from satellite_py.context import _is_meta_task
+
+    assert _is_meta_task("Qué puedes hacer?")
+    assert _is_meta_task("que puedes hacer")
+    assert _is_meta_task("¿Qué agentes tienes disponibles?")
+    assert _is_meta_task("ayuda")
+    assert not _is_meta_task("explica que hace este proyecto")  # es tarea de lectura

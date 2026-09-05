@@ -34,7 +34,13 @@ _SYSTEM_PROMPT = (
     '{"category": "...", "files_needed": ["ruta/relativa", ...], '
     '"symbols_needed": ["nombre_simbolo", ...], "description": "...", '
     '"sufficient": true|false}. '
-    'Usa "sufficient": true cuando el contexto proporcionado ya basta. '
+    'Usa "sufficient": true cuando el contexto proporcionado ya basta '
+    '(incluido cuando la tarea es de tipo "explica/resume el proyecto": '
+    "con la vista general del indice alcanza). "
+    'Usa category "user_input" SOLO cuando la tarea necesita datos que '
+    "solo el usuario puede dar (no archivos del proyecto). "
+    "Nunca inventes rutas de archivos: si un archivo no esta en la lista "
+    "de archivos disponibles, no lo pidas. "
     "Nunca escribas codigo ni ejecutes nada; solo decides."
 )
 
@@ -59,6 +65,7 @@ class ContextPreprocessor:
         self.max_rounds = max(1, int(max_rounds))
         self.client = client or load_llm_config().create_client()
         self._index_path = self.project_root / ".satellite" / "context" / "index.json"
+        self._general_view_cache: str | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -148,13 +155,64 @@ class ContextPreprocessor:
         """
         gathered: list[str] = []
         last = NeedInfo()
+        general_given = False
         if user_input:
             gathered.append(f"Informacion del usuario:\n{user_input}")
+
+        # Preguntas generales sobre Satellite (qué puede hacer, ayuda, etc.):
+        # NO necesitan contexto del proyecto ni plan de agentes. Se responde
+        # directo con una sola llamada y un contexto genérico, sin costar
+        # preproceso ni compresión (las 3+ llamadas que ralentizan la respuesta).
+        if _is_meta_task(user_goal) and not gathered:
+            generic = (
+                "Contexto general de Satellite: Satellite es un framework que "
+                "orquesta microagentes. Un LLM decide el plan y microagentes "
+                "especializados lo ejecutan de forma determinista y aislada. "
+                "Puedes pedirle analizar un proyecto, ejecutar tareas de código, "
+                "o preguntar sobre los agentes disponibles.\n"
+            )
+            return ContextResult(
+                refined_prompt=generic + f"\nPregunta del usuario: {user_goal}\n"
+            )
+
+        # Tareas de entendimiento/lectura ("explica/resume el proyecto"):
+        # el runtime inyecta la vista general directamente (determinista, sin
+        # depender de que un LLM pequeño pida archivos específicos).
+        if _is_explain_task(user_goal) and not gathered:
+            general = self._general_project_view()
+            if general:
+                gathered.append(general)
+                general_given = True
 
         for round_index in range(self.max_rounds):
             last = self._analyze_needs(user_goal, "\n".join(gathered))
             if last.category == "__error__":
                 return ContextResult(needs_user_input=True, user_prompt=last.description)
+
+            # El modelo pide información del usuario (no archivos): preguntar.
+            # Si pide archivos aunque diga user_input, es contexto de proyecto
+            # faltante → resolver contra el índice (no molestar al usuario).
+            # Si la description NO es una pregunta (el modelo respondió o
+            # analizó), tratarlo como suficiente, no como petición al usuario.
+            if last.category in ("user_input", "pregunta", "user") and not (
+                last.files_needed or last.symbols_needed
+            ):
+                description = last.description.strip()
+                seems_question = (
+                    description.endswith("?") or description.endswith("¿")
+                    or description.lower().startswith(("que ", "qué ", "cual ", "cuál ", "como ", "cómo ", "cuando ", "cuánto ", "donde ", "dónde ", "quien ", "quién ", "what ", "which ", "how ", "when ", "where ", "please provide"))
+                )
+                if not seems_question:
+                    # El modelo ya dio la info/analisis en la description.
+                    last.sufficient = True
+                    return ContextResult(
+                        refined_prompt=self._build_refined_prompt(user_goal, "\n".join(gathered), last)
+                    )
+                return ContextResult(
+                    needs_user_input=True,
+                    user_prompt=self._gather_from_user(last),
+                    missing_info=[last.category],
+                )
 
             if self._has_enough_context(last):
                 return ContextResult(
@@ -166,13 +224,22 @@ class ContextPreprocessor:
                 gathered.append(found)
                 continue
 
-            # Nothing could be resolved this round.
+            # Nada se resolvió (p.ej. el modelo pidió archivos inexistentes).
+            # Si hay índice y aún no se dio la vista general, proveerla y
+            # re-evaluar — la tarea tipo "explica el proyecto" se satisface
+            # con el contexto amplio, sin bloquear preguntando al usuario.
+            if not general_given:
+                general = self._general_project_view()
+                if general:
+                    gathered.append(general)
+                    general_given = True
+                    continue
+
+            # Sin índice y sin poder resolver: terminar con lo que hay.
             last_round = round_index == self.max_rounds - 1
             if last_round:
                 return ContextResult(
-                    needs_user_input=True,
-                    user_prompt=self._gather_from_user(last),
-                    missing_info=[missing or last.category],
+                    refined_prompt=self._build_refined_prompt(user_goal, "\n".join(gathered), last)
                 )
 
         return ContextResult(
@@ -185,23 +252,40 @@ class ContextPreprocessor:
 
     def _analyze_needs(self, user_goal: str, context_so_far: str) -> NeedInfo:
         """Ask the model what project context is still missing (or if done)."""
+        index = self._load_index()
+        files_list = ""
+        if index:
+            paths = [str(e.get("path", "")) for e in index.get("files", [])]
+            # Lista acotada: el modelo pide rutas REALES del proyecto.
+            shown = paths[:200]
+            files_list = "\n".join(f"  - {p}" for p in shown)
+            if len(paths) > 200:
+                files_list += f"\n  ... y {len(paths) - 200} más"
         prompt = (
             f"Tarea: {user_goal}\n"
-            f"Archivos del proyecto: {self._project_file_count()}\n"
+            f"Archivos del proyecto ({self._project_file_count()}):\n{files_list or '(sin indice)'}\n"
         )
         if not context_so_far:
-            prompt += "Que informacion del proyecto necesitas para esta tarea?"
+            prompt += "Que archivos (de la lista) o simbolos necesitas para esta tarea?"
         else:
             prompt += (
                 f"Contexto ya disponible:\n{context_so_far}\n"
-                "Es suficiente? Si no, que archivos o simbolos faltan?"
+                "Es suficiente? Si no, que archivos (de la lista) o simbolos faltan?"
             )
         try:
             text = self.client.complete(_SYSTEM_PROMPT, prompt, max_tokens=500)
         except Exception as error:  # noqa: BLE001 - surface as a user question
+            error_text = str(error)
+            # 401/403 de un proveedor externo: mensaje accionable sobre la key.
+            if "401" in error_text or "403" in error_text or "Unauthorized" in error_text or "Authentication failed" in error_text:
+                error_text = (
+                    "La API key del proveedor no es válida o no está configurada "
+                    f"(error de autenticación: {error_text}). Revisa la API key "
+                    "y el base_url en Ajustes."
+                )
             return NeedInfo(
                 category="__error__",
-                description=f"Error al analizar la tarea con el modelo local: {error}",
+                description=f"Error al analizar la tarea con el proveedor: {error_text}",
             )
 
         needs = self._parse_need_info(text)
@@ -306,6 +390,128 @@ class ContextPreprocessor:
             " ".join(missing),
         )
 
+    def _general_project_view(self) -> str:
+        """Vista general determinista del proyecto (sin LLM).
+
+        Selecciona README, entry points y archivos representativos para tareas
+        tipo "explica el proyecto" cuando el modelo pide archivos que no
+        existen o no declara suficiencia. Funciona con o sin índice (escanea
+        el árbol filtrando los directorios ignorados). Nunca inventa rutas.
+        """
+        if self._general_view_cache is not None:
+            return self._general_view_cache
+        view = self._build_general_view()
+        self._general_view_cache = view
+        return view
+
+    def _build_general_view(self) -> str:
+        index = self._load_index()
+        if index:
+            by_path = {str(entry.get("path", "")): entry for entry in index.get("files", [])}
+        else:
+            # Sin índice: escanear el árbol real podando directorios ignorados
+            # (sin entrar en venv/node_modules/build/... para no recorrerlos).
+            by_path = {}
+            stack = [self.project_root]
+            while stack:
+                current = stack.pop()
+                try:
+                    children = list(current.iterdir())
+                except OSError:
+                    continue
+                for child in children:
+                    if child.is_dir():
+                        if child.name not in _IGNORED_DIRS:
+                            stack.append(child)
+                    elif child.is_file():
+                        relative = child.relative_to(self.project_root).as_posix()
+                        try:
+                            size = child.stat().st_size
+                        except OSError:
+                            size = 0
+                        by_path[relative] = {"path": relative, "size": size}
+        if not by_path:
+            return ""
+
+        selected: list[str] = []
+
+        def _pick(candidates: list[str]) -> None:
+            for candidate in candidates:
+                path = next((p for p in by_path if p.lower() == candidate.lower() or p.lower().endswith("/" + candidate.lower())), None)
+                if path and path not in selected:
+                    selected.append(path)
+
+        # README(s), entry points típicos y luego archivos por tamaño.
+        readmes = sorted(p for p in by_path if "readme" in p.lower())
+        selected.extend(readmes[:2])
+        _pick(["main.py", "app.py", "cli.py", "main.cpp", "main.c", "CMakeLists.txt", "index.js", "package.json", "pyproject.toml", "requirements.txt", "setup.py"])
+        # Archivos representativos: los de tamaño medio-grande (código real).
+        code_exts = {".py", ".cpp", ".h", ".hpp", ".c", ".cc", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java"}
+        code_files = [
+            (str(e.get("path", "")), int(e.get("size", 0)))
+            for e in by_path.values()
+            if str(e.get("path", "")).lower().endswith(tuple(code_exts))
+        ]
+        code_files.sort(key=lambda pair: (-pair[1], pair[0]))
+        for path, _size in code_files:
+            if len(selected) >= 12:
+                break
+            if path not in selected:
+                selected.append(path)
+
+        cap = int(os.getenv("SATELLITE_CONTEXT_CHAR_CAP", "60000"))
+        parts: list[str] = []
+        total = 0
+        for path in selected:
+            full = self.project_root / path
+            try:
+                content = full.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if total + len(content) > cap and parts:
+                break
+            total += len(content)
+            parts.append(f"=== {path} ===\n{content[:4000]}")
+
+        # Estructura de directorios (2 niveles) para proyectos grandes: da el
+        # mapa del proyecto cuando el modelo pide "ver qué archivos existen".
+        structure = self._directory_structure(by_path)
+        header = (
+            f"Vista general del proyecto ({len(by_path)} archivos):\n"
+            f"{structure}\n"
+        )
+        if not parts:
+            return header.rstrip("\n")
+        return header + "\n".join(parts)
+
+    def _directory_structure(self, by_path: dict[str, Any]) -> str:
+        """Árbol de directorios de 2 niveles (recortado a ~120 entradas)."""
+        dirs: set[str] = set()
+        for path in by_path:
+            parts = path.split("/")
+            if len(parts) > 1:
+                dirs.add(parts[0])
+                if len(parts) > 2:
+                    dirs.add("/".join(parts[:2]))
+        lines = ["Estructura de directorios:"]
+        roots = sorted(d for d in dirs if "/" not in d)
+        shown = 0
+        for root_dir in roots:
+            if shown >= 120:
+                lines.append("  ...")
+                break
+            lines.append(f"  {root_dir}/")
+            shown += 1
+            children = sorted(d for d in dirs if d.startswith(root_dir + "/"))
+            for child in children[:20]:
+                if shown >= 120:
+                    break
+                lines.append(f"    {child.split('/', 1)[1]}/")
+                shown += 1
+        if not roots:
+            lines.append("  (archivos en la raíz)")
+        return "\n".join(lines)
+
     # ------------------------------------------------------------------
     # Index helpers
     # ------------------------------------------------------------------
@@ -336,7 +542,21 @@ class ContextPreprocessor:
         index = self._load_index()
         if index is not None:
             return len(index.get("files", []))
-        return sum(1 for path in self.project_root.rglob("*") if path.is_file())
+        count = 0
+        stack = [self.project_root]
+        while stack:
+            current = stack.pop()
+            try:
+                children = list(current.iterdir())
+            except OSError:
+                continue
+            for child in children:
+                if child.is_dir():
+                    if child.name not in _IGNORED_DIRS:
+                        stack.append(child)
+                elif child.is_file():
+                    count += 1
+        return count
 
     # ------------------------------------------------------------------
     # Prompt / user interaction
@@ -351,9 +571,11 @@ class ContextPreprocessor:
             lines.append("Archivos necesarios: " + ", ".join(needs.files_needed))
         if needs.symbols_needed:
             lines.append("Simbolos necesarios: " + ", ".join(needs.symbols_needed))
-        if not needs.files_needed and not needs.symbols_needed:
+        if needs.description:
+            lines.append(needs.description)
+        if not needs.files_needed and not needs.symbols_needed and not needs.description:
             lines.append("Por favor proporciona una descripcion de la tarea:")
-        else:
+        elif not needs.description:
             lines.append("Por favor proporciona la informacion adicional:")
         return "\n".join(lines)
 
@@ -362,8 +584,8 @@ class ContextPreprocessor:
         parts.append(context if context else "(sin contexto adicional)")
         parts.append("")
         parts.append(f"Tarea del usuario: {user_goal}")
-        if needs.description:
-            parts.append(f"Analisis del modelo: {needs.description}")
+        # NOTA: no se incluye needs.description (texto crudo del modelo):
+        # puede contener JSON/planes inválidos que contaminarían al planner.
         parts.append(
             ""
             'Responde SOLO con JSON: {"steps": [{"agent_id": N, "input": {...}, '
@@ -389,6 +611,58 @@ class ContextPreprocessor:
             description=str(payload.get("description", "")),
             sufficient=bool(payload.get("sufficient", False)),
         )
+
+
+def _is_explain_task(user_goal: str) -> bool:
+    """Detección heurística de tareas de lectura/entendimiento.
+
+    Para estas tareas el runtime inyecta la vista general del proyecto sin
+    esperar a que el LLM pida archivos (los modelos pequeños no piden rutas
+    reales de forma fiable).
+    """
+    lowered = user_goal.lower()
+    explain_words = (
+        "explica", "explique", "explicar", "resume", "resumen", "resumir",
+        "que hace", "qué hace", "que es", "qué es", "como funciona",
+        "cómo funciona", "de que trata", "de qué trata", "en que consiste",
+        "en qué consiste", "describe", "describir", "describe el proyecto",
+        "cual es la estructura", "cuál es la estructura", "arquitectura",
+        "resumen del proyecto", "overview", "explain", "summarize", "what is",
+        "what does", "how does", "describe this", "tell me about",
+    )
+    return any(word in lowered for word in explain_words)
+
+
+def _is_meta_task(user_goal: str) -> bool:
+    """Detección de preguntas generales sobre Satellite (sin contexto de
+    proyecto): qué puede hacer, ayuda, capacidades, quién eres, etc.
+
+    Estas tareas no necesitan índice, contexto ni plan de agentes: solo una
+    respuesta directa del modelo con un contexto genérico de Satellite.
+    """
+    lowered = user_goal.lower()
+    meta_words = (
+        "qué puedes hacer", "que puedes hacer", "que puedes hacer",
+        "que puedes", "qué puedes", "que podrias hacer", "qué podrías hacer",
+        "que podria hacer", "qué podría hacer", "en que me puedes ayudar",
+        "en qué me puedes ayudar", "que me puedes ofrecer", "que eres", "qué eres",
+        "quien eres", "quién eres", "que es satellite", "qué es satellite",
+        "como funciona satellite", "cómo funciona satellite",
+        "que hace satellite", "qué hace satellite", "que puede hacer satellite",
+        "cuales son tus capacidades", "cuáles son tus capacidades",
+        "que agentes tienes", "qué agentes tienes", "agentes disponibles",
+        "capabilities", "capacidades", "para que sirve", "para qué sirve",
+        "eres un asistente", "eres satellite", "presentate", "preséntate",
+    )
+    # Frases completas por substring.
+    if any(word in lowered for word in meta_words):
+        return True
+    # "help"/"ayuda" SOLO como palabra completa (no dentro de "helper").
+    import re as _re
+
+    if _re.search(r"\bhelp\b", lowered) or _re.search(r"\bayuda\b", lowered):
+        return True
+    return False
 
 
 def _extract_first_json(text: str) -> dict[str, Any] | None:

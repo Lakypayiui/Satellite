@@ -15,8 +15,19 @@ from typing import Any
 
 
 def cpp_bin() -> str:
-    """Ruta del binario C++ (env ``SATELLITE_CPP_BIN`` o ``./build/satellite``)."""
-    return os.getenv("SATELLITE_CPP_BIN", "./build/satellite")
+    """Ruta del binario C++ (env ``SATELLITE_CPP_BIN`` o ``./build/satellite``).
+
+    En Windows se resuelve la extensión ``.exe`` si la ruta sin extensión no
+    existe (``os.path.isfile`` no añade ``.exe`` automáticamente).
+    """
+    candidate = os.getenv("SATELLITE_CPP_BIN", "./build/satellite")
+    if os.path.isfile(candidate):
+        return candidate
+    if os.name == "nt" and not candidate.lower().endswith(".exe"):
+        with_exe = candidate + ".exe"
+        if os.path.isfile(with_exe):
+            return with_exe
+    return candidate
 
 
 def available() -> bool:

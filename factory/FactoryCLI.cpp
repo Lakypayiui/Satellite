@@ -5,6 +5,7 @@
 
 #include <json.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -63,17 +64,6 @@ int main()
         return 1;
     }
 
-    const std::string goal = request.value("goal", std::string{});
-    const std::string capability = request.value("capability", std::string{});
-    if (goal.empty() || capability.empty())
-    {
-        std::cout << nlohmann::json{
-            {"ok", false},
-            {"error", "request requires non-empty goal and capability"}
-        }.dump() << '\n';
-        return 1;
-    }
-
     const std::filesystem::path project_root = std::filesystem::current_path();
     const std::filesystem::path work_dir = project_root / ".satellite" / "agents" / "work";
     std::error_code filesystem_error;
@@ -83,6 +73,93 @@ int main()
         std::cout << nlohmann::json{
             {"ok", false},
             {"error", "failed to create factory work directory: " + filesystem_error.message()}
+        }.dump() << '\n';
+        return 1;
+    }
+
+    // ------------------------------------------------------------------
+    // Modo 1: spec completa (el LLM ya generó la spec en el lado Python;
+    // la factory solo valida, compila, testea y registra — sin proveedor).
+    // ------------------------------------------------------------------
+    if (request.contains("spec") && request["spec"].is_object())
+    {
+        satellite::core::registry::AgentRegistry registry;
+        satellite::factory::AgentFactory factory(
+            registry, work_dir, std::filesystem::path(SATELLITE_ROOT), "g++");
+
+        // Id libre: 1-5 son nativos; se asigna el siguiente no usado.
+        satellite::core::agent::AgentID next_id = 6;
+        for (const auto& descriptor : registry.list_agents())
+        {
+            next_id = std::max(next_id, static_cast<satellite::core::agent::AgentID>(descriptor.id + 1));
+        }
+
+        satellite::factory::AgentSpec spec;
+        try
+        {
+            spec = request["spec"].get<satellite::factory::AgentSpec>();
+        }
+        catch (const std::exception& error)
+        {
+            std::cout << nlohmann::json{
+                {"ok", false}, {"error", std::string("invalid spec: ") + error.what()}
+            }.dump() << '\n';
+            return 1;
+        }
+
+        if (spec.id == satellite::core::agent::UNKNOWN_AGENT_ID)
+        {
+            spec.id = next_id;
+        }
+        if (spec.capabilities.empty())
+        {
+            spec.capabilities = {"custom." + spec.name};
+        }
+        if (spec.version.empty())
+        {
+            spec.version = "1.0.0";
+        }
+
+        const satellite::factory::FactoryResult result = factory.create_agent(spec);
+        if (!result.ok)
+        {
+            std::cout << nlohmann::json{
+                {"ok", false},
+                {"error", result.message},
+                {"stage", result.stage},
+                {"id", spec.id}
+            }.dump() << '\n';
+            return 1;
+        }
+
+        const std::filesystem::path library_path = work_dir / library_filename(spec.id);
+        const auto descriptor = registry.find_agent(spec.id);
+        if (!descriptor)
+        {
+            std::cout << nlohmann::json{
+                {"ok", false},
+                {"error", "created agent descriptor not found"}
+            }.dump() << '\n';
+            return 1;
+        }
+
+        std::cout << nlohmann::json{
+            {"ok", true},
+            {"descriptor", descriptor_json(*descriptor, library_path)},
+            {"created", {spec.id}},
+            {"skipped", nlohmann::json::array()},
+            {"via", "spec"}
+        }.dump() << '\n';
+        return 0;
+    }
+
+    const std::string goal = request.value("goal", std::string{});
+    const std::string capability = request.value("capability", std::string{});
+    if (goal.empty() || capability.empty())
+    {
+        std::cout << nlohmann::json{
+            {"ok", false},
+            {"error", "request requires non-empty goal and capability"}
         }.dump() << '\n';
         return 1;
     }

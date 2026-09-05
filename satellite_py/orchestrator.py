@@ -196,6 +196,9 @@ def run_plan(
     session_path: str | None = None,
     resumed_from: str = "",
     execution_logger: Any | None = None,
+    auto_expand: bool = False,
+    expand_client: Any = None,
+    project_root: str | None = None,
 ) -> dict[str, Any]:
     """Execute a validated plan in topological order, stopping at first failure.
 
@@ -261,9 +264,18 @@ def run_plan(
                 "agent_id": step.agent_id,
                 "input": step.input,
                 "context": request_context,
-                "metadata": {},
+                "metadata": {"description": step.description},
             }
-            result = dispatch(registry, security, request, host_bin)
+            result = dispatch(
+                registry,
+                security,
+                request,
+                host_bin,
+                auto_expand=auto_expand,
+                goal=run_goal,
+                expand_client=expand_client,
+                project_root=project_root,
+            )
 
         results[index] = result
         descriptor = registry.find_agent(step.agent_id)
@@ -333,9 +345,21 @@ def run_plan(
                     "agent_id": current_agent.id,
                     "input": current_input,
                     "context": chain_request_context,
-                    "metadata": {"routed_from": routed_from_index},
+                    "metadata": {
+                        "routed_from": routed_from_index,
+                        "description": f"complemento de paso {routed_from_index}",
+                    },
                 }
-                chain_result = dispatch(registry, security, chain_request, host_bin)
+                chain_result = dispatch(
+                    registry,
+                    security,
+                    chain_request,
+                    host_bin,
+                    auto_expand=auto_expand,
+                    goal=run_goal,
+                    expand_client=expand_client,
+                    project_root=project_root,
+                )
                 chain_name = current_agent.name or f"id_{current_agent.id}"
                 summary.append(
                     f"paso {index}.{chain_depth}: agent {chain_name} -> "
@@ -441,6 +465,8 @@ def execute_goal(
     max_rounds: int = 3,
     resume_session: str | None = None,
     context_client: Any = None,
+    auto_expand: bool = False,
+    expand_client: Any = None,
 ) -> dict[str, Any]:
     """Plan a goal with the LLM and execute it through the dispatcher.
 
@@ -465,6 +491,30 @@ def execute_goal(
         plan = planner.plan_goal(goal, catalog_prompt)
     except (RuntimeError, ValueError, KeyError) as error:
         return {"ok": False, "results": [], "summary": str(error)}
+
+    # Respuesta directa del orquestador (plan sin pasos): tareas de lectura/
+    # análisis que el LLM responde con el contexto disponible, sin agentes.
+    if not plan.steps and plan.answer:
+        if session_dir is not None:
+            from pathlib import Path
+
+            from .context_schema import SESSION_SCHEMA, persist_session
+
+            session_dir_path = Path(session_dir)
+            session_dir_path.mkdir(parents=True, exist_ok=True)
+            persist_session(
+                os.fspath(session_dir_path / f"session_{int(time.time() * 1000)}.json"),
+                {
+                    "schema": SESSION_SCHEMA,
+                    "session_id": str(uuid.uuid4())[:8],
+                    "created_ms": int(time.time() * 1000),
+                    "goal": goal,
+                    "provider_agnostic": True,
+                    "steps": [],
+                    "answer": plan.answer,
+                },
+            )
+        return {"ok": True, "results": [], "summary": plan.answer, "answer": plan.answer}
 
     resolver: ContextPreprocessor | None = None
     refiner: Any | None = None
@@ -502,7 +552,10 @@ def execute_goal(
             )
         execution_logger = ExecutionLogger(str(root / ".satellite" / "executions"))
 
-    return run_plan(
+    # Auto-expansión: si durante el run se crearon agentes nuevos, persistirlos.
+    known_ids = {a.id for a in registry.list_agents()}
+
+    result = run_plan(
         registry,
         security,
         plan,
@@ -514,4 +567,17 @@ def execute_goal(
         session_path=session_path,
         resumed_from=resumed_from,
         execution_logger=execution_logger,
+        auto_expand=auto_expand,
+        expand_client=expand_client,
+        project_root=project_root,
     )
+
+    if auto_expand and project_root is not None:
+        from pathlib import Path
+
+        from .store import AgentStore
+
+        new_ids = {a.id for a in registry.list_agents()} - known_ids
+        if new_ids:
+            AgentStore(str(Path(project_root))).save_registry(registry)
+    return result

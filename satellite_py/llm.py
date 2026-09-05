@@ -217,10 +217,21 @@ def llm_role_config(data: Mapping[str, Any] | None, role: str) -> LLMConfig:
         base = {}
     role_section = base.get(role) if isinstance(base.get(role), Mapping) else {}
     base_section = {k: v for k, v in base.items() if k not in _ROLES}
-    merged_llm = {**base_section, **dict(role_section)}
+
+    # Si el rol define provider/model pero no api_key/base_url y el global
+    # tampoco los trae, usar los del primer rol que sí los defina — así una
+    # key puesta en un rol (p.ej. context) se reutiliza en los demás.
+    merged = {**base_section, **dict(role_section)}
+    if not merged.get("api_key") and not base.get("api_key"):
+        for other in _ROLES:
+            other_sec = base.get(other) if isinstance(base.get(other), Mapping) else {}
+            if other_sec.get("api_key"):
+                merged["api_key"] = other_sec["api_key"]
+                break
+
     return _resolve_from_data(
         {
-            "llm": merged_llm,
+            "llm": merged,
             "local_llm": data.get("local_llm") if isinstance(data.get("local_llm"), dict) else {},
             "use_local_llm": bool(data.get("use_local_llm", False)),
         }

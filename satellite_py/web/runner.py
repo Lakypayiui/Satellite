@@ -75,6 +75,24 @@ def _host_bin() -> str | None:
     return os.getenv("SATELLITE_AGENT_HOST", "./build/satellite_agent_host")
 
 
+# Agentes nativos 1-5: viven in-process en el C++ (el registry Python puede
+# no tenerlos si el proyecto se inicializó sin el binario C++). Se exponen al
+# catálogo/grafo para que el planner y la UI siempre los vean.
+_NATIVE_AGENTS: list[dict[str, Any]] = [
+    {"id": 1, "name": "sum", "description": "Suma dos números", "capabilities": ["math.sum"]},
+    {"id": 2, "name": "subtract", "description": "Resta dos números", "capabilities": ["math.subtract"]},
+    {"id": 3, "name": "multiply", "description": "Multiplica dos números", "capabilities": ["math.multiply"]},
+    {"id": 4, "name": "divide", "description": "Divide dos números", "capabilities": ["math.divide"]},
+    {"id": 5, "name": "average", "description": "Promedio de un array", "capabilities": ["math.average"]},
+]
+
+
+def _native_fallback(registry: AgentRegistry) -> list[dict[str, Any]]:
+    """Devuelve los nativos que faltan en el registry (los C++ in-process)."""
+    known = {a.id for a in registry.list_agents()}
+    return [n for n in _NATIVE_AGENTS if n["id"] not in known]
+
+
 def _catalog(registry: AgentRegistry) -> str:
     lines = ["Agentes disponibles:"]
     for agent in registry.list_agents():
@@ -82,6 +100,9 @@ def _catalog(registry: AgentRegistry) -> str:
             continue  # bloqueados: fuera del catálogo del planner
         caps = ", ".join(agent.capabilities) or "-"
         lines.append(f"- id {agent.id}: {agent.name or agent.id} [{caps}]")
+    for native in _native_fallback(registry):
+        caps = ", ".join(native["capabilities"])
+        lines.append(f"- id {native['id']}: {native['name']} [{caps}]")
     return "\n".join(lines)
 
 
@@ -93,10 +114,8 @@ def build_graph(registry: AgentRegistry | None = None) -> dict[str, Any]:
     if registry is None:
         registry = _registry(project_root())
     capability_target: dict[str, int] = {}
-    for agent in registry.list_agents():
-        for cap in agent.capabilities:
-            capability_target.setdefault(cap, agent.id)
 
+    # Descriptores reales + nativos C++ ausentes del registry (in-process).
     nodes = []
     for agent in registry.list_agents():
         nodes.append({
@@ -110,13 +129,28 @@ def build_graph(registry: AgentRegistry | None = None) -> dict[str, Any]:
             "enabled": agent.enabled,
             "complements": list(agent.complements),
         })
+    for native in _native_fallback(registry):
+        nodes.append({
+            "id": native["id"],
+            "name": native["name"],
+            "description": native["description"],
+            "capabilities": list(native["capabilities"]),
+            "context_requirements": [],
+            "has_library": False,
+            "is_native": True,
+            "enabled": True,
+            "complements": [],
+        })
+    for node in nodes:
+        for cap in node["capabilities"]:
+            capability_target.setdefault(cap, node["id"])
 
     edges = []
-    for agent in registry.list_agents():
-        for cap in agent.complements:
+    for node in nodes:
+        for cap in node.get("complements") or []:
             target = capability_target.get(cap)
-            if target is not None and target != agent.id:
-                edges.append({"source": agent.id, "target": target, "capability": cap})
+            if target is not None and target != node["id"]:
+                edges.append({"source": node["id"], "target": target, "capability": cap})
     return {"nodes": nodes, "edges": edges}
 
 
@@ -125,13 +159,24 @@ def build_graph(registry: AgentRegistry | None = None) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 def _wrap_dispatch(registry: AgentRegistry, emit):
-    """Patch ``orchestrator.dispatch``; returns the original to restore with."""
+    """Patch ``orchestrator.dispatch``; returns the original to restore with.
+
+    The wrapper must keep the exact signature of ``dispatcher.dispatch``
+    (``run_plan`` calls it positionally: registry, security, request, host).
+    """
     orch = importlib.import_module("satellite_py.orchestrator")
     dispatch_orig = orch.dispatch
 
-    def wrapper(request: dict, *args, **kwargs):
+    def wrapper(
+        reg: AgentRegistry,
+        security: Any,
+        request: dict,
+        agent_host_bin: str = "./build/satellite_agent_host",
+        *args: Any,
+        **kwargs: Any,
+    ):
         agent_id = request.get("agent_id")
-        descriptor = registry.find_agent(int(agent_id)) if agent_id is not None else None
+        descriptor = reg.find_agent(int(agent_id)) if agent_id is not None else None
         name = descriptor.name if descriptor else f"id {agent_id}"
         routed_from = (request.get("metadata") or {}).get("routed_from")
         emit({
@@ -140,7 +185,7 @@ def _wrap_dispatch(registry: AgentRegistry, emit):
             "name": name,
             "routed_from": routed_from,
         })
-        result = dispatch_orig(request, *args, **kwargs)
+        result = dispatch_orig(reg, security, request, agent_host_bin, *args, **kwargs)
         emit({
             "type": "step_result",
             "agent_id": agent_id,
@@ -200,12 +245,22 @@ def _run_pipeline(state: RunState, root: Path, goal: str, resume: str | None, ma
             return
 
         # Compresión semántica a doc neutro (se pasa como contexto inicial);
-        # con --resume no se re-comprime (se usa la sesión previa).
+        # con --resume no se re-comprime (se usa la sesión previa). Para
+        # preguntas generales (meta) se omite: no hay contexto que comprimir.
         neutral = None
-        if result.refined_prompt and not resume:
+        refined_goal = result.refined_prompt or goal
+        from ..context import _is_meta_task as _meta
+
+        if result.refined_prompt and not resume and not _meta(goal):
             try:
-                neutral = compressor.compress(goal, result.refined_prompt)
-                emit({"type": "compressed", "context": neutral})
+                compressed = compressor.compress(goal, result.refined_prompt)
+                # Validar vocabulario neutro: si el modelo no siguió el formato
+                # (sin intention), descartar — no contaminar el run.
+                if isinstance(compressed, dict) and compressed.get("intention"):
+                    neutral = compressed
+                    emit({"type": "compressed", "context": neutral})
+                else:
+                    emit({"type": "compressed_fallback", "error": "formato de compresión inválido (sin intention)"})
             except Exception as error:  # noqa: BLE001 - seguir sin capa semántica
                 emit({"type": "compressed_fallback", "error": str(error)})
 
@@ -215,7 +270,7 @@ def _run_pipeline(state: RunState, root: Path, goal: str, resume: str | None, ma
             result_final = execute_goal(
                 registry=registry,
                 security=security,
-                goal=goal,
+                goal=refined_goal,
                 catalog_prompt=_catalog(registry),
                 planner=planner,
                 agent_host_bin=host_bin,
@@ -225,6 +280,8 @@ def _run_pipeline(state: RunState, root: Path, goal: str, resume: str | None, ma
                 max_rounds=max_rounds,
                 resume_session=resume,
                 context_client=ctx_client,
+                auto_expand=True,
+                expand_client=orch_client,
             )
         finally:
             orch.dispatch = dispatch_orig  # restore

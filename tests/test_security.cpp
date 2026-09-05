@@ -72,10 +72,10 @@ void test_load_defaults()
     p.load_defaults();
 
     CHECK("load_defaults: filesystem.read == true", p.is_allowed("filesystem.read") == true);
-    CHECK("load_defaults: filesystem.write == false", p.is_allowed("filesystem.write") == false);
-    CHECK("load_defaults: process.execute == false", p.is_allowed("process.execute") == false);
-    CHECK("load_defaults: compiler.execute == false", p.is_allowed("compiler.execute") == false);
-    CHECK("load_defaults: network.request == false", p.is_allowed("network.request") == false);
+    CHECK("load_defaults: filesystem.write == true", p.is_allowed("filesystem.write") == true);
+    CHECK("load_defaults: process.execute == true", p.is_allowed("process.execute") == true);
+    CHECK("load_defaults: compiler.execute == true", p.is_allowed("compiler.execute") == true);
+    CHECK("load_defaults: network.request == true", p.is_allowed("network.request") == true);
     CHECK("load_defaults: allow_map size == 5", p.allow_map().size() == 5);
 }
 

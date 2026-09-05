@@ -7,6 +7,8 @@ endfunction()
 
 add_satellite_test(test_agent_core test_agent_core.cpp)
 
+add_satellite_test(test_sandbox test_sandbox.cpp)
+
 add_satellite_test(test_registry test_registry.cpp)
 
 add_satellite_test(test_validator test_validator.cpp)
@@ -55,6 +57,20 @@ add_satellite_test(test_security test_security.cpp)
 add_satellite_test(test_observability test_observability.cpp)
 add_satellite_test(test_cli test_cli.cpp ../cli/SatelliteCLI.cpp)
 target_compile_definitions(test_cli PRIVATE SATELLITE_ROOT="${PROJECT_SOURCE_DIR}" SATELLITE_VERSION="${PROJECT_VERSION}")
+if(WIN32)
+  # test_cli ejecuta los binarios de build/satellite (subprocesos) y necesita
+  # las DLLs de runtime de MinGW al arrancar; copiarlas a su dir de salida.
+  file(GLOB CLI_RUNTIME_DLLS "C:/msys64/mingw64/bin/libstdc++-6.dll"
+       "C:/msys64/mingw64/bin/libgcc_s_seh-1.dll"
+       "C:/msys64/mingw64/bin/libgcc_s_*.dll"
+       "C:/msys64/mingw64/bin/libwinpthread-1.dll")
+  if(CLI_RUNTIME_DLLS)
+    add_custom_command(TARGET test_cli POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CLI_RUNTIME_DLLS} $<TARGET_FILE_DIR:test_cli>
+      COMMENT "Copiando DLLs de runtime junto a test_cli")
+  endif()
+endif()
 
 add_satellite_test(test_portability test_portability.cpp)
 target_compile_definitions(test_portability PRIVATE SATELLITE_ROOT="${PROJECT_SOURCE_DIR}")

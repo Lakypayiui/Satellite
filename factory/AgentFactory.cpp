@@ -54,6 +54,16 @@ std::string AgentFactory::get_test_executable_path(AgentID id) const
 bool AgentFactory::compile(const std::vector<std::string>& sources, const std::vector<std::string>& extra_flags, std::string& output, std::string& error) const
 {
     std::ostringstream cmd;
+#ifdef _WIN32
+    // g++ invoca as.exe/ld.exe/cc1plus por nombre: asegurar su dir en el PATH
+    // del subproceso (puede no estar en el PATH del proceso del framework).
+    std::filesystem::path compiler_path(compiler_);
+    std::filesystem::path compiler_dir = compiler_path.parent_path();
+    if (!compiler_dir.empty() && compiler_dir != std::filesystem::path("."))
+    {
+        cmd << "set PATH=\"" << compiler_dir.string() << ";%PATH%\" && ";
+    }
+#endif
     cmd << compiler_ << " -std=c++17";
 
     for (const auto& flag : extra_flags)
@@ -198,11 +208,13 @@ FactoryResult AgentFactory::create_agent(const AgentSpec& spec)
 #include "core/agent/AgentRequest.h"
 #include "core/agent/AgentResult.h"
 #include "core/agent/IAgent.h"
+#include "core/agent/AgentSandbox.h"
 #include "factory/AgentPlugin.h"
 #include <json.hpp>
 #include <fstream>
 #include <iostream>
 #include <cmath>
+#include <filesystem>
 
 int main()
 {
@@ -211,7 +223,9 @@ int main()
     using satellite::core::agent::AgentResult;
     using satellite::core::agent::AgentStatus;
     using satellite::core::agent::AgentID;
-
+    const int agent_id_for_test = )HARNESS";
+        harness += std::to_string(spec.id);
+        harness += R"HARNESS(;
     satellite::core::agent::IAgent* agent = satellite_create_agent();
     if (!agent)
     {
@@ -262,6 +276,22 @@ int main()
         req.input = input;
         req.context = json::object();
         req.metadata = json::object();
+
+        // Sandbox de efectos para los test cases: work_dir = directorio del
+        // test (los efectos reales los testea el harness en un temporal).
+        satellite::core::agent::AgentSandbox test_sandbox;
+        {
+            namespace fs = std::filesystem;
+            test_sandbox.work_dir = fs::temp_directory_path() /
+                ("satellite_test_agent_" + std::to_string(agent_id_for_test));
+            std::error_code ec;
+            fs::create_directories(test_sandbox.work_dir, ec);
+        }
+        test_sandbox.allow_fs_write = true;
+        test_sandbox.allow_fs_read = true;
+        test_sandbox.allow_process = true;
+        test_sandbox.allow_network = false;
+        req.sandbox = &test_sandbox;
 
         AgentResult result = agent->execute(req);
 
@@ -328,7 +358,17 @@ int main()
     {
         std::array<char, 128> buffer;
         std::string result_str;
-        std::string test_cmd = "\"" + test_exe + "\" 2>&1";
+        std::string test_cmd;
+#ifdef _WIN32
+        // El exe del harness necesita las DLLs de runtime de MinGW.
+        std::filesystem::path test_compiler_dir(
+            std::filesystem::path(compiler_).parent_path());
+        if (!test_compiler_dir.empty())
+        {
+            test_cmd = "set PATH=\"" + test_compiler_dir.string() + ";%PATH%\" && ";
+        }
+#endif
+        test_cmd += "\"" + test_exe + "\" 2>&1";
         std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(test_cmd.c_str(), "r"), pclose);
         if (!pipe)
         {

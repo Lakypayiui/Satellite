@@ -11,6 +11,10 @@ Run with::
 from __future__ import annotations
 
 import os
+import secrets
+import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -32,11 +36,91 @@ app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 # Raíz de proyecto activa (mutable desde la UI: "abrir carpeta").
 _ROOT: str | None = None
 
+# Área permitida: SATELLITE_WEB_ROOT o el cwd. Todo cambio de raíz y todo
+# acceso a archivos/dirs queda confinado a este árbol (defensa en profundidad
+# para una consola que además puede escribir archivos).
+_MAX_GOAL_CHARS = 4000
+_RUN_WINDOW_SECS = 60.0
+_run_times: list[float] = []
+_run_lock = threading.Lock()
+
+
+def _run_limit() -> int:
+    try:
+        return max(1, int(os.getenv("SATELLITE_WEB_MAX_RUNS", "5")))
+    except ValueError:
+        return 5
+
+
+def _auth_token() -> str | None:
+    token = os.getenv("SATELLITE_WEB_TOKEN", "").strip()
+    return token or None
+
+
+@app.middleware("http")
+async def _auth_middleware(request, call_next):
+    """Si SATELLITE_WEB_TOKEN está definida, toda ruta /api exige el token.
+
+    Se compara en tiempo constante (secrets.compare_digest). El token llega
+    por header ``X-Satellite-Token`` o cookie ``satellite_token``; sin token
+    configurado la consola sigue abierta (bind local por defecto).
+    """
+    token = _auth_token()
+    if token and request.url.path.startswith("/api"):
+        supplied = (
+            request.headers.get("x-satellite-token")
+            or request.cookies.get("satellite_token")
+            or ""
+        )
+        if not secrets.compare_digest(supplied, token):
+            return JSONResponse({"detail": "no autorizado"}, status_code=401)
+    return await call_next(request)
+
+
+def _base_root() -> Path:
+    return Path(os.getenv("SATELLITE_WEB_ROOT") or os.getcwd()).resolve()
+
+
+def _within_base(candidate: Path) -> bool:
+    try:
+        candidate.relative_to(_base_root())
+        return True
+    except ValueError:
+        return False
+
 
 def _root() -> Path:
-    if _ROOT:
+    if _ROOT and _within_base(Path(_ROOT).resolve()):
         return project_root(_ROOT)
-    return project_root(os.getenv("SATELLITE_WEB_ROOT") or os.getcwd())
+    return project_root(_base_root())
+
+
+def _is_satellite_meta(root: Path, full: Path) -> bool:
+    """Rechaza lecturas/escrituras dentro de ``.satellite/`` (config, keys)."""
+    try:
+        full.relative_to(root / ".satellite")
+        return True
+    except ValueError:
+        return False
+
+
+def _sanitize_goal(goal: str) -> str:
+    """Quita caracteres de control y limita la longitud (entrada al LLM)."""
+    cleaned = "".join(
+        ch for ch in goal if ch in "\n\t" or ch >= " "
+    )
+    return cleaned[:_MAX_GOAL_CHARS]
+
+
+def _throttle_run() -> None:
+    """Rate-limit simple de runs (DoS por runs concurrentes)."""
+    limit = _run_limit()
+    now = time.monotonic()
+    with _run_lock:
+        _run_times[:] = [t for t in _run_times if now - t < _RUN_WINDOW_SECS]
+        if len(_run_times) >= limit:
+            raise HTTPException(429, "demasiados runs en este minuto")
+        _run_times.append(now)
 
 
 def _need_store(root: Path):
@@ -72,7 +156,12 @@ def system():
 @app.get("/api/dirs")
 def list_dirs(path: str = Query("", description="directorio absoluto a listar")):
     """Lista directorios del sistema para 'abrir carpeta' desde la UI."""
-    base = Path(path) if path else Path.home()
+    if path:
+        base = Path(path).expanduser().resolve()
+        if not _within_base(base):
+            raise HTTPException(403, "fuera del área permitida")
+    else:
+        base = _base_root()
     try:
         entries = []
         for child in sorted(base.iterdir(), key=lambda p: p.name.lower()):
@@ -88,22 +177,59 @@ def list_dirs(path: str = Query("", description="directorio absoluto a listar"))
 
 @app.post("/api/project/set")
 def project_set(body: dict[str, Any]):
-    """Cambia la raíz de proyecto activa (abrir carpeta desde la UI)."""
+    """Cambia la raíz de proyecto activa (abrir carpeta desde la UI).
+
+    La nueva raíz DEBE estar dentro del área permitida
+    (``SATELLITE_WEB_ROOT`` o el cwd del servidor): apuntar el root a
+    ``C:\\`` ya no es posible (el límite dejaría de proteger).
+    """
     global _ROOT
     candidate = Path(str(body.get("path", "") or "")).expanduser()
     if not candidate.is_dir():
         raise HTTPException(400, f"no existe: {candidate}")
-    _ROOT = str(candidate.resolve())
+    resolved = candidate.resolve()
+    if not _within_base(resolved):
+        raise HTTPException(403, "fuera del área permitida (SATELLITE_WEB_ROOT o cwd)")
+    _ROOT = str(resolved)
     return {"ok": True, "root": _ROOT}
 
 
 @app.post("/api/project/init")
 def project_init():
-    """Inicializa el proyecto activo (`.satellite/` + registry + config)."""
+    """Inicializa el proyecto activo (`.satellite/` + registry + config).
+
+    Delega al binario C++ cuando está disponible (registra los agentes
+    nativos 1-5 y escribe el config completo); sin binario, usa el
+    inicializador Python (registry vacío).
+    """
     root = _root()
     store = runner._store(root)
+    if store.has_state():
+        return {"ok": False, "error": "proyecto ya inicializado (.satellite existe)"}
+
+    # Mismo comportamiento que la CLI Python unificada: delegar al C++.
+    try:
+        from ..runtime.cpp_cli_bridge import available as cpp_available
+        from ..runtime.cpp_cli_bridge import cpp_bin, run_cpp
+
+        if cpp_available():
+            # run_cpp corre con cwd del proceso; lanzamos con cwd=root para
+            # que el init C++ escriba en el proyecto activo.
+            process = subprocess.run(
+                [cpp_bin(), "init"],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=str(root),
+            )
+            if process.returncode != 0:
+                return {"ok": False, "error": process.stderr.strip() or "init C++ falló"}
+            return {"ok": True, "root": str(root), "initialized": True, "via": "cpp"}
+    except Exception:  # noqa: BLE001 - fallback al inicializador Python
+        pass
+
     store.initialize()
-    return {"ok": True, "root": str(root), "initialized": True}
+    return {"ok": True, "root": str(root), "initialized": True, "via": "python"}
 
 
 @app.get("/api/context/index")
@@ -174,6 +300,8 @@ def files_tree(path: str = Query(".", description="directorio relativo")):
     base = (root / path).resolve()
     if base != root and root not in base.parents:
         raise HTTPException(403, "fuera del proyecto")
+    if _is_satellite_meta(root, base):
+        raise HTTPException(403, "área restringida (.satellite)")
     if not base.is_dir():
         raise HTTPException(404, "directorio no existe")
 
@@ -202,6 +330,8 @@ def file_read(path: str = Query(..., description="ruta relativa")):
     full = (root / path).resolve()
     if full != root and root not in full.parents:
         raise HTTPException(403, "fuera del proyecto")
+    if _is_satellite_meta(root, full):
+        raise HTTPException(403, "área restringida (.satellite)")
     if not full.is_file():
         raise HTTPException(404, "archivo no existe")
     try:
@@ -219,9 +349,58 @@ def file_write(body: dict[str, Any]):
     full = (root / path).resolve()
     if full != root and root not in full.parents:
         raise HTTPException(403, "fuera del proyecto")
+    if _is_satellite_meta(root, full):
+        raise HTTPException(403, "área restringida (.satellite)")
     full.parent.mkdir(parents=True, exist_ok=True)
     full.write_text(content, encoding="utf-8")
     return {"ok": True, "path": path}
+
+
+@app.post("/api/file/ask")
+def file_ask(body: dict[str, Any]):
+    """Responde preguntas sobre un archivo del proyecto con el LLM configurado.
+
+    El usuario NO da la ruta (el frontend ya tiene el archivo seleccionado);
+    ``path`` identifica el archivo y ``question`` es la pregunta. El contenido
+    del archivo se inyecta como contexto (recortado) y el LLM responde sin
+    ejecutar agentes.
+    """
+    path = str(body.get("path", ""))
+    question = str(body.get("question", "")).strip()
+    if not path or not question:
+        raise HTTPException(400, "faltan 'path' y 'question'")
+
+    root = _root()
+    full = (root / path).resolve()
+    if full != root and root not in full.parents:
+        raise HTTPException(403, "fuera del proyecto")
+    if _is_satellite_meta(root, full):
+        raise HTTPException(403, "área restringida (.satellite)")
+    if not full.is_file():
+        raise HTTPException(404, "archivo no existe")
+    try:
+        content = full.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        raise HTTPException(400, "no es un archivo de texto")
+
+    # Proveedor LLM configurado (rol orquestador) para responder.
+    from ..llm import llm_role_config
+
+    cfg = llm_role_config(_config(root) or {}, "orchestrator")
+    client = cfg.create_client()
+    prompt = (
+        f"Archivo: {path}\n\n"
+        "--- contenido ---\n"
+        f"{content[:16000]}\n"
+        "--- fin ---\n\n"
+        f"Pregunta sobre este archivo: {question}\n"
+        "Responde de forma clara y concisa, en español, citando el código si es útil."
+    )
+    try:
+        answer = client.complete("", prompt, max_tokens=1500)
+    except Exception as error:  # noqa: BLE001
+        raise HTTPException(502, f"el proveedor LLM falló: {error}")
+    return {"path": path, "question": question, "answer": answer}
 
 
 # --------------------------------------------------------------------------
@@ -315,9 +494,10 @@ def config_roles_put(body: dict[str, Any]):
 
 @app.post("/api/run")
 def run_start(body: dict[str, Any]):
-    goal = str(body.get("goal", "")).strip()
+    goal = _sanitize_goal(str(body.get("goal", "")).strip())
     if not goal:
         raise HTTPException(400, "falta 'goal'")
+    _throttle_run()
     root = _root()
     _need_store(root)
     run_id = runner.start_run(

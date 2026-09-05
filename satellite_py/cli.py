@@ -243,8 +243,10 @@ def run(
     input: str | None = typer.Option(None, "--input", "-i", help="Respuesta del usuario si el preprocesador pide más contexto"),
     max_rounds: int | None = typer.Option(None, "--rounds", help="Rondas máximas del preprocesador de contexto"),
     resume: str | None = typer.Option(None, "--resume", help="Reanudar desde una sesión previa (ruta a session_*.json o 'last')"),
+    no_auto_expand: bool = typer.Option(False, "--no-auto-expand", help="Desactivar la creación automática de agentes faltantes"),
 ) -> None:
     """Plan and execute a goal."""
+    auto_expand = not no_auto_expand
     store = _store()
     if not store.has_state():
         typer.echo("Error: proyecto no inicializado. Ejecuta: satellite init")
@@ -327,6 +329,7 @@ def run(
             session_dir=str(session_dir),
             max_rounds=preprocessor.max_rounds,
             resume_session=resume_path,
+            auto_expand=auto_expand,
         )
     except Exception as error:
         typer.echo(f"Error: {error}")
