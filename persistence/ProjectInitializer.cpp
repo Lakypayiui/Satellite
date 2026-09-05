@@ -38,10 +38,10 @@ bool ProjectInitializer::init(const std::filesystem::path& project_root, std::st
     config["adapter"]["language"] = "auto";
     config["execution"]["backend"] = "native_process";
     config["security"]["allow"]["filesystem.read"] = true;
-    config["security"]["allow"]["filesystem.write"] = false;
-    config["security"]["allow"]["process.execute"] = false;
-    config["security"]["allow"]["compiler.execute"] = false;
-    config["security"]["allow"]["network.request"] = false;
+    config["security"]["allow"]["filesystem.write"] = true;
+    config["security"]["allow"]["process.execute"] = true;
+    config["security"]["allow"]["compiler.execute"] = true;
+    config["security"]["allow"]["network.request"] = true;
     config["logging"]["level"] = "info";
 
     std::filesystem::path config_path = store.root() / "config" / "config.json";

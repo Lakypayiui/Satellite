@@ -19,6 +19,7 @@
 #include "core/dispatcher/Dispatcher.h"
 #include "core/agent/AgentRequest.h"
 #include "core/agent/AgentResult.h"
+#include "core/agent/AgentSandbox.h"
 #include "core/agent/AgentStatus.h"
 #include "config/Config.h"
 #include "security/SecurityPolicy.h"
@@ -38,6 +39,22 @@
 namespace satellite::cli
 {
 
+// Resuelve el compilador de la factory: `g++` si está en PATH, o la ruta de
+// MSYS2 en Windows cuando no (p.ej. cuando CTest corre sin el PATH de msys64).
+std::string compiler_path()
+{
+#ifdef _WIN32
+    // ¿g++ ya en PATH? (std::system con `where` no es fiable; probar el binario)
+    std::error_code ec;
+    if (std::filesystem::is_regular_file("C:/msys64/mingw64/bin/g++.exe", ec))
+    {
+        // Preferir la ruta explícita: aunque g++ esté en PATH, la de MSYS2 es
+        // la que compiló el framework (misma toolchain).
+        return "C:/msys64/mingw64/bin/g++.exe";
+    }
+#endif
+    return "g++";
+}
 
 SatelliteCLI::SatelliteCLI(std::filesystem::path project_root, std::filesystem::path framework_root)
     : project_root_(std::move(project_root))
@@ -611,7 +628,7 @@ int SatelliteCLI::cmd_agent_create(int argc, char* argv[])
     std::filesystem::path work_dir = project_root_ / ".satellite" / "agents" / "work";
     std::filesystem::create_directories(work_dir);
 
-    satellite::factory::AgentFactory factory(registry, work_dir, framework_root_, "g++");
+    satellite::factory::AgentFactory factory(registry, work_dir, framework_root_, compiler_path());
     satellite::factory::FactoryResult fr = factory.create_agent(spec);
 
     if (!fr.ok)
@@ -670,7 +687,7 @@ int SatelliteCLI::cmd_agent_test(int argc, char* argv[])
 
     std::filesystem::path work_dir = project_root_ / ".satellite" / "agents" / "work";
     std::filesystem::create_directories(work_dir);
-    satellite::factory::AgentFactory factory(registry, work_dir, framework_root_, "g++");
+    satellite::factory::AgentFactory factory(registry, work_dir, framework_root_, compiler_path());
     store.rebuild_agents(registry, factory);
 
     // Workaround: rebuild_agents salta agentes con agent=nullptr si ya existe capability en registry.
@@ -691,6 +708,37 @@ int SatelliteCLI::cmd_agent_test(int argc, char* argv[])
     request.agent_id = id;
     request.input = input;
     request.token_budget.max_tokens = 4000;
+
+    // Sandbox de efectos: work_dir = proyecto (el agente puede editar el repo);
+    // .satellite/ queda fuera de escritura. Los permisos salen del config del
+    // proyecto (security.allow), con deny-by-default si no hay config.
+    {
+        satellite::config::ProjectConfig project_cfg;
+        std::string cfg_error;
+        satellite::config::FrameworkConfig merged;
+        bool has_cfg = satellite::config::ProjectConfig::load_from_project(
+            project_root_, project_cfg, cfg_error);
+        if (has_cfg)
+        {
+            merged = project_cfg.merged(satellite::config::FrameworkConfig{});
+        }
+        else
+        {
+            merged.load_defaults();
+        }
+        satellite::core::agent::AgentSandbox sandbox;
+        sandbox.work_dir = project_root_;
+        sandbox.deny_write_prefixes.push_back(project_root_ / ".satellite");
+        sandbox.allow_fs_write = merged.security_allow.count("filesystem.write")
+            ? merged.security_allow.at("filesystem.write") : false;
+        sandbox.allow_fs_read = merged.security_allow.count("filesystem.read")
+            ? merged.security_allow.at("filesystem.read") : true;
+        sandbox.allow_process = merged.security_allow.count("process.execute")
+            ? merged.security_allow.at("process.execute") : false;
+        sandbox.allow_network = merged.security_allow.count("network.request")
+            ? merged.security_allow.at("network.request") : false;
+        request.sandbox = &sandbox;
+    }
 
     satellite::core::agent::AgentResult result = dispatcher.dispatch(request);
 
@@ -753,7 +801,7 @@ int SatelliteCLI::cmd_run(int argc, char* argv[])
         registry,
         work_dir,
         framework_root_,
-        "g++",
+        compiler_path(),
         satellite::factory::agent_execution_backend_from_string(config.agent_backend));
     store.rebuild_agents(registry, factory);
 
@@ -873,7 +921,7 @@ int SatelliteCLI::cmd_dispatch_step()
     std::filesystem::path work_dir = project_root_ / ".satellite" / "agents" / "work";
     std::error_code ec;
     std::filesystem::create_directories(work_dir, ec);
-    satellite::factory::AgentFactory factory(registry, work_dir, framework_root_, "g++");
+    satellite::factory::AgentFactory factory(registry, work_dir, framework_root_, compiler_path());
     store.rebuild_agents(registry, factory);
 
     // Reconstruir agentes custom cuyo descriptor quedó sin implementación.
@@ -894,6 +942,29 @@ int SatelliteCLI::cmd_dispatch_step()
     req.input = input;
     req.context = context;
     req.token_budget.max_tokens = 4000;
+
+    // Sandbox de efectos: el runtime Python lo pasa para agentes con
+    // capacidades de sistema (escritura/proceso/red). Si no viene, el agente
+    // queda en cómputo puro.
+    satellite::core::agent::AgentSandbox sandbox;
+    if (request.contains("sandbox") && request["sandbox"].is_object())
+    {
+        const nlohmann::json& sb = request["sandbox"];
+        sandbox.work_dir = sb.value("work_dir", std::filesystem::path("."));
+        sandbox.allow_fs_write = sb.value("allow_fs_write", false);
+        sandbox.allow_fs_read = sb.value("allow_fs_read", true);
+        sandbox.allow_process = sb.value("allow_process", false);
+        sandbox.allow_network = sb.value("allow_network", false);
+        if (sb.contains("deny_write_prefixes") && sb["deny_write_prefixes"].is_array())
+        {
+            for (const auto& prefix : sb["deny_write_prefixes"])
+            {
+                if (prefix.is_string())
+                    sandbox.deny_write_prefixes.push_back(prefix.get<std::string>());
+            }
+        }
+        req.sandbox = &sandbox;
+    }
 
     satellite::core::agent::AgentResult result = dispatcher.dispatch(req);
 

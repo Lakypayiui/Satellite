@@ -23,10 +23,10 @@ class SecurityPolicy:
         self.allow_map.update(
             {
                 "filesystem.read": True,
-                "filesystem.write": False,
-                "process.execute": False,
-                "compiler.execute": False,
-                "network.request": False,
+                "filesystem.write": True,
+                "process.execute": True,
+                "compiler.execute": True,
+                "network.request": True,
             }
         )
 

@@ -11,6 +11,10 @@
 namespace satellite::core::agent
 {
 
+// Declaración adelantada (ver AgentSandbox.h). Los agentes de cómputo puro no
+// leen este puntero => retrocompatible con la ABI actual.
+struct AgentSandbox;
+
 struct AgentRequest
 {
     AgentID agent_id = UNKNOWN_AGENT_ID;
@@ -19,6 +23,9 @@ struct AgentRequest
     nlohmann::json metadata;
     satellite::core::protocol::TokenBudget token_budget;
     satellite::core::protocol::ExecutionMetadata execution_metadata;
+    // Sandbox de efectos de sistema (opcional). Lo arma el host; el agente solo
+    // puede usarlo si la capability correspondiente está permitida.
+    const AgentSandbox* sandbox = nullptr;
 };
 
 } // namespace satellite::core::agent

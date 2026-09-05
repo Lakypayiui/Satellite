@@ -101,3 +101,27 @@ def test_load_llm_config_missing_file_falls_back_to_env(monkeypatch, tmp_path):
     resolved = load_llm_config(config_path)
     assert resolved.provider == "openai"
     assert resolved.model == "env-model"
+
+
+def test_llm_role_config_propagates_api_key_from_role_to_others():
+    """Una api_key puesta en un rol se reutiliza en los demás roles."""
+    from satellite_py.llm import llm_role_config
+
+    data = {
+        "llm": {
+            "provider": "openai-compatible",
+            "model": "nvidia/nemotron",
+            "base_url": "https://integrate.api.nvidia.com/v1",
+            "context": {"provider": "openai-compatible", "model": "nvidia/nemotron", "api_key": "nvapi-xyz"},
+            "orchestrator": {"provider": "openai-compatible", "model": "nvidia/nemotron"},
+        }
+    }
+    ctx = llm_role_config(data, "context")
+    orch = llm_role_config(data, "orchestrator")
+    agents = llm_role_config(data, "agents")
+    # la key definida en context llega a orchestrador y agents.
+    assert ctx.api_key == "nvapi-xyz"
+    assert orch.api_key == "nvapi-xyz"
+    assert agents.api_key == "nvapi-xyz"
+    assert ctx.base_url == "https://integrate.api.nvidia.com/v1"
+    assert orch.provider == "openai-compatible"

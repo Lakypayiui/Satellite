@@ -1,4 +1,5 @@
 #include "factory/AgentPlugin.h"
+#include "core/agent/AgentSandbox.h"
 
 #include <json.hpp>
 #include <cstring>
@@ -107,6 +108,29 @@ int main(int argc, char* argv[])
         {
             request.execution_metadata = json_request["execution_metadata"].get<
                 satellite::core::protocol::ExecutionMetadata>();
+        }
+
+        // Sandbox de efectos de sistema: el runtime Python pasa work_dir +
+        // capabilities autorizadas. Si no viene, el agente queda en cómputo
+        // puro (sin efectos).
+        satellite::core::agent::AgentSandbox sandbox;
+        if (json_request.contains("sandbox") && json_request["sandbox"].is_object())
+        {
+            const nlohmann::json& sb = json_request["sandbox"];
+            sandbox.work_dir = sb.value("work_dir", std::filesystem::path("."));
+            sandbox.allow_fs_write = sb.value("allow_fs_write", false);
+            sandbox.allow_fs_read = sb.value("allow_fs_read", true);
+            sandbox.allow_process = sb.value("allow_process", false);
+            sandbox.allow_network = sb.value("allow_network", false);
+            if (sb.contains("deny_write_prefixes") && sb["deny_write_prefixes"].is_array())
+            {
+                for (const auto& prefix : sb["deny_write_prefixes"])
+                {
+                    if (prefix.is_string())
+                        sandbox.deny_write_prefixes.push_back(prefix.get<std::string>());
+                }
+            }
+            request.sandbox = &sandbox;
         }
 
         const satellite::core::agent::AgentResult result = agent->execute(request);

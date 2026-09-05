@@ -27,10 +27,10 @@ bool SecurityPolicy::is_allowed(const std::string& capability) const
 void SecurityPolicy::load_defaults()
 {
     allow_["filesystem.read"] = true;
-    allow_["filesystem.write"] = false;
-    allow_["process.execute"] = false;
-    allow_["compiler.execute"] = false;
-    allow_["network.request"] = false;
+    allow_["filesystem.write"] = true;
+    allow_["process.execute"] = true;
+    allow_["compiler.execute"] = true;
+    allow_["network.request"] = true;
 }
 
 void SecurityPolicy::from_config(const std::map<std::string, bool>& allow_map)

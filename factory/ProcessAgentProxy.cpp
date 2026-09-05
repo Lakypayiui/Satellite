@@ -1,5 +1,7 @@
 #include "factory/ProcessAgentProxy.h"
 
+#include "core/agent/AgentSandbox.h"
+
 #include <atomic>
 #include <array>
 #include <cstdio>
@@ -77,6 +79,23 @@ std::string request_json(const satellite::core::agent::AgentRequest& request)
         {"token_budget", request.token_budget},
         {"execution_metadata", request.execution_metadata}
     };
+    // Sandbox de efectos: se serializa para que el host lo reconstruya.
+    if (request.sandbox)
+    {
+        const auto& sandbox = *request.sandbox;
+        nlohmann::json sb = {
+            {"work_dir", sandbox.work_dir.string()},
+            {"allow_fs_write", sandbox.allow_fs_write},
+            {"allow_fs_read", sandbox.allow_fs_read},
+            {"allow_process", sandbox.allow_process},
+            {"allow_network", sandbox.allow_network}
+        };
+        for (const auto& prefix : sandbox.deny_write_prefixes)
+        {
+            sb["deny_write_prefixes"].push_back(prefix.string());
+        }
+        json_request["sandbox"] = std::move(sb);
+    }
     return json_request.dump();
 }
 

@@ -3,187 +3,161 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Satellite Console</title>
+  <title>Satellite</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <!-- shell -->
-  <div class="app-shell">
+  <div id="app">
 
-    <!-- ======================= SIDEBAR ======================= -->
-    <aside class="sidebar">
-      <div class="logo">
-        <div class="logo-mark">◈</div>
-        <div class="logo-text">SATELLITE<span>console</span></div>
+    <!-- ======== Sidebar ======== -->
+    <aside id="sidebar">
+      <div class="brand">
+        <div class="brand-dot"></div>
+        <span>Satellite</span>
       </div>
 
-      <nav class="nav">
-        <button class="nav-item active" data-view="overview">
-          <span class="nav-ico">◉</span><span>Proyecto</span>
+      <button id="btnNewChat" class="new-chat">+ Nuevo chat</button>
+
+      <nav class="side-nav">
+        <button class="side-link active" data-view="chat">
+          <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h7"/></svg>
+          <span>Chat</span>
         </button>
-        <button class="nav-item" data-view="agents">
-          <span class="nav-ico">⬡</span><span>Agentes</span>
+        <button class="side-link" data-view="agents">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M4.9 4.9l2.1 2.1m10 10 2.1 2.1m0-14.2-2.1 2.1m-10 10-2.1 2.1"/></svg>
+          <span>Agentes</span>
         </button>
-        <button class="nav-item" data-view="editor">
-          <span class="nav-ico">⌘</span><span>Editor</span>
+        <button class="side-link" data-view="files">
+          <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
+          <span>Archivos</span>
         </button>
-        <button class="nav-item" data-view="run">
-          <span class="nav-ico">▶</span><span>Ejecutar</span>
-        </button>
-        <button class="nav-item" data-view="settings">
-          <span class="nav-ico">⚙</span><span>Ajustes</span>
+        <button class="side-link" data-view="settings">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.5h.1a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.2a1.7 1.7 0 0 0-1.5 1Z"/></svg>
+          <span>Ajustes</span>
         </button>
       </nav>
 
       <div class="side-foot">
         <div id="sysPill" class="sys-pill">—</div>
-        <div id="sysRootShort" class="root-short">sin proyecto</div>
-        <button id="btnPickFolder" class="ghost-btn">📂 Cambiar proyecto</button>
+        <div id="sysRoot" class="sys-root" title="">—</div>
+        <button id="btnPickFolder" class="foot-link">Cambiar proyecto</button>
       </div>
     </aside>
 
-    <!-- ======================= MAIN ======================= -->
-    <main class="main">
+    <!-- ======== Main ======== -->
+    <main id="main">
 
-      <!-- header -->
-      <header class="topbar">
-        <div class="crumb"><span id="crumbRoot">—</span></div>
-        <div class="spacer"></div>
-        <div id="runStatus" class="status-chip idle">idle</div>
-      </header>
-
-      <!-- views -->
-      <section id="view-overview" class="view active">
-        <div class="view-head">
-          <h1>Proyecto</h1>
-          <p class="sub">Estado del proyecto activo y acciones rápidas.</p>
+      <!-- CHAT -->
+      <section id="view-chat" class="view active">
+        <div id="chatScroll">
+          <div id="chatEmpty" class="chat-empty">
+            <div class="empty-mark">◈</div>
+            <h2>¿En qué puedo ayudarte?</h2>
+            <p>Pregunta sobre el proyecto, pide un cambio o deja que Satellite lo planifique con sus agentes.</p>
+            <div class="suggestions">
+              <button class="sugg" data-g="¿De qué trata este proyecto?">¿De qué trata este proyecto?</button>
+              <button class="sugg" data-g="Explica la estructura del proyecto">Explica la estructura del proyecto</button>
+              <button class="sugg" data-g="¿Qué agentes tienes disponibles?">¿Qué agentes tienes disponibles?</button>
+            </div>
+          </div>
+          <div id="chatLog"></div>
         </div>
-        <div class="card-grid">
-          <div class="glass-card" id="ovProject">
-            <div class="card-title">Proyecto activo</div>
-            <div class="big-path" id="ovRoot">—</div>
-            <div class="stat-row">
-              <div class="stat"><span class="stat-n" id="ovAgents">0</span><span class="stat-l">agentes</span></div>
-              <div class="stat"><span class="stat-n" id="ovInit">—</span><span class="stat-l">estado</span></div>
-              <div class="stat"><span class="stat-n" id="ovProvider">—</span><span class="stat-l">provider</span></div>
-            </div>
-            <div class="card-actions">
-              <button id="ovOpenFolder" class="btn ghost">Cambiar carpeta</button>
-              <button id="ovInitBtn" class="btn primary" hidden>Inicializar proyecto</button>
-            </div>
-          </div>
 
-          <div class="glass-card">
-            <div class="card-title">Explorador de archivos</div>
-            <div class="mini-tree" id="ovTree"></div>
-          </div>
+        <div id="composer">
+          <textarea id="input" rows="1" placeholder="Escribe un mensaje…  (Enter envía, Shift+Enter salto)"></textarea>
+          <button id="btnSend" aria-label="Enviar">
+            <svg viewBox="0 0 24 24"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4Z"/></svg>
+          </button>
         </div>
       </section>
 
+      <!-- AGENTS -->
       <section id="view-agents" class="view">
         <div class="view-head">
-          <h1>Agentes</h1>
-          <p class="sub">Red de microagentes — toca un nodo para ver capabilities y bloqueo.</p>
+          <h2>Agentes</h2>
+          <p>Red de microagentes — toca un nodo para ver capacidades y bloqueo.</p>
         </div>
-        <div id="cy" class="cy-canvas"></div>
-        <div class="legend">
-          <span><i class="dot native"></i>nativo</span>
-          <span><i class="dot plugin"></i>plugin</span>
-          <span><i class="dot blocked"></i>bloqueado</span>
-          <span class="lg-edge">→ complemento</span>
+        <div class="cy-wrap">
+          <div id="cy" class="cy-canvas"></div>
+          <div id="agentPanel"></div>
         </div>
       </section>
 
-      <section id="view-editor" class="view">
+      <!-- FILES -->
+      <section id="view-files" class="view">
         <div class="view-head">
-          <h1>Editor</h1>
-          <p class="sub"><span id="edPath" class="mono muted">(ningún archivo abierto)</span></p>
+          <h2>Archivos</h2>
+          <div id="fileBar" class="file-bar">
+            <button id="btnUpDir" class="icon-btn" title="subir">↑</button>
+            <span id="crumb" class="crumb-path"></span>
+            <input id="edDir" class="path-input" value="." spellcheck="false" hidden />
+            <button id="btnRefreshTree" class="icon-btn" title="recargar">↻</button>
+            <button id="btnCollapseAll" class="icon-btn" title="colapsar todo">−</button>
+          </div>
         </div>
         <div class="split">
-          <div class="file-panel">
-            <div class="mini-toolbar">
-              <button id="btnUpDir" class="icon-btn" title="subir">⬆</button>
-              <input id="edDir" class="path-input" value="." spellcheck="false" />
-              <button id="btnRefreshTree" class="icon-btn" title="recargar">⟳</button>
-            </div>
-            <div id="fileTree" class="file-tree"></div>
-          </div>
+          <div id="fileTree" class="file-tree"></div>
           <div class="code-panel">
-            <div class="mini-toolbar">
-              <button id="btnSave" class="btn primary small">💾 Guardar</button>
-              <span class="muted small" id="saveMsg"></span>
+            <div class="code-bar">
+              <span id="openPath" class="muted small">(ningún archivo seleccionado)</span>
+              <span class="spacer"></span>
+              <button id="btnSave" class="btn small">Guardar</button>
+              <span id="saveMsg" class="muted small"></span>
             </div>
             <div id="monaco" class="monaco-host"></div>
           </div>
-        </div>
-      </section>
-
-      <section id="view-run" class="view">
-        <div class="view-head">
-          <h1>Ejecutar</h1>
-          <p class="sub">Instrucción para el runtime — planea, ejecuta agentes y encadena complementos.</p>
-        </div>
-        <div class="run-box">
-          <textarea id="goalInput" class="goal-input" rows="3"
-            placeholder='Escribe una instrucción…  ej: "compila y corrige los errores del build" o "sumar 2 y 3"'></textarea>
-          <div class="run-toolbar">
-            <button id="btnRun" class="btn primary">▶ Ejecutar</button>
-            <span class="muted small" id="runGoalErr"></span>
+          <div class="chat-side">
+            <div class="chat-side-head">Pregunta sobre el código <span id="askFileHint" class="muted small"></span></div>
+            <div id="askLog" class="ask-log"><div class="ask-empty muted">Selecciona un archivo para poder preguntar acerca de él.</div></div>
+            <div class="ask-composer">
+              <textarea id="askInput" rows="1" placeholder="Pregunta sobre el archivo seleccionado…"></textarea>
+              <button id="btnAsk" aria-label="Preguntar">
+                <svg viewBox="0 0 24 24"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4Z"/></svg>
+              </button>
+            </div>
           </div>
         </div>
-        <div id="runLog" class="run-log"></div>
       </section>
 
+      <!-- SETTINGS -->
       <section id="view-settings" class="view">
         <div class="view-head">
-          <h1>Ajustes</h1>
-          <p class="sub">Proveedores LLM por rol (contexto / orquestador / agentes).</p>
+          <h2>Ajustes</h2>
+          <p>Proveedores LLM por rol.</p>
         </div>
-
-        <div class="settings-grid">
-          <!-- global -->
-          <div class="glass-card">
-            <div class="card-title">Provider global</div>
-            <label>Proveedor
-              <select id="gProvider" class="sel"></select>
-            </label>
-            <label>Modelo
-              <input id="gModel" class="inp" placeholder="p.ej. gpt-4o-mini" />
-            </label>
-            <label>Base URL
-              <input id="gBase" class="inp" placeholder="https://api.openai.com/v1" />
-            </label>
-            <label>API Key
-              <input id="gKey" class="inp" type="password" placeholder="•••••••• (opcional, si no usas env)" />
-            </label>
+        <div class="settings">
+          <div class="set-card">
+            <h3>Global</h3>
+            <label>Proveedor <select id="gProvider"></select></label>
+            <label>Modelo <input id="gModel" class="inp" placeholder="p.ej. gpt-4o-mini" /></label>
+            <label>Base URL <input id="gBase" class="inp" placeholder="https://api.openai.com/v1" /></label>
+            <label>API Key <input id="gKey" class="inp" type="password" placeholder="••••••••" /></label>
           </div>
-
-          <!-- por rol -->
-          <div class="glass-card wide">
-            <div class="card-title">Modelo por rol</div>
-            <div class="role-grid">
-              <div class="role-card" data-role="context">
-                <div class="role-name">◈ Contexto</div>
-                <label>Proveedor <select class="sel r-provider"></select></label>
+          <div class="set-card">
+            <h3>Roles</h3>
+            <div class="role-cards">
+              <div class="role" data-role="context">
+                <div class="role-title">Contexto</div>
+                <label>Proveedor <select class="r-provider"></select></label>
                 <label>Modelo <input class="inp r-model" placeholder="usar global" /></label>
               </div>
-              <div class="role-card" data-role="orchestrator">
-                <div class="role-name">⬡ Orquestador</div>
-                <label>Proveedor <select class="sel r-provider"></select></label>
+              <div class="role" data-role="orchestrator">
+                <div class="role-title">Orquestador</div>
+                <label>Proveedor <select class="r-provider"></select></label>
                 <label>Modelo <input class="inp r-model" placeholder="usar global" /></label>
               </div>
-              <div class="role-card" data-role="agents">
-                <div class="role-name">⬢ Agentes</div>
-                <label>Proveedor <select class="sel r-provider"></select></label>
+              <div class="role" data-role="agents">
+                <div class="role-title">Agentes</div>
+                <label>Proveedor <select class="r-provider"></select></label>
                 <label>Modelo <input class="inp r-model" placeholder="usar global" /></label>
               </div>
             </div>
-            <div class="card-actions">
-              <button id="btnApplyConfig" class="btn primary">Aplicar configuración</button>
-              <span class="muted small" id="cfgMsg"></span>
-            </div>
+          </div>
+          <div class="set-actions">
+            <button id="btnApplyConfig" class="btn primary">Aplicar</button>
+            <span id="cfgMsg" class="muted small"></span>
           </div>
         </div>
       </section>
@@ -191,24 +165,19 @@
     </main>
   </div>
 
-  <!-- modal: abrir carpeta -->
+  <!-- Modal abrir carpeta -->
   <div id="folderModal" class="modal hidden">
     <div class="modal-box">
-      <div class="modal-head">
-        <span>Abrir proyecto</span>
-        <button id="fmClose" class="icon-btn">✕</button>
-      </div>
+      <div class="modal-head"><span>Cambiar proyecto</span><button id="fmClose" class="icon-btn">✕</button></div>
       <div class="modal-dirs" id="fmDirs"></div>
       <div class="modal-foot">
-        <input id="fmPath" class="inp" placeholder="ruta directa (opcional)" />
+        <input id="fmPath" class="inp" placeholder="ruta directa" />
         <button id="fmOpen" class="btn primary">Abrir</button>
       </div>
     </div>
   </div>
 
-  <!-- Cytoscape -->
   <script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
-  <!-- Monaco -->
   <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs/loader.js"></script>
   <script src="/static/app.js"></script>
 </body>

@@ -4,12 +4,32 @@ from satellite_py.registry import AgentDescriptor, AgentRegistry
 from satellite_py.security import SecurityPolicy
 
 
+def test_execute_goal_direct_answer_returns_without_dispatch(monkeypatch, tmp_path):
+    """Plan con answer (sin pasos): responde directo, no ejecuta agentes."""
+    class _AnswerPlanner:
+        def plan_goal(self, goal, catalog_prompt):
+            return Plan(goal=goal, answer="Este proyecto es un framework de microagentes.")
+
+    registry = AgentRegistry()
+    calls = []
+    monkeypatch.setattr(orchestrator, "dispatch", lambda *a, **k: calls.append(1) or {"status": "SUCCESS"})
+    result = orchestrator.execute_goal(
+        registry, SecurityPolicy(), "explica este proyecto", "cat",
+        _AnswerPlanner(),
+        project_root=str(tmp_path),
+    )
+    assert result["ok"] is True
+    assert "microagentes" in result["summary"]
+    assert result.get("answer") == "Este proyecto es un framework de microagentes."
+    assert not calls  # ningún agente se ejecutó
+
+
 def test_run_plan_topological_order(monkeypatch):
     registry = AgentRegistry()
     registry.register_agent(AgentDescriptor(id=1, name="first", capabilities=["x"], library_path="a"))
     registry.register_agent(AgentDescriptor(id=2, name="second", capabilities=["x"], library_path="b"))
     calls = []
-    monkeypatch.setattr(orchestrator, "dispatch", lambda registry, security, request, agent_host_bin: calls.append(request["agent_id"]) or {"status": "SUCCESS"})
+    monkeypatch.setattr(orchestrator, "dispatch", lambda registry, security, request, agent_host_bin=None, **kwargs: calls.append(request["agent_id"]) or {"status": "SUCCESS"})
     result = orchestrator.run_plan(registry, SecurityPolicy({"x": True}), Plan([
         PlanStep(2, dependencies=[1], order=1), PlanStep(1, order=0)
     ]))
@@ -34,7 +54,7 @@ def test_run_plan_resolves_per_step_context(monkeypatch):
     registry.register_agent(AgentDescriptor(id=1, name="sum", capabilities=["x"], library_path="a"))
     captured = []
 
-    def fake_dispatch(registry, security, request, agent_host_bin):
+    def fake_dispatch(registry, security, request, agent_host_bin=None, **kwargs):
         captured.append(request["context"])
         return {"status": "SUCCESS", "output": {"result": 5}}
 
@@ -122,7 +142,7 @@ def test_run_plan_refreshes_context_between_steps(tmp_path, monkeypatch):
     registry.register_agent(AgentDescriptor(id=2, name="w2", capabilities=["x"], library_path="b"))
     captured = []
 
-    def fake_dispatch(registry, security, request, agent_host_bin):
+    def fake_dispatch(registry, security, request, agent_host_bin=None, **kwargs):
         captured.append(request["context"])
         # El paso 0 "modifica" el archivo que el paso 1 va a usar; se fuerza un
         # mtime futuro para que el paso 1 lo detecte como stale de forma fiable.
@@ -194,7 +214,7 @@ def test_run_plan_routes_output_directly_to_complement(monkeypatch):
     registry = _complement_registry()
     calls = []
 
-    def fake_dispatch(registry, security, request, agent_host_bin):
+    def fake_dispatch(registry, security, request, agent_host_bin=None, **kwargs):
         calls.append((request["agent_id"], request["input"], request["metadata"]))
         if request["agent_id"] == 1:
             return {"status": "SUCCESS", "output": {"code": "int main(){}", "lang": "cpp"}}
@@ -219,7 +239,7 @@ def test_run_plan_complement_failure_returns_to_orchestrator(monkeypatch):
     registry = _complement_registry()
     calls = []
 
-    def fake_dispatch(registry, security, request, agent_host_bin):
+    def fake_dispatch(registry, security, request, agent_host_bin=None, **kwargs):
         calls.append(request["agent_id"])
         if request["agent_id"] == 1:
             return {"status": "SUCCESS", "output": {"code": "broken"}}
@@ -248,7 +268,7 @@ def test_run_plan_no_complement_match_is_terminal(monkeypatch):
     # Sin agente con capability compile: el paso es hoja.
     calls = []
 
-    def fake_dispatch(registry, security, request, agent_host_bin):
+    def fake_dispatch(registry, security, request, agent_host_bin=None, **kwargs):
         calls.append(request["agent_id"])
         return {"status": "SUCCESS", "output": {"code": "x"}}
 
@@ -260,3 +280,32 @@ def test_run_plan_no_complement_match_is_terminal(monkeypatch):
     )
     assert result["ok"]
     assert calls == [1]  # solo el generador; sin complemento no encadena
+
+
+def test_run_plan_auto_expand_creates_missing_agent(monkeypatch):
+    """run_plan con auto_expand: el dispatch crea el agente y el paso corre."""
+    registry = AgentRegistry()
+    calls = []
+
+    def fake_dispatch(registry, security, request, agent_host_bin=None, **kwargs):
+        calls.append((request["agent_id"], request.get("metadata"), kwargs.get("auto_expand"), kwargs.get("goal")))
+        # El dispatch "crea" el agente 7 (como haría AgentExpander) y responde.
+        registry.register_agent(AgentDescriptor(
+            id=7, name="nuevo", capabilities=["x"], library_path="nuevo.dll",
+            input_schema={}, output_schema={},
+        ))
+        return {"status": "SUCCESS", "output": {"ok": True}}
+
+    monkeypatch.setattr(orchestrator, "dispatch", fake_dispatch)
+    result = orchestrator.run_plan(
+        registry,
+        SecurityPolicy(),
+        Plan(goal="hacer algo", steps=[PlanStep(9, order=0, description="paso con agente faltante")]),
+        auto_expand=True,
+    )
+    assert result["ok"]
+    # El dispatch recibió auto_expand=True y el goal de la corrida.
+    assert calls and calls[0][2] is True
+    assert calls[0][3] == "hacer algo"
+    # La description viaja en el metadata para derivar la capability.
+    assert calls[0][1] == {"description": "paso con agente faltante"}

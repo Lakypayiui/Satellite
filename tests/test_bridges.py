@@ -31,8 +31,23 @@ def test_factory_bridge_sends_goal_and_capability(monkeypatch):
         return type("Completed", (), {"returncode": 0, "stdout": '{"ok":true}', "stderr": ""})()
 
     monkeypatch.setattr(factory_bridge.subprocess, "run", fake_run)
-    assert factory_bridge.create_agent("build sum", "math.sum")["ok"]
-    assert captured["args"] == ["./build/satellite_factory_cli"]
+    # factory_bin explícito: evita la resolución de .exe dependiente del entorno.
+    assert factory_bridge.create_agent("build sum", "math.sum", factory_bin="./fake_factory_cli")["ok"]
+    assert captured["args"] == ["./fake_factory_cli"]
+
+
+def test_factory_bridge_default_resolves_exe_when_present(monkeypatch):
+    """En Windows el default resuelve .exe si la ruta sin extensión no existe."""
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        return type("Completed", (), {"returncode": 0, "stdout": '{"ok":true}', "stderr": ""})()
+
+    monkeypatch.setattr(factory_bridge.subprocess, "run", fake_run)
+    # Sin binario real en el cwd, el default queda como está (sin .exe).
+    factory_bridge.create_agent("goal", "cap")
+    assert captured["args"][0] in ("./build/satellite_factory_cli", "./build/satellite_factory_cli.exe")
 
 
 def test_bridge_rejects_empty_json(monkeypatch):

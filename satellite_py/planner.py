@@ -23,6 +23,9 @@ class PlanStep:
 class Plan:
     steps: list[PlanStep] = field(default_factory=list)
     goal: str = ""
+    # Respuesta directa del orquestador (sin agentes) cuando la tarea es de
+    # análisis/lectura y ningún agente del catálogo aplica. Vacío = ejecutar.
+    answer: str = ""
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -69,10 +72,17 @@ class Planner:
         return (
             "Eres el planificador de Satellite. Catálogo de agentes:\n"
             f"{catalog_prompt}\nObjetivo: {goal}\n"
-            'Responde SOLO con JSON: {"goal": "...", "steps": '
-            '[{"agent_id": N, "input": {...}, "dependencies": [índices], '
-            '"description": "...", "context": {"paths": ["ruta"], '
-            '"symbols": ["Simbolo"]}}]}. '
+            "Decide si la tarea requiere EJECUTAR agentes del catálogo o si "
+            "puedes RESPONDERLA directamente con el contexto disponible "
+            "(tareas de lectura/analisis/explicacion sin accion sobre el "
+            "proyecto). "
+            'Responde SOLO con JSON: {"goal": "...", '
+            '"steps": [{"agent_id": N, "input": {...}, "dependencies": '
+            '[índices], "description": "...", "context": {"paths": '
+            '["ruta"], "symbols": ["Simbolo"]}}], "answer": "..."}. '
+            'Si la tarea no necesita ejecutar agentes, usa "steps": [] y '
+            'escribe tu respuesta en "answer" (NO inventes agentes: si el '
+            "catálogo no tiene un agente para la tarea, responde directo). "
             '"context" indica qué archivos/símbolos del proyecto necesita esa '
             "subtarea (paths/symbols vacíos si no requiere contexto). "
             "Usa solo agentes del catálogo."
@@ -81,22 +91,64 @@ class Planner:
     def plan_goal(self, goal: str, catalog_prompt: str) -> Plan:
         prompt = self.build_prompt(goal, catalog_prompt)
         response_text = self._complete(prompt)
-        payload = _extract_json(response_text)
-        plan = Plan(
-            goal=payload.get("goal", goal),
-            steps=[
+        try:
+            payload = _extract_json(response_text)
+            if not isinstance(payload, dict):
+                raise ValueError("respuesta no es un objeto JSON")
+            plan = self._plan_from_payload(payload, goal)
+            return plan
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+            # Reintento con prompt mínimo (modelos pequeños generan JSON
+            # inválido con prompts largos): pedir SOLO el JSON, sin contexto.
+            short_prompt = (
+                f"Objetivo: {goal}\nCatálogo: {catalog_prompt[:400]}\n"
+                'Responde SOLO con JSON válido: {"goal": "...", '
+                '"steps": [{"agent_id": N, "input": {...}, "dependencies": [], '
+                '"description": "..."}], "answer": "..."}. '
+                "steps [] + answer si no hay agente adecuado."
+            )
+            retry_text = self._complete(short_prompt)
+            payload = _extract_json(retry_text)
+            if not isinstance(payload, dict):
+                raise ValueError(
+                    "el planificador no devolvió JSON válido tras reintentar: "
+                    + retry_text[:200]
+                )
+            return self._plan_from_payload(payload, goal)
+
+    def _plan_from_payload(self, payload: dict[str, Any], goal: str) -> Plan:
+        valid_steps = []
+        for index, step in enumerate(payload.get("steps", []) or []):
+            if not isinstance(step, dict):
+                continue
+            raw_id = step.get("agent_id")
+            # agent_id nulo/no numérico (LLMs pequeños emiten null o texto):
+            # descartar el paso — un plan sin pasos válidos y sin answer
+            # dispara el reintento en plan_goal.
+            try:
+                agent_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            valid_steps.append(
                 PlanStep(
-                    agent_id=step["agent_id"],
-                    input=step.get("input", {}),
-                    dependencies=step.get("dependencies", []),
+                    agent_id=agent_id,
+                    input=step.get("input", {}) or {},
+                    dependencies=[
+                        int(d) for d in step.get("dependencies", []) if str(d).lstrip("-").isdigit()
+                    ],
                     conditions=step.get("conditions", []),
                     order=step.get("order", index),
                     description=step.get("description", ""),
-                    context=step.get("context", {}),
+                    context=step.get("context", {}) or {},
                 )
-                for index, step in enumerate(payload.get("steps", []))
-            ],
+            )
+        plan = Plan(
+            goal=str(payload.get("goal") or goal),
+            steps=valid_steps,
+            answer=str(payload.get("answer", "")),
         )
+        if not plan.steps and not plan.answer:
+            raise ValueError("plan vacío: el modelo no dio steps ni answer")
         self.validate(plan)
         return plan
 
