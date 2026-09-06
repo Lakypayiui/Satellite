@@ -1,0 +1,56 @@
+# ============================================================
+# Satellite (Python runtime) — .gitignore
+# ============================================================
+
+# --- Estado del framework en proyectos consumidores ---
+.satellite/
+.agent/
+.context/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# --- Entorno local / LLM ---
+*.gguf
+third_party/
+models/
+
+# --- Editor / IDE / SO ---
+.vscode/
+.idea/
+.vs/
+*.swp
+*~
+*.sublime-*
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# --- Logs y temporales ---
+*.log
+*.tmp
+*.temp
+*.bak
+*.cache
+.cache/
+*.pid
+
+# --- Artefactos de binarios externos (si se compilan agentes) ---
+build/
+*.o
+*.obj
+*.dll
+*.exe
+
+# --- Herramienta del asistente ---
+.commandcode/
