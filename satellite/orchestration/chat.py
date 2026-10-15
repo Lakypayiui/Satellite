@@ -408,4 +408,9 @@ def reply_from_result(result: TaskResult) -> str:
         return f"Me falta una capacidad: {missing}. ¿Quieres que la cree?"
     if result.error:
         return f"No pude completarlo: {result.error}"
+    content = str(output.get("content") or "").strip()
+    if content:
+        # Camino del grafo: el texto que produjo el último nodo ES la respuesta.
+        # Antes se ignoraba y el usuario sólo veía el resumen «Node completado».
+        return content
     return result.summary or "(sin respuesta)"

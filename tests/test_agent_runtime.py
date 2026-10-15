@@ -154,3 +154,20 @@ def test_simple_no_tools(tmp_path: Path) -> None:
     result = run(agent.execute({"node_id": "n1"}, make_ctx(tmp_path)))
     assert result.status is AgentStatus.OK
     assert result.tool_calls == ()
+
+
+def test_summary_is_the_llm_text_when_there_is_nothing_else() -> None:
+    """Un nodo sin esquema resume con la respuesta del LLM, no con «Node completado»."""
+    from satellite.agents.runtime import _summarize
+
+    assert _summarize({}, {"content": "Esta carpeta contiene el framework."}, None) == (
+        "Esta carpeta contiene el framework."
+    )
+    # sigue siendo una línea y con tope, para el log de eventos
+    largo = _summarize({}, {"content": "x" * 500}, None)
+    assert len(largo) == 200 and largo.endswith("…")
+    assert "\n" not in _summarize({}, {"content": "uno\ndos"}, None)
+    # si hay algo más específico, manda eso
+    assert _summarize({}, {"path": "src/a.py", "content": "x"}, None) == "Trabajó en src/a.py"
+    assert _summarize({}, {}, "boom") == "Node falló: boom"
+    assert _summarize({}, {}, None) == "Node completado"

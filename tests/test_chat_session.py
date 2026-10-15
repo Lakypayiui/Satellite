@@ -103,3 +103,21 @@ def test_turn_roundtrip(tmp_path: Path) -> None:
     from satellite.orchestration.chat import Turn
 
     assert Turn.from_dict(turn.to_dict()) == turn
+
+
+def test_reply_from_a_graph_result_is_the_llm_answer() -> None:
+    """En el camino del grafo la respuesta es el texto del último nodo.
+
+    Sin `mode`, `reply_from_result` caía al `summary` («Node completado») mientras
+    el texto real se quedaba en `output["content"]`: el usuario no veía nada.
+    """
+    graph = TaskResult(
+        task_id="t",
+        status=TaskStatus.OK,
+        summary="Node completado",
+        output={"content": "Esta carpeta contiene el framework Satellite."},
+    )
+    assert reply_from_result(graph) == "Esta carpeta contiene el framework Satellite."
+
+    vacio = TaskResult(task_id="t2", status=TaskStatus.OK, summary="", output={})
+    assert reply_from_result(vacio) == "(sin respuesta)"

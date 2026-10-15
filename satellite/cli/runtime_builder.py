@@ -217,6 +217,7 @@ def build_runtime(project_root: Path, *, approval: object | None = None):
         sink=bus,
         expander=expander,
         plan_advisor=plan_advisor,
+        allow_chat_direct=settings.direct_reply,
     )
     orchestrator.preprocessor = _build_preprocessor(project_root, provider, settings)
     orchestrator.skill_runner = skill_runner

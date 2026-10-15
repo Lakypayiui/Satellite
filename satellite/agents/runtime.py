@@ -313,6 +313,15 @@ def _context_to_text(context: ContextBundle) -> str:
     )
 
 
+SUMMARY_LIMIT = 200
+
+
+def _clip_summary(text: object) -> str:
+    """Un resumen es una línea: sin saltos y con tope, para el log de eventos."""
+    flat = " ".join(str(text or "").split())
+    return flat if len(flat) <= SUMMARY_LIMIT else flat[: SUMMARY_LIMIT - 1] + "…"
+
+
 def _summarize(task: dict, output: dict | None, error: str | None) -> str:
     if error:
         return f"Node falló: {error}"
@@ -320,4 +329,8 @@ def _summarize(task: dict, output: dict | None, error: str | None) -> str:
         return f"Trabajó en {output['path']}"
     if output and output.get("summary"):
         return str(output["summary"])
+    if output and output.get("content"):
+        # El texto que respondió el LLM. Sin esto el resumen era "Node completado" y
+        # la respuesta se quedaba en el output sin que nadie la pintara.
+        return _clip_summary(output["content"])
     return "Node completado"
