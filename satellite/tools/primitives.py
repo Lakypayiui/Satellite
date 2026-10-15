@@ -34,6 +34,13 @@ class RunShellTool(RunCommandTool):
     def id(self) -> str:
         return "run_shell"
 
+    @property
+    def description(self) -> str:
+        return (
+            "Alias de run_command, con la misma política y el mismo motor: "
+            "NO abre un intérprete de shell."
+        )
+
 
 class RunPythonTool(Tool):
     """Ejecuta código Python en un subproceso aislado (sin shell)."""
@@ -44,7 +51,10 @@ class RunPythonTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Ejecuta código Python en un subproceso aislado y captura stdout/stderr."
+        return (
+            "Ejecuta código Python en un subproceso con entorno limpio y captura "
+            "stdout/stderr; el código puede leer y escribir lo que permita el sistema."
+        )
 
     @property
     def categories(self) -> tuple[str, ...]:

@@ -319,7 +319,7 @@ def _load_provider(project_root: Path) -> LLMProvider:
         except Exception as exc:
             raise ProviderError(
                 f"config de proveedor inválida en {config_path}: {exc}. "
-                "Configura un proveedor válido en 'satellite config'."
+                "Configura un proveedor válido con 'satellite provider'."
             ) from exc
     raise ProviderError(
         f"no hay proveedor LLM configurado: falta {config_path}. "

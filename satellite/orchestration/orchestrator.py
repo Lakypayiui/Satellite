@@ -86,7 +86,7 @@ class DefaultOrchestrator(Orchestrator):
         allow_options = bool(task.metadata.get("allow_plan_options", True))
         forced_plan = bool(task.metadata.get("plan_mode"))
         if self.plan_advisor is not None and allow_options and forced_plan:
-            surfaced = await self._plan_options(task, None)
+            surfaced = await self._plan_options(task, None, required=True)
             if surfaced is not None:
                 return await self._finish(task, surfaced)
 
@@ -221,16 +221,33 @@ class DefaultOrchestrator(Orchestrator):
         )
 
     async def _replan(self, task: Task) -> PlanningResult | None:
-        """Replanifica una vez; None si el planner falla."""
+        """Replanifica una vez; None si el planner falla (pero deja rastro)."""
         try:
             return await self.planner.plan(task, self.services.registry, context_hint=())
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — se reporta, no se esconde
+            # El fallback se mantiene (un planner que falla pregunta en vez de
+            # ejecutar), pero deja de ser invisible.
+            self._emit(
+                task,
+                EventType.PLAN_FAILED,
+                {"kind": "replan", "reason": f"el planner falló: {exc}"},
+            )
             return None
 
     async def _plan_options(
-        self, task: Task, planning: PlanningResult | None = None
+        self,
+        task: Task,
+        planning: PlanningResult | None = None,
+        *,
+        required: bool = False,
     ) -> TaskResult | None:
-        """Genera alternativas (modo plan); None si el asesor no las produce."""
+        """Genera alternativas (modo plan); ``None`` si el asesor no las produce.
+
+        ``required`` distingue el modo plan **pedido explícitamente** (fallar ahí es
+        un error que hay que decir) de la mejora automática ante una tarea ambigua
+        (ahí se mantiene el fallback: la clarificación del planner sigue valiendo).
+        En los dos casos se emite ``PLAN_FAILED``: nunca desaparece en silencio.
+        """
         from satellite.orchestration.planner_prompt import (
             build_catalog_context,
             render_history,
@@ -246,10 +263,30 @@ class DefaultOrchestrator(Orchestrator):
             options = await self.plan_advisor.generate(
                 task.goal, context=context, history=history, feedback=question
             )
-        except Exception:
-            return None
+        except Exception as exc:  # noqa: BLE001 — se reporta, no se esconde
+            reason = f"el asesor de plan falló: {exc}"
+            self._emit(task, EventType.PLAN_FAILED, {"kind": "error", "reason": reason})
+            if not required:
+                return None
+            return TaskResult(
+                task_id=task.task_id,
+                status=TaskStatus.FAILED,
+                error=f"el modo plan no pudo generar alternativas: {exc}",
+            )
         if options is None:
-            return None
+            reason = "el asesor no produjo alternativas válidas"
+            self._emit(task, EventType.PLAN_FAILED, {"kind": "empty", "reason": reason})
+            if not required:
+                return None
+            return TaskResult(
+                task_id=task.task_id,
+                status=TaskStatus.NEEDS_USER_INPUT,
+                summary=(
+                    "No pude generar alternativas para esa tarea. Reformúlala o "
+                    "cuéntame algo más de contexto."
+                ),
+                error=reason,
+            )
         return TaskResult(
             task_id=task.task_id,
             status=TaskStatus.NEEDS_USER_INPUT,

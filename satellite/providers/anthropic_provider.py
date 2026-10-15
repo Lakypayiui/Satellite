@@ -32,6 +32,17 @@ from satellite.providers.prefix import estimate_prefix_tokens, prefix_hash, pref
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
 
 
+def normalize_base_url(value: object) -> str:
+    """URL base del endpoint, sin duplicar ``/v1`` (el SDK añade ``/v1/messages``).
+
+    Misma regla que `config/models.py` aplica a ``/v1/models``.
+    """
+    url = str(value or "").strip().rstrip("/")
+    if url.endswith("/v1"):
+        url = url[: -len("/v1")]
+    return url
+
+
 class AnthropicProvider(LLMProvider):
     """Traduce el formato interno a la API de mensajes de Anthropic."""
 
@@ -55,10 +66,14 @@ class AnthropicProvider(LLMProvider):
         else:
             import anthropic
 
-            self._client = anthropic.AsyncAnthropic(
-                api_key=config.api_key or "not-needed",
-                timeout=timeout_s,
-            )
+            kwargs: dict = {
+                "api_key": config.api_key or "not-needed",
+                "timeout": timeout_s,
+            }
+            base_url = normalize_base_url(getattr(config, "base_url", None))
+            if base_url:
+                kwargs["base_url"] = base_url
+            self._client = anthropic.AsyncAnthropic(**kwargs)
 
     @property
     def automatic_cache(self) -> bool:

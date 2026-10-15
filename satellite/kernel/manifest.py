@@ -14,8 +14,25 @@ RESERVED_AGENT_IDS: frozenset[str] = frozenset(
     {"orchestrator", "agent_creator", "skill_curator"}
 )
 
+# Ids del kernel: ni agentes ni skills pueden crearse o sobrescribirse con ellos.
+# Cubre **todos** los tools que expone `build_tool_registry()`; hay un test de
+# guardia que falla si esta lista se queda atrás.
 RESERVED_SKILL_IDS: frozenset[str] = frozenset(
-    {"run_python", "run_shell", "read_file", "write_file", "list_dir", "search_files"}
+    {
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_dir",
+        "search_files",
+        "run_command",
+        "run_shell",
+        "run_python",
+        "git_status",
+        "request_context",
+        "delegate",
+        "search_skills",
+        "propose_skill",
+    }
 )
 
 RESERVED_IDS: frozenset[str] = RESERVED_AGENT_IDS | RESERVED_SKILL_IDS

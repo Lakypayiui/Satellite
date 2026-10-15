@@ -8,6 +8,21 @@ from typer.testing import CliRunner
 from satellite.cli.app import app
 
 
+def test_tool_descriptions_are_honest_about_the_shell() -> None:
+    """Lo que lee el modelo no puede prometer lo que la tool no hace."""
+    from satellite.cli.runtime_builder import build_tool_registry
+
+    by_id = {tool.id: tool for tool in build_tool_registry().all()}
+    run_command = by_id["run_command"].description
+    run_shell = by_id["run_shell"].description
+    run_python = by_id["run_python"].description
+
+    assert run_command != run_shell
+    assert "no interpreta" in run_command
+    assert "NO abre un intérprete de shell" in run_shell
+    assert "subproceso" in run_python
+
+
 def _write_skill(skills_root: Path, skill_id: str, description: str) -> None:
     directory = skills_root / skill_id
     directory.mkdir(parents=True, exist_ok=True)
@@ -44,13 +59,23 @@ def test_skills_list_empty(tmp_path: Path, monkeypatch) -> None:
     assert "satellite tools list" in result.output
 
 
-def test_tools_list_shows_primitives(tmp_path: Path, monkeypatch) -> None:
+def test_tools_list_shows_kernel_tools(tmp_path: Path, monkeypatch) -> None:
     _use_home(monkeypatch, tmp_path)
     result = CliRunner().invoke(app, ["tools", "list"])
     assert result.exit_code == 0
-    for expected in ("run_python", "run_shell", "read_file", "write_file", "list_dir", "search_files"):
+    for expected in (
+        "run_python",
+        "run_shell",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_dir",
+        "search_files",
+    ):
         assert expected in result.output
-    assert "6 primitivas del kernel" in result.output
+    # todas las del runtime son del kernel (ids reservados)
+    assert "herramientas del kernel" in result.output
+    assert "id reservado" in result.output
 
 
 def test_skills_search(tmp_path: Path, monkeypatch) -> None:

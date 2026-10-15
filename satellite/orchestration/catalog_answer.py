@@ -92,17 +92,17 @@ def _skills(services) -> str:
 
 
 def _tools(services) -> str:
-    from satellite.kernel.manifest import is_reserved
-
     registry = getattr(services, "tools", None)
     tools = list(registry.all()) if registry is not None else []
     if not tools:
         return "Ahora mismo no tengo herramientas registradas."
-    primitives = [tool for tool in tools if is_reserved(tool.id)]
-    lines = [f"Tengo {len(tools)} herramientas ({len(primitives)} son primitivas del kernel):"]
+    lines = [f"Tengo {len(tools)} herramientas:"]
     for tool in sorted(tools, key=lambda item: item.id):
-        mark = " [primitiva]" if is_reserved(tool.id) else ""
-        lines.append(f"- {tool.id}{mark}: {tool.description}")
+        lines.append(f"- {tool.id}: {tool.description}")
+    lines.append(
+        "Todas son del kernel: no son agentes ni skills, y sus ids están "
+        "reservados (una skill no puede suplantarlas)."
+    )
     return "\n".join(lines)
 
 

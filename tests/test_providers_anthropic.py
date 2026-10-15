@@ -128,6 +128,54 @@ def test_max_tokens_is_always_sent() -> None:
     assert all("max_tokens" in call for call in client.calls)
 
 
+def test_base_url_is_used_and_v1_is_not_duplicated(monkeypatch) -> None:
+    """El `base_url` del config llega al SDK, sin duplicar `/v1`."""
+    captured: dict = {}
+
+    class FakeAsyncAnthropic:
+        def __init__(self, **kwargs):
+            captured.clear()
+            captured.update(kwargs)
+
+    import anthropic
+
+    monkeypatch.setattr(anthropic, "AsyncAnthropic", FakeAsyncAnthropic)
+
+    AnthropicProvider(
+        ProviderConfig(
+            name="anthropic",
+            model="claude-x",
+            api_key="k",
+            base_url="https://gw.example/v1",
+        )
+    )
+    assert captured["base_url"] == "https://gw.example"
+    assert captured["api_key"] == "k"
+
+    AnthropicProvider(
+        ProviderConfig(
+            name="anthropic",
+            model="claude-x",
+            api_key="k",
+            base_url="https://gw.example/",
+        )
+    )
+    assert captured["base_url"] == "https://gw.example"
+
+    AnthropicProvider(ProviderConfig(name="anthropic", model="claude-x", api_key="k"))
+    assert "base_url" not in captured  # sin config no se toca el defecto del SDK
+
+
+def test_normalize_base_url_edge_cases() -> None:
+    from satellite.providers.anthropic_provider import normalize_base_url
+
+    assert normalize_base_url(None) == ""
+    assert normalize_base_url("") == ""
+    assert normalize_base_url("https://api.anthropic.com") == "https://api.anthropic.com"
+    assert normalize_base_url("https://api.anthropic.com/v1/") == "https://api.anthropic.com"
+    assert normalize_base_url("https://gw/v1/v1") == "https://gw/v1"
+
+
 def test_tool_result_translation() -> None:
     provider, client = make_provider()
     client.response = FakeAnthropicResponse(content=[FakeBlock("text", "ok")])

@@ -217,21 +217,18 @@ def _load_skills():
 
 @tools_app.command("list")
 def tools_list() -> None:
-    """Lista las herramientas del runtime, marcando las primitivas del kernel."""
+    """Lista las herramientas del runtime (todas del kernel, con id reservado)."""
     from satellite.cli.runtime_builder import build_tool_registry
-    from satellite.kernel.manifest import is_reserved
 
     items = build_tool_registry().all()
     for tool in items:
         categories = ", ".join(getattr(tool, "categories", ()) or ()) or "-"
-        mark = "*" if is_reserved(tool.id) else " "
-        say(f"{mark} {tool.id:<14} {categories:<16} {tool.description}")
-    primitives = sum(1 for tool in items if is_reserved(tool.id))
+        say(f"  {tool.id:<14} {categories:<16} {tool.description}")
     say("")
-    say(f"{len(items)} herramientas · {primitives} primitivas del kernel (*)")
+    say(f"{len(items)} herramientas del kernel, todas con id reservado.")
     say(
-        "Las primitivas no salen en 'skills list': son kernel inmutable "
-        "(no se editan ni se borran). Las skills son datos declarativos."
+        "Ninguna se puede suplantar con un agente o skill, y no salen en "
+        "'skills list': son kernel inmutable (no se editan ni se borran)."
     )
 
 

@@ -74,7 +74,10 @@ class RunCommandTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Ejecuta un comando de terminal (sin shell) y captura stdout/stderr."
+        return (
+            "Ejecuta un programa con argumentos (sin shell): no interpreta tuberías, "
+            "comodines ni variables de entorno; captura stdout/stderr."
+        )
 
     @property
     def parameters_schema(self) -> dict:

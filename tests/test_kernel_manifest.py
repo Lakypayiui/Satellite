@@ -28,9 +28,24 @@ def test_event_types_extended() -> None:
         "delegation_completed",
         "policy_violation",
         "safe_mode_entered",
+        "plan_failed",
     }
     present = {e.value for e in EventType}
     assert expected <= present
+
+
+def test_reserved_ids_cover_every_runtime_tool() -> None:
+    """Guardia: si el runtime suma una tool, tiene que estar reservada.
+
+    Evita que un agente o una skill puedan suplantar un id del kernel (hoy
+    faltaban siete: `edit_file`, `run_command`, `git_status`, `request_context`,
+    `delegate`, `search_skills` y `propose_skill`).
+    """
+    from satellite.cli.runtime_builder import build_tool_registry
+
+    tool_ids = {tool.id for tool in build_tool_registry().all()}
+    assert tool_ids, "el registro de tools no debería estar vacío"
+    assert tool_ids <= RESERVED_SKILL_IDS, sorted(tool_ids - RESERVED_SKILL_IDS)
 
 
 def test_reserved_ids() -> None:

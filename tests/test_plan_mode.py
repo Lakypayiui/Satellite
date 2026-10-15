@@ -186,10 +186,37 @@ def make_registry() -> DefaultAgentRegistry:
     return registry
 
 
-def make_orchestrator(planner, advisor, *, runner=None) -> DefaultOrchestrator:
+class FailingAdvisor:
+    """Asesor que revienta (p. ej. proveedor caído)."""
+
+    def __init__(self, message: str = "sin conexión") -> None:
+        self.message = message
+        self.calls = 0
+
+    async def generate(self, task, *, context="", history="", feedback=""):
+        self.calls += 1
+        raise RuntimeError(self.message)
+
+
+class Sink:
+    """Recoge los eventos emitidos (para comprobar que nada es silencioso)."""
+
+    def __init__(self) -> None:
+        self.events: list = []
+
+    def emit(self, event) -> None:
+        self.events.append(event)
+
+
+def make_orchestrator(planner, advisor, *, runner=None, sink=None) -> DefaultOrchestrator:
     services = RuntimeServices(registry=make_registry())
     return DefaultOrchestrator(
-        planner, runner or OkRunner(), services, plan_advisor=advisor, allow_chat_direct=False
+        planner,
+        runner or OkRunner(),
+        services,
+        plan_advisor=advisor,
+        allow_chat_direct=False,
+        sink=sink,
     )
 
 
@@ -236,6 +263,61 @@ def test_advisor_failure_falls_back(tmp_path: Path) -> None:
     orch = make_orchestrator(ClarifyingPlanner("needs_clarification"), advisor)
     result = run(orch.execute(Task(goal="x", project_root=tmp_path)))
     assert result.output["mode"] == "needs_clarification"
+
+
+# --- el modo plan ya no desaparece en silencio ---
+
+
+def test_forced_plan_failure_is_loud(tmp_path: Path) -> None:
+    """Plan pedido y asesor caído: error legible + evento (antes: silencio)."""
+    from satellite.core.events import EventType
+
+    sink = Sink()
+    advisor = FailingAdvisor("sin conexión")
+    orch = make_orchestrator(ClarifyingPlanner("plan"), advisor, sink=sink)
+    task = Task(goal="agrega login", project_root=tmp_path, metadata={"plan_mode": True})
+
+    result = run(orch.execute(task))
+
+    assert result.status is TaskStatus.FAILED
+    assert "sin conexión" in (result.error or "")
+    assert "modo plan" in (result.error or "")
+    plan_events = [e for e in sink.events if e.event_type is EventType.PLAN_FAILED]
+    assert len(plan_events) == 1
+    assert plan_events[0].payload["kind"] == "error"
+    assert "sin conexión" in plan_events[0].payload["reason"]
+
+
+def test_forced_plan_without_options_says_so(tmp_path: Path) -> None:
+    from satellite.core.events import EventType
+
+    sink = Sink()
+    orch = make_orchestrator(ClarifyingPlanner("plan"), StubAdvisor(None), sink=sink)
+    task = Task(goal="agrega login", project_root=tmp_path, metadata={"plan_mode": True})
+
+    result = run(orch.execute(task))
+
+    assert result.status is TaskStatus.NEEDS_USER_INPUT
+    assert "alternativas" in (result.error or "")
+    plan_events = [e for e in sink.events if e.event_type is EventType.PLAN_FAILED]
+    assert len(plan_events) == 1
+    assert plan_events[0].payload["kind"] == "empty"
+
+
+def test_ambiguity_failure_keeps_the_fallback_but_leaves_a_trace(tmp_path: Path) -> None:
+    """Mejora automática: el flujo no cambia, pero deja de ser invisible."""
+    from satellite.core.events import EventType
+
+    sink = Sink()
+    orch = make_orchestrator(
+        ClarifyingPlanner("needs_clarification"), FailingAdvisor(), sink=sink
+    )
+    result = run(orch.execute(Task(goal="x", project_root=tmp_path)))
+
+    assert result.output["mode"] == "needs_clarification"
+    plan_events = [e for e in sink.events if e.event_type is EventType.PLAN_FAILED]
+    assert len(plan_events) == 1
+    assert "sin conexión" in plan_events[0].payload["reason"]
 
 
 # --- conversación ---

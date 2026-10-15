@@ -96,9 +96,11 @@ def test_tools_answer_marks_kernel_primitives(tmp_path: Path) -> None:
     ]
     text = answer_catalog_question("¿qué herramientas tienes?", make_services(tmp_path, tools=tools))
     assert text is not None
-    assert "run_python [primitiva]" in text
+    assert "run_python" in text
     assert "git_status" in text
-    assert "1 son primitivas" in text
+    # todas las del runtime son del kernel y no se pueden suplantar
+    assert "Todas son del kernel" in text
+    assert "reservados" in text
 
 
 def test_model_answer_uses_the_configured_provider(tmp_path: Path) -> None:

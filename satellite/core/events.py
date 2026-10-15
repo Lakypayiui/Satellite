@@ -21,6 +21,8 @@ class EventType(Enum):
     RETRY = "retry"
     NODE_STUCK = "node_stuck"
     TASK_FINISHED = "task_finished"
+    # El asesor de plan no pudo proponer alternativas (antes desaparecía en silencio)
+    PLAN_FAILED = "plan_failed"
     # Propuestas y aprobación (agentes y skills)
     AGENT_PROPOSED = "agent_proposed"
     AGENT_APPROVED = "agent_approved"
