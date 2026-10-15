@@ -103,3 +103,42 @@ def test_the_node_context_carries_the_conversation(tmp_path: Path) -> None:
 def test_no_history_means_no_extra_section(tmp_path: Path) -> None:
     task = Task(goal="hola", project_root=tmp_path)
     assert _with_conversation(ContextBundle(), task).sections == ()
+
+
+# --- respuesta final en prosa ---
+
+
+def _resultado(output: dict, summary: str = ""):
+    from satellite.core.task import TaskResult, TaskStatus
+
+    return TaskResult(task_id="t", status=TaskStatus.OK, summary=summary, output=output)
+
+
+def test_structured_output_is_written_up_for_the_user(tmp_path: Path) -> None:
+    """Un listado crudo se convierte en una frase, conservando los datos."""
+    provider = FakeLLM(
+        script=[{"content": "La carpeta contiene el modelo gemma y un instalador."}]
+    )
+    orch = _orchestrator(provider)
+    task = Task(goal="dime qué hace la carpeta", project_root=tmp_path)
+    result = _resultado({"estructura": [{"ruta": "a.txt", "tipo": "file"}]})
+
+    nuevo = run(orch._answer_in_prose(task, result))
+
+    assert nuevo.output["content"].startswith("La carpeta contiene")
+    assert nuevo.output["data"] == {"estructura": [{"ruta": "a.txt", "tipo": "file"}]}
+    assert nuevo.summary == nuevo.output["content"]
+    assert len(provider.requests) == 1
+
+
+def test_prose_output_does_not_cost_an_extra_call(tmp_path: Path) -> None:
+    """Si el nodo ya devolvió texto, no se llama al modelo (ni un token)."""
+    provider = FakeLLM(script=[{"content": "no debería usarse"}])
+    orch = _orchestrator(provider)
+    task = Task(goal="dime qué hace", project_root=tmp_path)
+    result = _resultado({"summary": "El proyecto es un servidor pequeño."})
+
+    mismo = run(orch._answer_in_prose(task, result))
+
+    assert mismo is result
+    assert provider.requests == []

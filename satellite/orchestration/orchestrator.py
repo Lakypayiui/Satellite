@@ -25,6 +25,18 @@ from satellite.orchestration.chat_detector import async_is_chat_goal
 from satellite.persistence.base import Store
 
 
+_PROSE_KEYS = ("content", "answer", "text", "summary")
+
+
+def _has_prose(output: dict) -> bool:
+    """True si la salida ya trae texto legible (y no hace falta redactar nada)."""
+    for key in _PROSE_KEYS:
+        value = output.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
+
+
 class DefaultOrchestrator(Orchestrator):
     """Coordina planificación, ejecución y replanificación acotada."""
 
@@ -353,8 +365,73 @@ class DefaultOrchestrator(Orchestrator):
             return PlanningResult(kind="needs_clarification", question=outcome.question)
         return None
 
+    async def _answer_in_prose(self, task: Task, result: TaskResult) -> TaskResult:
+        """Si el nodo devolvió datos y no texto, redacta la respuesta para el usuario.
+
+        Sin esto, una salida estructurada (listados, ids, arrays) llegaba tal cual y el
+        usuario veía un payload en lugar de una respuesta. Si la salida ya trae prosa, no
+        se llama al modelo: no cuesta nada. Los datos crudos se conservan en
+        ``output["data"]``.
+        """
+        if self.services.provider is None or result.error:
+            return result
+        salida = dict(result.output or {})
+        if not salida or _has_prose(salida):
+            return result
+        import json
+
+        from satellite.orchestration.planner_prompt import render_history
+
+        conversacion = render_history(task.metadata.get("history")).strip()
+        prompt = (
+            "Redacta la respuesta para el usuario a partir de los datos de abajo. Sé "
+            "claro y breve, en su idioma, y no menciones JSON, tools, agentes ni grafos.\n\n"
+            f"Petición del usuario:\n{task.goal}\n"
+        )
+        if conversacion:
+            prompt += f"\nConversación reciente:\n{conversacion}\n"
+        datos = json.dumps(salida, ensure_ascii=False, default=str)[:4000]
+        prompt += f"\nDatos que produjo el trabajo:\n{datos}"
+        try:
+            response = await self.services.provider.complete(
+                LLMRequest(
+                    messages=(
+                        Message(
+                            role=Role.SYSTEM,
+                            content="Eres la consola de Satellite y explicas resultados.",
+                        ),
+                        Message(role=Role.USER, content=prompt),
+                    ),
+                    temperature=0.0,
+                )
+            )
+        except Exception:  # noqa: BLE001 — sin redacción se sigue mostrando el dato
+            return result
+        texto = (response.content or "").strip()
+        if not texto:
+            return result
+        nuevo = dict(salida)
+        nuevo["content"] = texto
+        nuevo["data"] = salida  # los datos originales no se pierden
+        return TaskResult(
+            task_id=result.task_id,
+            status=result.status,
+            summary=texto,
+            output=nuevo,
+            findings=result.findings,
+            metrics=ExecutionMetrics(
+                tokens_in=(result.metrics.tokens_in if result.metrics else 0)
+                + (response.usage.prompt_tokens if response.usage else 0),
+                tokens_out=(result.metrics.tokens_out if result.metrics else 0)
+                + (response.usage.completion_tokens if response.usage else 0),
+                duration_ms=result.metrics.duration_ms if result.metrics else 0,
+            ),
+            error=result.error,
+        )
+
     async def _finish(self, task: Task, result: TaskResult) -> TaskResult:
         """Persiste el estado final y emite TASK_FINISHED."""
+        result = await self._answer_in_prose(task, result)
         if self.store is not None:
             await self.store.save_state(task.task_id, {"status": result.status.value})
         self._emit(task, EventType.TASK_FINISHED, {"status": result.status.value})

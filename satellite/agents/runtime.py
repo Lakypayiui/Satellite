@@ -354,13 +354,28 @@ class LLMAgent(Agent):
         return record, result
 
     def _validate_schema(self, candidate: dict | None):
-        """Devuelve (ok, output o mensaje de error)."""
+        """Devuelve (ok, output o mensaje de error).
+
+        Se valida contra una copia **normalizada** del esquema (el del autor no se toca):
+        si declara `properties`, se prohíben las claves extra, y una salida vacía no
+        vale. Sin esto, un esquema sin `required` daba por bueno cualquier objeto
+        inventado — p.ej. `{"title": …}` en un agente que debía explicar un proyecto — y
+        el usuario veía el payload en vez de una respuesta.
+        """
         if candidate is None:
             return False, "no se encontró JSON en la respuesta"
+        if candidate == {} or candidate == []:
+            return False, "la salida está vacía"
         try:
+            import copy
+
             import jsonschema
 
-            jsonschema.validate(candidate, self.spec.output_schema)
+            schema = self.spec.output_schema or {}
+            if isinstance(schema, dict) and schema.get("properties"):
+                schema = copy.deepcopy(schema)
+                schema.setdefault("additionalProperties", False)
+            jsonschema.validate(candidate, schema)
             return True, candidate
         except Exception as exc:  # noqa: BLE001
             return False, str(exc)

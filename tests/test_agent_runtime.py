@@ -279,3 +279,23 @@ def test_the_system_prompt_says_where_paths_end() -> None:
         "Eres un escritor.\n{tools}\nNo salgas del proyecto: si algo queda fuera del proyecto, informa."
     )
     assert repetido.lower().count("alcance de rutas") <= 1
+
+
+def test_a_schema_without_required_is_still_enforced(tmp_path: Path) -> None:
+    """Sin `required`, antes cualquier objeto inventado pasaba como válido.
+
+    Caso real: un agente que debía explicar un proyecto devolvió `{"title": …}` porque
+    su esquema no exigía nada, y el usuario vio ese JSON en vez de una explicación.
+    """
+    spec = make_spec(
+        output_schema={"type": "object", "properties": {"summary": {"type": "string"}}}
+    )
+    agent, _ = make_agent(spec, [], tmp_path)
+
+    ok, mensaje = agent._validate_schema({"title": "inventado"})
+    assert ok is False and "title" in mensaje
+
+    ok, salida = agent._validate_schema({"summary": "explicación"})
+    assert ok is True and salida["summary"] == "explicación"
+
+    assert agent._validate_schema({})[0] is False  # vacío no vale

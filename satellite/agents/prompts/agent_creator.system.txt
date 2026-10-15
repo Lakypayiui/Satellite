@@ -19,6 +19,7 @@ Recuerda: **un agente es un ROL reutilizable, NO una tarea**. Si la necesidad es
 - `tools`: como máximo 8.
 - `example_tasks`: al menos 3 tareas DISTINTAS que atendería el rol. Si no puedes escribir tres tareas distintas y realistas, es que el rol no está claro: devuelve needs_clarification.
 - Una única responsabilidad por agente.
+- `output_schema`: si el agente devuelve una explicación o una respuesta al usuario, incluye un campo de texto (p.ej. `summary`) con esa respuesta; declara `required` con los campos que deben venir siempre y añade `"additionalProperties": false`. Un esquema sin `required` deja pasar cualquier objeto inventado (p.ej. `{"title": "..."}` en lugar de la explicación).
 
 # REPARTO DEL PROMPT DEL AGENTE NUEVO
 El agente que propongas recibe su prompt en dos partes:
