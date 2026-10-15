@@ -29,7 +29,7 @@ from satellite.core.errors import ProviderError
 from satellite.core.events import EventType, ExecutionEvent
 from satellite.events.bus import EventBus
 from satellite.kernel.manifest import RESERVED_AGENT_IDS, verify_and_restore
-from satellite.kernel.migrations import migrate, migrate_prompt_files
+from satellite.kernel.migrations import migrate, migrate_agent_specs, migrate_prompt_files
 from satellite.kernel.paths import ensure_dirs, resolve_paths
 from satellite.kernel.policy import PolicyMode, Settings, load_settings
 from satellite.metrics.pricing import PriceBook
@@ -102,6 +102,8 @@ def build_runtime(project_root: Path, *, approval: object | None = None):
     verify_and_restore(base_dir / "prompts", paths.agents_root, patterns=("*.txt",))
     # Migración tolerante del layout antiguo (<id>.txt → par system/user).
     migrate_prompt_files(paths.agents_root)
+    # Esquema v4: los specs guardados sin `lifecycle` quedan normalizados.
+    migrate_agent_specs(paths.agents_root)
     catalog_store = AgentCatalogStore(paths.agents_root)
 
     settings = load_settings(project_root / CONFIG_PATH)
@@ -330,6 +332,38 @@ def _role_provider(project_root: Path, role: str, default: LLMProvider) -> LLMPr
         return default
 
 
+def _max_tokens_for(llm: dict, provider: dict | None = None, role: str = "") -> int | None:
+    """Tope de salida: rol en ``llm.max_tokens`` → proveedor guardado → escalar."""
+    configured = llm.get("max_tokens")
+    role_value: object = None
+    global_value: object = None
+    if isinstance(configured, dict):
+        if role:
+            role_value = configured.get(role)
+        if role_value is None:
+            role_value = configured.get("*")
+    elif configured is not None:
+        global_value = configured
+    provider_value = provider.get("max_tokens") if isinstance(provider, dict) else None
+    for value in (role_value, provider_value, global_value):
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _model_overrides(llm: dict, provider: dict | None = None) -> dict:
+    """Capacidades por modelo: ``llm.models`` + las del proveedor guardado."""
+    result: dict = {}
+    for source in (llm.get("models"), (provider or {}).get("models")):
+        if isinstance(source, dict):
+            result.update(source)
+    return result
+
+
 def _provider_config_from(data: dict, role: str | None = None) -> ProviderConfig | None:
     """Construye ProviderConfig desde el config, priorizando el rol indicado."""
     llm = data.get("llm", {}) if isinstance(data.get("llm"), dict) else {}
@@ -346,6 +380,8 @@ def _provider_config_from(data: dict, role: str | None = None) -> ProviderConfig
                 model=role_cfg.get("model") or saved_match.get("model", ""),
                 base_url=saved_match.get("base_url", ""),
                 api_key=saved_match.get("api_key"),
+                max_tokens=_max_tokens_for(llm, saved_match, role),
+                model_overrides=_model_overrides(llm, saved_match),
             )
         if role_cfg.get("base_url") or role_cfg.get("model") or role_cfg.get("provider"):
             return ProviderConfig(
@@ -353,6 +389,8 @@ def _provider_config_from(data: dict, role: str | None = None) -> ProviderConfig
                 model=role_cfg.get("model", "gpt-4o-mini"),
                 base_url=role_cfg.get("base_url"),
                 api_key=role_cfg.get("api_key"),
+                max_tokens=_max_tokens_for(llm, role_cfg, role),
+                model_overrides=_model_overrides(llm, role_cfg),
             )
     if data.get("name") or data.get("model") or data.get("base_url"):
         return ProviderConfig(
@@ -361,6 +399,7 @@ def _provider_config_from(data: dict, role: str | None = None) -> ProviderConfig
             api_key=data.get("api_key"),
             base_url=data.get("base_url"),
             temperature=float(data.get("temperature", 0.0)),
-            max_tokens=data.get("max_tokens"),
+            max_tokens=_max_tokens_for(llm, data),
+            model_overrides=_model_overrides(llm, data),
         )
     return None

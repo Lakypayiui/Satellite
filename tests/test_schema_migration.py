@@ -10,15 +10,16 @@ from satellite.persistence.store import FileStore
 from satellite.skills.models import SkillManifest
 
 
-def test_schema_version_is_three() -> None:
-    assert migrations.SCHEMA_VERSION == 3
+def test_schema_version_is_four() -> None:
+    # Guardia explícita: subir la versión es una decisión consciente (v4: lifecycle).
+    assert migrations.SCHEMA_VERSION == 4
 
 
 def test_migrate_bumps_creates_subdirs_and_is_idempotent(tmp_path: Path) -> None:
     assert migrations.current_version(tmp_path) == 0
     applied = migrations.migrate(tmp_path)
-    assert applied == [1, 2, 3]
-    assert migrations.current_version(tmp_path) == 3
+    assert applied == list(range(1, migrations.SCHEMA_VERSION + 1))
+    assert migrations.current_version(tmp_path) == migrations.SCHEMA_VERSION
     for sub in migrations.REQUIRED_SUBDIRS:
         assert (tmp_path / sub).is_dir()
     assert migrations.migrate(tmp_path) == []
@@ -33,14 +34,14 @@ def test_current_version_is_tolerant(tmp_path: Path) -> None:
 def test_migrate_accepts_a_lower_target(tmp_path: Path) -> None:
     assert migrations.migrate(tmp_path, target=2) == [1, 2]
     assert migrations.current_version(tmp_path) == 2
-    assert migrations.migrate(tmp_path) == [3]
+    assert migrations.migrate(tmp_path) == [3, 4]
 
 
 def test_filestore_migrate_snapshot_and_restore(tmp_path: Path) -> None:
     store = FileStore(tmp_path)
     assert store.schema_version() == 0
-    assert store.migrate() == [1, 2, 3]
-    assert store.schema_version() == 3
+    assert store.migrate() == list(range(1, migrations.SCHEMA_VERSION + 1))
+    assert store.schema_version() == migrations.SCHEMA_VERSION
 
     marker = store.root / "tasks" / "t.json"
     marker.parent.mkdir(parents=True, exist_ok=True)

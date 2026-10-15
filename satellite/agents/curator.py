@@ -91,20 +91,21 @@ class SkillCurator:
         """Pide al LLM un lote de operaciones y las parsea (sin aplicarlas)."""
         system_prompt = self.prompts.get_system(self.prompt_id)
         user_template = self.prompts.get_user(self.prompt_id)
-        context_text = self._context_text()
+        catalog_text = self._catalog_text()
         messages, stable = build_meta_messages(
             system_prompt=system_prompt,
             user_template=user_template,
             output_schema=CURATOR_OUTPUT_SCHEMA,
-            catalog=context_text,
+            catalog=catalog_text,
             task=request or "curaduría bajo demanda",
+            context=self._stats_text(),
         )
         response = await self.provider.complete(
             LLMRequest(
                 messages=messages,
                 temperature=0.0,
                 stable_user_count=stable,
-                call=CallContext(role="curator", catalog_fp=fingerprint(context_text)),
+                call=CallContext(role="curator", catalog_fp=fingerprint(catalog_text)),
             )
         )
         data = extract_json_object(response.content or "")
@@ -243,16 +244,32 @@ class SkillCurator:
             data["tags"] = [str(t) for t in (op.proposal["tags"] or [])]
         self.registry.replace_manifest(SkillManifest.from_dict(data))
 
-    def _context_text(self) -> str:
-        lines = []
-        for manifest in self.registry.all():
-            stats = manifest.stats
-            lines.append(
-                f"- id={manifest.id} | description={sanitize(manifest.description, max_chars=400)} "
-                f"| status={manifest.status.value} | uses={stats.uses} "
-                f"| failures={stats.failures} | creation_tokens={stats.creation_tokens}"
-            )
+    def _catalog_text(self) -> str:
+        """Catálogo **estable** (identidad de cada skill): forma el prefijo cacheable.
+
+        Solo lo que define a la skill. Las estadísticas de uso van aparte porque
+        cambian cada vez que se usa una skill: si entraran aquí, ni el prefijo
+        sería cacheable ni ``catalog_fp`` detectaría una deriva real.
+        """
+        lines = [
+            f"- id={manifest.id} | version={manifest.version} "
+            f"| description={sanitize(manifest.description, max_chars=400)} "
+            f"| tags={','.join(sorted(manifest.tags))} | status={manifest.status.value} "
+            f"| lifecycle={manifest.lifecycle}"
+            for manifest in self.registry.all()
+        ]
         return "\n".join(lines) or "(catálogo vacío)"
+
+    def _stats_text(self) -> str:
+        """Estadísticas de uso (bloque **dinámico**, después del catálogo)."""
+        lines = [
+            f"- {manifest.id}: uses={manifest.stats.uses} "
+            f"failures={manifest.stats.failures} "
+            f"creation_tokens={manifest.stats.creation_tokens} "
+            f"latency_ms={manifest.stats.total_latency_ms}"
+            for manifest in self.registry.all()
+        ]
+        return "\n".join(lines) or "(sin estadísticas)"
 
     def _emit_suspicious(self, op: CuratorOperation) -> None:
         if self.sink is None:

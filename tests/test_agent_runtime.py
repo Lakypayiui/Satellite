@@ -115,6 +115,38 @@ def test_max_turns_respected(tmp_path: Path) -> None:
     assert len(provider.requests) == 3
 
 
+def test_agent_with_tools_survives_metered_provider(tmp_path: Path) -> None:
+    """Regresión: el bucle de tools no debe pisar el ``CallContext`` de la llamada.
+
+    Con el proveedor envuelto en ``MeteredProvider`` (como en el runtime real), un
+    ``ToolCall`` colado en ``request.call`` revienta con ``AttributeError`` en la
+    segunda llamada y en la síntesis.
+    """
+    from satellite.observability.call_log import CallRecorder, default_log_dir
+    from satellite.providers.metered import MeteredProvider
+
+    spec = make_spec(max_turns=2)
+    script = [
+        {"tool_calls": [{"id": "c1", "name": "write_file", "arguments": {"path": "a.txt", "content": "x"}}]},
+        {"tool_calls": [{"id": "c2", "name": "write_file", "arguments": {"path": "b.txt", "content": "y"}}]},
+        {"content": "{\"summary\": \"fin\"}"},
+    ]
+    agent, provider = make_agent(spec, script, tmp_path)
+    recorder = CallRecorder(default_log_dir(tmp_path))
+    agent.provider = MeteredProvider(provider, recorder, provider_name="fake", model="fake")
+
+    result = run(agent.execute({"node_id": "n1", "goal": "escribir"}, make_ctx(tmp_path)))
+
+    assert result.status is AgentStatus.OK
+    assert (tmp_path / "a.txt").exists()
+    assert (tmp_path / "b.txt").exists()
+    # las 3 llamadas (2 rondas de tools + síntesis) conservan la identidad real
+    records = recorder.load()
+    assert len(records) == 3
+    assert {record.role for record in records} == {spec.model_role}
+    assert {record.agent_id for record in records} == {spec.id}
+
+
 def test_simple_no_tools(tmp_path: Path) -> None:
     spec = make_spec()
     script = [{"content": "{\"summary\": \"sin tools\"}"}]

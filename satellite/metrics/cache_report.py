@@ -66,10 +66,14 @@ class CacheReport:
 
     @property
     def real_tokens_per_call(self) -> float | None:
-        """Tokens efectivos por llamada (input a precio pleno + salida)."""
+        """Tokens efectivos por llamada: input a precio pleno **más salida**.
+
+        Lo leído de cache no se cuenta a precio pleno; la salida sí, porque
+        también se paga. Es el número que alimenta el ahorro de las skills.
+        """
         if not self.calls:
             return None
-        effective = self.input_tokens - (self.cache_read or 0)
+        effective = self.input_tokens - (self.cache_read or 0) + self.output_tokens
         return round(max(0, effective) / self.calls, 2)
 
     def to_dict(self) -> dict:

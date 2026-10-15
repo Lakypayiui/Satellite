@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 VERSION_FILE = ".schema_version"
 SNAPSHOT_DIR = "snapshots"
 
@@ -74,6 +75,35 @@ def split_legacy_prompt(text: str) -> tuple[str | None, str]:
         if line.strip().upper() == LEGACY_SPLIT_MARKER:
             return "".join(lines[:index]).rstrip() + "\n", "".join(lines[index:])
     return None, ""
+
+
+def migrate_agent_specs(agents_root: Path) -> list[str]:
+    """Añade ``lifecycle`` a los specs guardados que no lo traen (esquema v4).
+
+    Idempotente y tolerante: los ficheros ilegibles se dejan como están (el
+    cargador del catálogo ya sabe cuarentenarlos), y no se toca ningún otro campo.
+    Devuelve los ids migrados.
+    """
+    root = Path(agents_root)
+    migrated: list[str] = []
+    if not root.is_dir():
+        return migrated
+    for file in sorted(root.glob("*.json")):
+        try:
+            data = json.loads(file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict) or "id" not in data or "lifecycle" in data:
+            continue
+        data["lifecycle"] = "persistent"
+        try:
+            file.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            )
+        except OSError:
+            continue
+        migrated.append(str(data.get("id", file.stem)))
+    return migrated
 
 
 def migrate_prompt_files(root: Path) -> list[str]:

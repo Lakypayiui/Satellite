@@ -153,6 +153,34 @@ def test_limits_for_anthropic_haiku() -> None:
     assert limits_for("openai", "gpt-4o").min_prefix_tokens == 0
 
 
+def test_minimums_follow_the_current_documentation() -> None:
+    """Líneas 5.x → 512; Opus 4.5/4.6 y Haiku 4.5 → 4.096; sin dato → 1.024."""
+    cases = {
+        "claude-sonnet-5-5": 512,
+        "claude-opus-5-5": 512,
+        "claude-haiku-5-5": 512,
+        "claude-sonnet-5": 1024,
+        "claude-sonnet-4-5": 1024,
+        "claude-opus-4-8": 1024,
+        "claude-opus-4-7": 2048,
+        "claude-opus-4-6": 4096,
+        "claude-opus-4-5": 4096,
+        "claude-haiku-4-5": 4096,
+        "claude-3-opus": 1024,  # sin dato publicado: nos quedamos cortos
+        "modelo-desconocido": 1024,
+    }
+    for model, expected in cases.items():
+        assert limits_for("anthropic", model).min_prefix_tokens == expected, model
+    # el par que rompe una clave por "línea": 4.5 y 5.5 miden distinto
+    assert (
+        limits_for("anthropic", "claude-haiku-4-5").min_prefix_tokens
+        != limits_for("anthropic", "claude-haiku-5-5").min_prefix_tokens
+    )
+    # y el mínimo concreto se puede sobrescribir desde config
+    overridden = limits_for("anthropic", "claude-haiku-5-5", overrides={"min_prefix_tokens": 999})
+    assert overridden.min_prefix_tokens == 999
+
+
 def test_limits_for_overrides() -> None:
     limits = limits_for("anthropic", "sonnet", overrides={"ttl": TTL_1H, "max_breakpoints": 2})
     assert limits.ttl == TTL_1H

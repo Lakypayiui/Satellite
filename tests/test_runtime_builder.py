@@ -41,6 +41,44 @@ def test_build_runtime_wires_services(tmp_path: Path, monkeypatch) -> None:
     assert services.context is not None
 
 
+def test_provider_config_carries_max_tokens(tmp_path: Path) -> None:
+    """El tope de salida configurado llega al provider (rol → proveedor → global)."""
+    from satellite.cli.runtime_builder import _provider_config_from
+
+    data = {
+        "providers": [{"id": "p1", "name": "anthropic", "model": "claude-x", "max_tokens": 111}],
+        "llm": {
+            "max_tokens": {"creator": 512, "*": 128},
+            "creator": {"provider": "p1", "model": "claude-x"},
+            "agents": {"provider": "p1"},
+        },
+    }
+    by_role = _provider_config_from(data, role="creator")
+    assert by_role is not None and by_role.max_tokens == 512  # el rol manda
+
+    wildcard = _provider_config_from(data, role="agents")
+    assert wildcard is not None and wildcard.max_tokens == 128  # el "*" del usuario
+
+    # sin comodín: manda el tope del proveedor guardado
+    no_wildcard = {
+        "providers": [{"id": "p1", "name": "anthropic", "model": "claude-x", "max_tokens": 111}],
+        "llm": {"agents": {"provider": "p1"}},
+    }
+    fallback = _provider_config_from(no_wildcard, role="agents")
+    assert fallback is not None and fallback.max_tokens == 111
+
+    other_role = {
+        "providers": [],
+        "llm": {"agents": {"provider": "openai", "model": "gpt-4o-mini"}},
+    }
+    plain = _provider_config_from(other_role, role="agents")
+    assert plain is not None and plain.max_tokens is None  # sin tope configurado
+
+    scalar = {"llm": {"max_tokens": 256, "agents": {"provider": "openai", "model": "gpt-4o"}}}
+    inherited = _provider_config_from(scalar, role="agents")
+    assert inherited is not None and inherited.max_tokens == 256  # escalar global
+
+
 def test_build_runtime_passes_custom_approval(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SATELLITE_HOME", str(tmp_path / "home"))
     write_config(tmp_path)

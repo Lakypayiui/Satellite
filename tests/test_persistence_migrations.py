@@ -59,6 +59,35 @@ def test_restore_missing_snapshot_raises(tmp_path: Path) -> None:
     raise AssertionError("debía lanzar FileNotFoundError")
 
 
+def test_migrate_agent_specs_adds_lifecycle(tmp_path: Path) -> None:
+    """v3→v4: los specs guardados sin `lifecycle` se normalizan (idempotente)."""
+    import json
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "viejo.json").write_text(
+        json.dumps({"id": "viejo", "name": "Viejo", "capabilities": ["a"]}),
+        encoding="utf-8",
+    )
+    (agents / "nuevo.json").write_text(
+        json.dumps({"id": "nuevo", "lifecycle": "ephemeral"}), encoding="utf-8"
+    )
+    (agents / "roto.json").write_text("{no soy json", encoding="utf-8")
+
+    assert migrations.migrate_agent_specs(agents) == ["viejo"]
+    migrado = json.loads((agents / "viejo.json").read_text(encoding="utf-8"))
+    assert migrado["lifecycle"] == "persistent"
+    assert migrado["name"] == "Viejo"  # no se toca nada más
+    # no pisa lo que ya lo traía, no revienta con el corrupto y es idempotente
+    assert migrations.migrate_agent_specs(agents) == []
+    assert (
+        json.loads((agents / "nuevo.json").read_text(encoding="utf-8"))["lifecycle"]
+        == "ephemeral"
+    )
+    # y sin directorio tampoco falla
+    assert migrations.migrate_agent_specs(tmp_path / "no-existe") == []
+
+
 def test_file_store_schema_and_snapshot(tmp_path: Path) -> None:
     store = FileStore(tmp_path)
     assert store.schema_version() < migrations.SCHEMA_VERSION

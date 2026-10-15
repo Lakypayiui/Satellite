@@ -104,6 +104,30 @@ def test_tool_use_normalized() -> None:
     assert resp.stop_reason == "tool_calls"
 
 
+def test_max_tokens_is_always_sent() -> None:
+    """Anthropic exige ``max_tokens``: petición → config → defecto (4096)."""
+    from satellite.providers.anthropic_provider import DEFAULT_MAX_OUTPUT_TOKENS
+
+    provider, client = make_provider()
+    client.response = FakeAnthropicResponse(content=[FakeBlock("text", "ok")])
+
+    run(provider.complete(make_request()))
+    assert client.calls[-1]["max_tokens"] == DEFAULT_MAX_OUTPUT_TOKENS
+
+    run(provider.complete(make_request(max_tokens=64)))
+    assert client.calls[-1]["max_tokens"] == 64
+
+    configured = ProviderConfig(
+        name="anthropic", model="claude-3-5-sonnet", api_key="test", max_tokens=256
+    )
+    other = AnthropicProvider(configured, client=client)
+    run(other.complete(make_request()))
+    assert client.calls[-1]["max_tokens"] == 256
+
+    # ninguna llamada sale sin límite
+    assert all("max_tokens" in call for call in client.calls)
+
+
 def test_tool_result_translation() -> None:
     provider, client = make_provider()
     client.response = FakeAnthropicResponse(content=[FakeBlock("text", "ok")])

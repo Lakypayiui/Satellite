@@ -9,6 +9,7 @@ from satellite.core.errors import ProviderError
 from satellite.core.messages import LLMRequest, LLMResponse, Message, Role, Usage
 from satellite.core.tool_models import ToolCall
 from satellite.providers.base import LLMProvider
+from satellite.providers.capabilities import model_capabilities
 from satellite.providers.parsing import coerce_arguments
 
 
@@ -47,11 +48,16 @@ class OpenAICompatProvider(LLMProvider):
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Traduce la petición a formato OpenAI y normaliza la respuesta."""
         messages = [_to_openai_message(m) for m in request.messages]
+        caps = model_capabilities(
+            self.config.model, getattr(self.config, "model_overrides", None)
+        )
         kwargs: dict = {
             "model": self.config.model,
             "messages": messages,
-            "temperature": request.temperature,
         }
+        # los modelos de razonamiento rechazan `temperature` no estándar
+        if caps.accepts_temperature:
+            kwargs["temperature"] = request.temperature
         if request.tools is not None:
             kwargs["tools"] = [
                 {
@@ -65,7 +71,8 @@ class OpenAICompatProvider(LLMProvider):
                 for t in request.tools
             ]
         if request.max_tokens is not None:
-            kwargs["max_tokens"] = request.max_tokens
+            # `max_tokens` no existe en las familias de razonamiento
+            kwargs[caps.token_param] = request.max_tokens
         try:
             resp = await self._client.chat.completions.create(**kwargs)
         except Exception as exc:  # noqa: BLE001 — el provider envuelve cualquier error

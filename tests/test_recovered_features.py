@@ -150,7 +150,7 @@ def test_execution_logger_tolerant_corrupt_lines(tmp_path: Path) -> None:
     assert len(loaded) == 1
 
 
-def test_execution_id_unique() -> None:
-    logger = ExecutionLogger(Path(r"C:\Users\Ian\Desktop\Satellite\.satellite") / "observability")
+def test_execution_id_unique(tmp_path: Path) -> None:
+    logger = ExecutionLogger(tmp_path / ".satellite" / "observability")
     ids = {logger.make_execution_id() for _ in range(20)}
     assert len(ids) == 20

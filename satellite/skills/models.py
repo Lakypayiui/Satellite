@@ -9,11 +9,11 @@ from enum import Enum
 from typing import Any
 
 from satellite.core.errors import ContractError, SpecValidationError
+from satellite.core.spec import ALLOWED_LIFECYCLES
 
 _ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 ALLOWED_LANGUAGES: tuple[str, ...] = ("python", "bash")
-ALLOWED_LIFECYCLES: tuple[str, ...] = ("persistent", "ephemeral")
 
 
 class SkillStatus(Enum):

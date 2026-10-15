@@ -169,8 +169,8 @@ class LLMAgent(Agent):
                         tool_calls=response.tool_calls,
                     )
                 )
-                for call in response.tool_calls:
-                    record, tool_result = await self._run_tool(call, ctx)
+                for tool_call in response.tool_calls:
+                    record, tool_result = await self._run_tool(tool_call, ctx)
                     tool_records.append(record)
                     messages.append(
                         Message(
@@ -183,7 +183,7 @@ class LLMAgent(Agent):
                                 },
                                 ensure_ascii=False,
                             ),
-                            tool_call_id=call.id,
+                            tool_call_id=tool_call.id,
                         )
                     )
                 if remaining > 0:

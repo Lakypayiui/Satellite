@@ -61,6 +61,27 @@ def test_prompt_ref_empty_raises() -> None:
         AgentSpec(id="x", name="X", capabilities=("a",), prompt_ref="")
 
 
+def test_lifecycle_defaults_and_validates() -> None:
+    """`lifecycle` es parte del contrato (esquema v4): persistent por defecto."""
+    from satellite.core.spec import ALLOWED_LIFECYCLES
+
+    base = AgentSpec(id="x", name="X", capabilities=("a",), prompt_ref="p")
+    assert base.lifecycle == "persistent"
+    assert base.to_dict()["lifecycle"] == "persistent"
+    assert AgentSpec.from_dict(base.to_dict()).lifecycle == "persistent"
+
+    efimero = AgentSpec(
+        id="x", name="X", capabilities=("a",), prompt_ref="p", lifecycle="ephemeral"
+    )
+    assert AgentSpec.from_dict(efimero.to_dict()).lifecycle == "ephemeral"
+
+    with pytest.raises(SpecValidationError, match="lifecycle"):
+        AgentSpec(
+            id="x", name="X", capabilities=("a",), prompt_ref="p", lifecycle="eterno"
+        )
+    assert set(ALLOWED_LIFECYCLES) == {"persistent", "ephemeral"}
+
+
 def test_max_turns_negative_raises() -> None:
     with pytest.raises(SpecValidationError):
         AgentSpec(id="x", name="X", capabilities=("a",), prompt_ref="p", max_turns=-1)

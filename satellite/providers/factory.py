@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from satellite.core.errors import ProviderError
 from satellite.providers.anthropic_provider import AnthropicProvider
@@ -29,6 +29,9 @@ class ProviderConfig:
     base_url: str | None = None
     temperature: float = 0.0
     max_tokens: int | None = None
+    # ``llm.models.<id>``: capacidades por modelo (p. ej. familias de razonamiento).
+    # Fuera de ``eq``/``hash`` para que la config siga siendo hashable.
+    model_overrides: dict = field(default_factory=dict, compare=False)
 
 
 class ProviderFactory:

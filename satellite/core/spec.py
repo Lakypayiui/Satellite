@@ -7,6 +7,10 @@ from typing import Any
 
 from satellite.core.errors import SpecValidationError
 
+# Ciclo de vida de un agente o de una skill. Fuente única: lo usan AgentSpec,
+# ProposedAgent y SkillManifest (Anthropic usa el mismo concepto en su API).
+ALLOWED_LIFECYCLES: tuple[str, ...] = ("persistent", "ephemeral")
+
 
 @dataclass(frozen=True)
 class CanCallEntry:
@@ -52,6 +56,7 @@ class AgentSpec:
     max_turns: int = 1
     timeout_s: int = 120
     can_call: tuple[CanCallEntry, ...] = ()
+    lifecycle: str = "persistent"
 
     def __post_init__(self) -> None:
         self._require_non_empty("id", self.id)
@@ -93,6 +98,11 @@ class AgentSpec:
                 raise SpecValidationError(
                     f"AgentSpec '{self.id}': can_call debe contener CanCallEntry"
                 )
+        if self.lifecycle not in ALLOWED_LIFECYCLES:
+            raise SpecValidationError(
+                f"AgentSpec '{self.id}': lifecycle debe ser uno de "
+                f"{', '.join(ALLOWED_LIFECYCLES)} (recibido {self.lifecycle!r})"
+            )
 
     def _require_non_empty(self, field_name: str, value: str) -> None:
         if not isinstance(value, str) or not value.strip():
@@ -116,6 +126,7 @@ class AgentSpec:
             "max_turns": self.max_turns,
             "timeout_s": self.timeout_s,
             "can_call": [entry.to_dict() for entry in self.can_call],
+            "lifecycle": self.lifecycle,
         }
 
     @classmethod
@@ -145,6 +156,7 @@ class AgentSpec:
                 can_call=tuple(
                     CanCallEntry.from_dict(entry) for entry in d.get("can_call", [])
                 ),
+                lifecycle=d.get("lifecycle", "persistent"),
             )
         except SpecValidationError:
             raise

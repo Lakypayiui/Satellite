@@ -201,15 +201,54 @@ _STRATEGIES: dict[str, CacheStrategy] = {
     "none": NoCacheStrategy(),
 }
 
-_MODEL_MIN_PREFIX: dict[str, dict[str, int]] = {
-    # Mínimos publicados por Anthropic; sobrescribibles por config.
-    "anthropic": {"haiku": 2048, "default": 1024},
-}
+# Mínimos **publicados** por Anthropic (actualizados a la documentación vigente:
+# líneas 5.x → 512; Sonnet 4.x/Opus 4.x antiguos → 1.024; Opus 4.7 y Haiku 3.5 →
+# 2.048; Opus 4.5/4.6 y Haiku 4.5 → 4.096). El orden importa: se compara por
+# subcadena y gana la **primera** coincidencia, así que lo más específico va
+# primero (p. ej. ``claude-sonnet-5-5`` antes que ``claude-sonnet-5``).
+_ANTHROPIC_MIN_PREFIX: tuple[tuple[str, int], ...] = (
+    ("claude-fable-5-1", 512),
+    ("claude-mythos-5-1", 512),
+    ("claude-sonnet-5-5", 512),
+    ("claude-opus-5-5", 512),
+    ("claude-haiku-5-5", 512),
+    ("claude-fable-5", 512),
+    ("claude-mythos-5", 512),
+    ("claude-opus-5", 512),
+    ("claude-sonnet-4-6", 1024),
+    ("claude-sonnet-4-5", 1024),
+    ("claude-opus-4-8", 1024),
+    ("claude-sonnet-5", 1024),
+    ("claude-sonnet-4", 1024),
+    ("claude-3-5-sonnet", 1024),
+    ("claude-opus-4-1", 1024),
+    ("claude-opus-4-7", 2048),
+    ("claude-haiku-3-5", 2048),
+    ("claude-3-5-haiku", 2048),
+    ("claude-opus-4-6", 4096),
+    ("claude-opus-4-5", 4096),
+    ("claude-haiku-4-5", 4096),
+    ("claude-opus-4", 1024),
+)
+# Modelo desconocido: mejor quedarse corto. Marcar un prefijo que no llega al
+# mínimo real no da error (simplemente no se cachea); pasarse sí perdería cache.
+_ANTHROPIC_MIN_PREFIX_DEFAULT = 1024
 
 
 def strategy_for(provider_name: str) -> CacheStrategy:
     """Estrategia del proveedor (por defecto, sin breakpoints)."""
     return _STRATEGIES.get((provider_name or "").lower(), _STRATEGIES["none"])
+
+
+def _min_prefix_for(provider_name: str, model: str) -> int:
+    """Mínimo del prefijo cacheable (0 si el proveedor no publica uno)."""
+    if provider_name != "anthropic":
+        return 0
+    model_lower = (model or "").lower()
+    for prefix, tokens in _ANTHROPIC_MIN_PREFIX:
+        if prefix in model_lower:
+            return tokens
+    return _ANTHROPIC_MIN_PREFIX_DEFAULT
 
 
 def limits_for(
@@ -219,17 +258,9 @@ def limits_for(
     overrides: dict | None = None,
 ) -> CacheLimits:
     """Límites por proveedor/modelo, con sobrescritura desde config."""
-    name = (provider_name or "").lower()
-    minima = _MODEL_MIN_PREFIX.get(name, {})
-    minimum = minima.get("default", 0)
-    model_lower = (model or "").lower()
-    for key, value in minima.items():
-        if key != "default" and key in model_lower:
-            minimum = value
-            break
-    values: dict = {"min_prefix_tokens": minimum}
-    if name != "anthropic":
-        values["min_prefix_tokens"] = 0
+    values: dict = {
+        "min_prefix_tokens": _min_prefix_for((provider_name or "").lower(), model)
+    }
     for key in ("max_breakpoints", "min_prefix_tokens", "ttl"):
         if isinstance(overrides, dict) and key in overrides:
             values[key] = overrides[key]

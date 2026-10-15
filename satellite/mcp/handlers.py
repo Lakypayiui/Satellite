@@ -1,4 +1,9 @@
-"""MCP handlers: each tool calls the runtime (via the Etapa 7 builder)."""
+"""MCP handlers: each tool calls the runtime (via the Etapa 7 builder).
+
+Aprobaciones: MCP **no** aprueba nada (``McpApproval`` rechaza y deja la
+propuesta a la vista). Un host podría inyectar la aprobación en el prompt, así
+que la decisión se toma siempre con un humano delante: CLI o TUI.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,6 @@ from pathlib import Path
 
 from satellite.approval.mcp import McpApproval
 from satellite.cli.runtime_builder import build_runtime
-from satellite.core.proposal import ApprovalDecision, ApprovalStatus
 from satellite.core.task import Task
 from satellite.persistence.store import FileStore
 
@@ -92,21 +96,23 @@ def get_handlers(bundle: RuntimeBundle) -> dict[str, callable]:
         bundle._active.pop(task_id, None)
         return {"isError": False, "text": f"cancelación pedida (best-effort) para {task_id}"}
 
-    async def satellite_approve(arguments: dict) -> dict:
-        proposal_id = str(arguments.get("proposal_id", ""))
-        try:
-            status = ApprovalStatus(str(arguments.get("status", "")).lower())
-        except ValueError:
-            return {"isError": True, "text": f"status inválido: {arguments.get('status')!r}"}
-        decision = ApprovalDecision(
-            status=status,
-            reason=str(arguments.get("reason", "")),
-            feedback=str(arguments.get("feedback", "")),
-        )
-        accepted = bundle.approval.submit(proposal_id, decision)
+    async def satellite_approvals(arguments: dict) -> dict:
+        """Propuestas que esperan una decisión humana (tool de solo lectura)."""
+        task_id = str(arguments.get("task_id", ""))
+        pending = bundle.approval.pending()
+        if task_id:
+            pending = [item for item in pending if item.get("task_id") == task_id]
+        if not pending:
+            return {"isError": False, "text": "(sin propuestas pendientes)"}
+        lines = [
+            f"{item.get('proposal_id')}: {item.get('kind')} | task={item.get('task_id')} "
+            f"| {item.get('summary')}"
+            for item in pending
+        ]
         return {
             "isError": False,
-            "text": f"decisión registrada ({status.value}); pendiente consumida={accepted}",
+            "text": "\n".join(lines)
+            + "\n\nLas aprobaciones se resuelven en el CLI o en la TUI: MCP no aprueba.",
         }
 
     return {
@@ -115,7 +121,7 @@ def get_handlers(bundle: RuntimeBundle) -> dict[str, callable]:
         "satellite_graph": satellite_graph,
         "satellite_status": satellite_status,
         "satellite_cancel": satellite_cancel,
-        "satellite_approve": satellite_approve,
+        "satellite_approvals": satellite_approvals,
     }
 
 
@@ -169,20 +175,18 @@ TOOLS_LIST = [
         },
     },
     {
-        "name": "satellite_approve",
-        "description": "Aprueba o rechaza una propuesta pendiente (agente/skill/delegación).",
+        "name": "satellite_approvals",
+        "description": (
+            "Lista las propuestas que esperan una decisión humana (solo lectura). "
+            "Las aprobaciones se resuelven en el CLI o en la TUI: MCP no aprueba."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "proposal_id": {"type": "string"},
-                "status": {
-                    "type": "string",
-                    "enum": ["approved", "rejected", "needs_changes"],
-                },
-                "reason": {"type": "string"},
-                "feedback": {"type": "string"},
+                "task_id": {"type": "string"},
+                "project_root": {"type": "string"},
             },
-            "required": ["proposal_id", "status"],
+            "required": [],
         },
     },
 ]

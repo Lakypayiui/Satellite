@@ -85,6 +85,9 @@ def _parse_details(payload: object) -> dict[str, dict]:
 
 
 # Nombres con los que distintos proveedores publican la ventana de contexto.
+# OJO: `max_tokens` **no** está aquí a propósito — en Anthropic y en los
+# endpoints OpenAI-compatible es el tope de **salida**, no la ventana; tomarlo
+# como ventana adelantaría el auto-compactado.
 _CONTEXT_KEYS: tuple[str, ...] = (
     "context_length",
     "max_context_length",
@@ -92,7 +95,6 @@ _CONTEXT_KEYS: tuple[str, ...] = (
     "max_model_len",
     "max_context_tokens",
     "max_input_tokens",
-    "max_tokens",
     "n_ctx",
     "context",
 )

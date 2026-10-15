@@ -255,14 +255,14 @@ def test_build_cache_report_counts_drift() -> None:
     assert report.drift_events == 1
 
 
-def test_real_tokens_per_call_uses_effective_input() -> None:
+def test_real_tokens_per_call_uses_effective_input_plus_output() -> None:
     records = [
         CallRecord(input_tokens=1000, output_tokens=100, cache_read=800, cache_creation=0),
         CallRecord(input_tokens=1000, output_tokens=100, cache_read=0, cache_creation=1000),
     ]
     report = build_cache_report(records)
-    # (1000-800 + 1000-0) / 2 = 600
-    assert report.real_tokens_per_call == 600.0
+    # (1000-800+100 + 1000-0+100) / 2 = 700  (lo leído de cache no va a precio pleno)
+    assert report.real_tokens_per_call == 700.0
 
 
 # ---------------------------------------------------------------- provider medido

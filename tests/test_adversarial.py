@@ -264,9 +264,10 @@ def test_curator_context_neutralizes_injected_data_tags(tmp_path: Path) -> None:
     prompts = DefaultPromptRegistry()
     prompts.register_pair("skill_curator", "SYS", "C:{context}")
     curator = SkillCurator(FakeLLM(), registry, prompts)
-    context = curator._context_text()
-    assert "</data>" not in context
-    assert "[data]" in context
+    # la descripción (dato no confiable) viaja en el bloque estable del catálogo
+    catalog = curator._catalog_text()
+    assert "</data>" not in catalog
+    assert "[data]" in catalog
 
 
 def test_runtime_prompt_declares_and_wraps_untrusted_context() -> None:

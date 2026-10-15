@@ -88,6 +88,68 @@ def test_tools_call_run_executes_with_fake_orchestrator(monkeypatch) -> None:
     assert "tarea completa" in resp["result"]["content"][0]["text"]
 
 
+def test_tools_list_exposes_no_approving_tool() -> None:
+    """MCP puede consultar, pero no aprobar (nada de autoaprobación)."""
+    server, _, _ = make_server()
+    resp = server.dispatch({"jsonrpc": "2.0", "id": 6, "method": "tools/list"})
+    names = [t["name"] for t in resp["result"]["tools"]]
+    assert "satellite_approve" not in names
+    assert "satellite_approvals" in names
+    assert all("approve" not in name for name in names)
+
+
+def test_approve_tool_is_not_callable() -> None:
+    server, _, _ = make_server()
+    resp = server.dispatch({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+            "name": "satellite_approve",
+            "arguments": {"proposal_id": "prop1", "status": "approved"},
+        },
+    })
+    assert resp["error"]["code"] == -32601
+
+
+def test_mcp_approval_never_approves_and_never_blocks() -> None:
+    """Sin humano delante: rechaza con motivo claro y deja la propuesta a la vista."""
+    import asyncio
+
+    from satellite.approval.base import ApprovalContext
+    from satellite.approval.mcp import DENIED_REASON, McpApproval
+    from satellite.core.proposal import ApprovalStatus
+
+    port = McpApproval()
+    ctx = ApprovalContext(kind="agent", task_id="t1", summary="crear agente x")
+    # antes este `await` se quedaba colgado hasta que alguien aprobara por MCP
+    decision = asyncio.run(
+        asyncio.wait_for(port.request({"proposal_id": "prop1", "name": "x"}, ctx), timeout=2)
+    )
+    assert decision.status is ApprovalStatus.REJECTED
+    assert DENIED_REASON in decision.reason
+    assert port.pending()[0]["proposal_id"] == "prop1"
+
+    # y la tool de lectura sí lo ve, con la indicación de dónde decidir
+    class FakeBundleWithApproval:
+        approval = port
+
+        def get(self, root):
+            return {"registry": None, "orchestrator": None, "store": None}
+
+    server = MCPServer(bundle=FakeBundleWithApproval())  # type: ignore[arg-type]
+    resp = server.dispatch({
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "tools/call",
+        "params": {"name": "satellite_approvals", "arguments": {"task_id": "t1"}},
+    })
+    text = resp["result"]["content"][0]["text"]
+    assert resp["result"]["isError"] is False
+    assert "prop1" in text
+    assert "CLI o en la TUI" in text
+
+
 def test_unknown_method_returns_error() -> None:
     server, _, _ = make_server()
     resp = server.dispatch({"jsonrpc": "2.0", "id": 5, "method": "tools/bogus"})

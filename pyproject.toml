@@ -3,29 +3,21 @@ name = "satellite"
 version = "0.2.0"
 description = "Satellite 2.0: framework de microagentes de IA especializados con grafos de ejecucion y contexto bajo demanda"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "jsonschema>=4.0",
+    "openai>=1.0",
+    "anthropic>=0.25",
+    "typer>=0.9",
+    "httpx>=0.27",
+    "textual>=8.0",
+    "rich>=13.7",
+    # Consolas legacy de Windows: el click vendorizado de typer importa colorama
+    # para envolver el ANSI (si falta, cualquier comando del CLI revienta).
+    "colorama>=0.4; platform_system == 'Windows'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Los tests del paradigma anterior importan `satellite_py` (paquete no presente
-# en este repo). Se excluyen para que la colección de la suite no falle;
-# ningún archivo de test fue modificado.
-addopts = """
---ignore=tests/test_bridges.py
---ignore=tests/test_cli.py
---ignore=tests/test_context.py
---ignore=tests/test_context_schema.py
---ignore=tests/test_dispatcher.py
---ignore=tests/test_execution_log.py
---ignore=tests/test_expander.py
---ignore=tests/test_llm.py
---ignore=tests/test_optimizer.py
---ignore=tests/test_orchestrator.py
---ignore=tests/test_planner.py
---ignore=tests/test_registry.py
---ignore=tests/test_security.py
---ignore=tests/test_semantic.py
---ignore=tests/test_store.py
---ignore=tests/test_validation.py
---ignore=tests/test_web.py
-"""

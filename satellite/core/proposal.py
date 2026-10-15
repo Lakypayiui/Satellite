@@ -15,7 +15,7 @@ from enum import Enum
 from typing import Any
 
 from satellite.core.errors import ContractError, SpecValidationError
-from satellite.core.spec import CanCallEntry
+from satellite.core.spec import ALLOWED_LIFECYCLES, CanCallEntry
 
 _ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
@@ -123,6 +123,7 @@ class ProposedAgent:
     reuse_checked: bool = False
     reuse_candidate: str | None = None
     needs_clarification: str | None = None
+    lifecycle: str = "persistent"
 
     def __post_init__(self) -> None:
         owner = "ProposedAgent"
@@ -169,6 +170,11 @@ class ProposedAgent:
                 raise SpecValidationError(
                     f"{owner} '{self.id}': can_call debe contener CanCallEntry"
                 )
+        if self.lifecycle not in ALLOWED_LIFECYCLES:
+            raise SpecValidationError(
+                f"{owner} '{self.id}': lifecycle debe ser uno de "
+                f"{', '.join(ALLOWED_LIFECYCLES)} (recibido {self.lifecycle!r})"
+            )
 
     @property
     def is_clarification(self) -> bool:
@@ -197,6 +203,7 @@ class ProposedAgent:
             "reuse_checked": self.reuse_checked,
             "reuse_candidate": self.reuse_candidate,
             "needs_clarification": self.needs_clarification,
+            "lifecycle": self.lifecycle,
         }
 
     @classmethod
@@ -227,6 +234,7 @@ class ProposedAgent:
             reuse_checked=bool(d.get("reuse_checked", False)),
             reuse_candidate=d.get("reuse_candidate"),
             needs_clarification=d.get("needs_clarification"),
+            lifecycle=d.get("lifecycle", "persistent"),
         )
 
 

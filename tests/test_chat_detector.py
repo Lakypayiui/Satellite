@@ -1,6 +1,7 @@
 """Tests del clasificador de consultas (chat-directo vs tarea)."""
 
 import asyncio
+from pathlib import Path
 
 from satellite.core.task import Task
 from satellite.orchestration.chat_detector import (
@@ -12,10 +13,9 @@ from satellite.orchestration.chat_detector import (
 from satellite.providers.fake import FakeLLM
 
 
-def make_task(goal: str):
-    from pathlib import Path
-
-    return Task(goal=goal, project_root=Path(r"C:\Users\Ian\Desktop\Satellite"))
+def make_task(goal: str, root: Path) -> Task:
+    """Tarea con una raíz real (temporal): nada depende del repo del usuario."""
+    return Task(goal=goal, project_root=root)
 
 
 def test_heuristic_basic_greeting_is_chat() -> None:
@@ -120,7 +120,7 @@ def test_english_questions_are_classified() -> None:
     assert heuristic_is_chat("fix the failing test in store.py") is False
 
 
-def test_is_chat_goal_trusts_heuristic_without_llm():
+def test_is_chat_goal_trusts_heuristic_without_llm(tmp_path: Path):
     """Chat claro (heurística) → NO consulta al LLM (modelos pequeños no fiables)."""
 
     class FakeChatLLM(FakeLLM):
@@ -131,31 +131,31 @@ def test_is_chat_goal_trusts_heuristic_without_llm():
             return LLMResponse(content="task")  # aunque el LLM diga task, la heurística manda
 
     provider = FakeChatLLM()
-    task = make_task("¿qué es el infinitivo?")
+    task = make_task("¿qué es el infinitivo?", tmp_path)
     assert is_chat_goal(task, provider) is True
     # no se llamó al LLM (heurística decidió sola)
     assert len(provider.requests) == 0
 
 
-def test_is_chat_goal_ambiguous_uses_llm() -> None:
+def test_is_chat_goal_ambiguous_uses_llm(tmp_path: Path) -> None:
     """Consulta corta sin pistas claras (ni chat ni tarea) → consulta al LLM."""
     provider = FakeLLM(script=[{"content": "chat"}])
     # "clima de bogota" no tiene pistas de chat ni de tarea, no termina en ? → LLM decide
-    task = make_task("clima de bogota")
+    task = make_task("clima de bogota", tmp_path)
     assert is_chat_goal(task, provider) is True
     assert len(provider.requests) == 1
 
 
-def test_is_chat_goal_task_hint_false_even_with_provider() -> None:
+def test_is_chat_goal_task_hint_false_even_with_provider(tmp_path: Path) -> None:
     provider = FakeLLM(script=[{"content": "chat"}])
-    task = make_task("crea un archivo")
+    task = make_task("crea un archivo", tmp_path)
     assert is_chat_goal(task, provider) is False
     # no debe consultar al LLM (la pista de tarea es determinante)
     assert len(provider.requests) == 0
 
 
-def test_is_chat_goal_without_provider_falls_to_heuristic() -> None:
-    task = make_task("hola, ¿qué tal?")
+def test_is_chat_goal_without_provider_falls_to_heuristic(tmp_path: Path) -> None:
+    task = make_task("hola, ¿qué tal?", tmp_path)
     assert is_chat_goal(task, None) is True
-    task2 = make_task("escribe una función en python")
+    task2 = make_task("escribe una función en python", tmp_path)
     assert is_chat_goal(task2, None) is False

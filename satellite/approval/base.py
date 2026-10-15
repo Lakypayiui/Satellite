@@ -64,8 +64,9 @@ class DenyAllApprovalPort(ApprovalPort):
 class PendingApprovalPort(ApprovalPort):
     """Puerto asíncrono: ``request`` queda a la espera de ``submit``.
 
-    Base para Web (modal + polling) y MCP (tool ``satellite_approve``): quien
-    responde llama a ``submit`` con la decisión y el ``await`` se resuelve.
+    Base de la TUI (modal + polling): quien responde llama a ``submit`` con la
+    decisión y el ``await`` se resuelve. MCP **no** lo usa: no tiene forma de
+    pedir la decisión a un humano, así que allí el puerto rechaza sin esperar.
     """
 
     def __init__(self, timeout_s: float | None = None) -> None:

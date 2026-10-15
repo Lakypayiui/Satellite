@@ -84,6 +84,33 @@ def test_proposed_agent_bad_timeout() -> None:
         )
 
 
+def test_proposed_agent_lifecycle_roundtrip() -> None:
+    """`lifecycle` viaja también en la propuesta (esquema v4)."""
+    proposal = ProposedAgent(
+        id="resumidor",
+        name="Resumidor",
+        capabilities=("summarize",),
+        system_prompt="Eres un resumidor.",
+        rationale="hace falta",
+        lifecycle="ephemeral",
+    )
+    assert proposal.to_dict()["lifecycle"] == "ephemeral"
+    assert ProposedAgent.from_dict(proposal.to_dict()).lifecycle == "ephemeral"
+    # sin el campo (propuestas antiguas) → persistent
+    data = {k: v for k, v in proposal.to_dict().items() if k != "lifecycle"}
+    assert ProposedAgent.from_dict(data).lifecycle == "persistent"
+
+    with pytest.raises(SpecValidationError, match="lifecycle"):
+        ProposedAgent(
+            id="resumidor",
+            name="Resumidor",
+            capabilities=("summarize",),
+            system_prompt="Eres un resumidor.",
+            rationale="hace falta",
+            lifecycle="para-siempre",
+        )
+
+
 def test_can_call_entry_from_string_and_dict() -> None:
     agent = ProposedAgent.from_dict(
         {

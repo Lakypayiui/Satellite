@@ -27,6 +27,10 @@ from satellite.providers.caching import (
 from satellite.providers.parsing import coerce_arguments
 from satellite.providers.prefix import estimate_prefix_tokens, prefix_hash, prefix_payload
 
+# Anthropic **exige** `max_tokens` en toda petición: sin él la API responde 400.
+# Es solo el último recurso; lo que configure el usuario manda.
+DEFAULT_MAX_OUTPUT_TOKENS = 4096
+
 
 class AnthropicProvider(LLMProvider):
     """Traduce el formato interno a la API de mensajes de Anthropic."""
@@ -97,8 +101,12 @@ class AnthropicProvider(LLMProvider):
             if plan.mark_system and tools and not system_texts:
                 tools[-1] = {**tools[-1], "cache_control": marker}
             kwargs["tools"] = tools
-        if request.max_tokens is not None:
-            kwargs["max_tokens"] = request.max_tokens
+        limit = request.max_tokens
+        if limit is None:
+            limit = getattr(self.config, "max_tokens", None)
+        if limit is None:
+            limit = DEFAULT_MAX_OUTPUT_TOKENS
+        kwargs["max_tokens"] = limit
         try:
             resp = await self._client.messages.create(**kwargs)
         except Exception as exc:  # noqa: BLE001

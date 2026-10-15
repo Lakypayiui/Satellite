@@ -8,7 +8,8 @@ se ha desactivado con ``SATELLITE_LIVE_TESTS=0``. En un entorno sin claves se
 salta, así que la suite normal no gasta ni red ni dinero.
 
 Variables opcionales:
-- ``SATELLITE_ANTHROPIC_MODEL`` (por defecto ``claude-3-5-sonnet-latest``)
+- ``SATELLITE_ANTHROPIC_MODEL`` (por defecto ``claude-sonnet-5-5``; los ids
+  vigentes se listan con ``python -m satellite.cli provider models``)
 - ``SATELLITE_OPENAI_MODEL`` (por defecto ``gpt-4o-mini``)
 - ``SATELLITE_LIVE_TESTS=0`` para desactivarlo aunque haya claves.
 """
@@ -25,7 +26,7 @@ from satellite.providers.factory import ProviderConfig
 LIVE = os.getenv("SATELLITE_LIVE_TESTS", "1") != "0"
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
-ANTHROPIC_MODEL = os.getenv("SATELLITE_ANTHROPIC_MODEL", "claude-3-5-sonnet-latest")
+ANTHROPIC_MODEL = os.getenv("SATELLITE_ANTHROPIC_MODEL", "claude-sonnet-5-5")
 OPENAI_MODEL = os.getenv("SATELLITE_OPENAI_MODEL", "gpt-4o-mini")
 
 # Prefijo bien por encima del mínimo de cache (1024 tokens): ~4.500 estimados.

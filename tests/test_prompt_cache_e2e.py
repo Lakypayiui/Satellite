@@ -318,7 +318,8 @@ def test_skill_savings_use_the_real_cache_cost(tmp_path: Path) -> None:
     book = PriceBook({"m": ModelPrice(input=10.0, output=0.0, cache_write=12.5, cache_read=1.0)})
     records = recorder_records(tmp_path, cache_creation=0, cache_read=800, input_tokens=1000)
     cache = build_cache_report(records, book)
-    assert cache.real_tokens_per_call == 200.0
+    # input a precio pleno (1000-800) + salida (10): lo leído de cache no se cuenta
+    assert cache.real_tokens_per_call == 210.0
 
     report = build_report(
         [
@@ -335,8 +336,8 @@ def test_skill_savings_use_the_real_cache_cost(tmp_path: Path) -> None:
         call_cost_tokens=int(cache.real_tokens_per_call or 0),
         cache=cache.to_dict(),
     )
-    assert report.skills[0].call_cost_tokens == 200
-    assert report.skills[0].savings == 5 * (1000 - 200) - 3000
+    assert report.skills[0].call_cost_tokens == 210
+    assert report.skills[0].savings == 5 * (1000 - 210) - 3000
     assert report.to_dict()["cache"]["hit_rate"] == 0.8
 
 

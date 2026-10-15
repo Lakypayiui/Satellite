@@ -45,6 +45,63 @@ def ops_json(operations) -> str:
     return json.dumps({"operations": operations})
 
 
+def test_catalog_fingerprint_ignores_usage_stats(tmp_path: Path) -> None:
+    """Usar una skill no puede parecer un cambio de catálogo.
+
+    Si las estadísticas entraran en la huella, una deriva real del prefijo
+    quedaría clasificada como "cambio de catálogo" y pasaría desapercibida.
+    """
+    from satellite.skills.models import SkillStats
+
+    registry = make_registry(tmp_path)
+    prompts = DefaultPromptRegistry()
+    prompts.register_pair(
+        "skill_curator",
+        "T:{task} C:{context} F:{feedback} S:{output_schema}",
+        "Tarea: {task}\nContexto: {context}\nFeedback: {feedback}",
+    )
+    provider = FakeLLM(script=[{"content": ops_json([{"op": "retag", "targets": ["csv_to_json"], "proposal": {"tags": ["csv", "json"]}, "reason": "x"}])}] * 3)
+    curator = SkillCurator(provider, registry, prompts)
+
+    run(curator.propose("revisa"))
+    first = provider.requests[-1].call.catalog_fp
+    assert first
+
+    # mismo catálogo, estadísticas distintas (la skill se ha usado)
+    registry.replace_manifest(
+        SkillManifest(
+            id="csv_to_json",
+            description="convierte csv a json",
+            tags=("csv",),
+            stats=SkillStats(uses=7, failures=1),
+        )
+    )
+    run(curator.propose("revisa"))
+    assert provider.requests[-1].call.catalog_fp == first
+
+    # cambio real de identidad: sí cambia la huella
+    registry.replace_manifest(
+        SkillManifest(id="csv_to_json", description="otra cosa distinta", tags=("csv",))
+    )
+    run(curator.propose("revisa"))
+    assert provider.requests[-1].call.catalog_fp != first
+
+
+def test_stats_travel_in_the_dynamic_block(tmp_path: Path) -> None:
+    """Las estadísticas van en el bloque dinámico, no en el prefijo cacheable."""
+    registry = make_registry(tmp_path)
+    curator = make_curator(registry, [{"content": ops_json([])}])
+    run(curator.propose("revisa"))
+
+    messages = curator.provider.requests[-1].messages
+    catalog_text = messages[1].content  # SYSTEM → catálogo estable → dinámico
+    dynamic_text = messages[2].content
+    assert "uses=" not in catalog_text
+    assert "csv_to_json" in catalog_text
+    assert "uses=" in dynamic_text
+    assert "csv_to_json" in dynamic_text
+
+
 def test_propose_parses_operations(tmp_path: Path) -> None:
     registry = make_registry(tmp_path)
     curator = make_curator(registry, [{"content": ops_json([{"op": "retag", "targets": ["csv_to_json"], "proposal": {"tags": ["csv", "json"]}, "reason": "mejor tag"}])}])

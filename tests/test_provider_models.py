@@ -116,6 +116,22 @@ def test_fetch_models_ok_but_empty_is_loud(monkeypatch) -> None:
     assert "no traía modelos" in result.error
 
 
+def test_context_for_reads_the_declared_window() -> None:
+    """La ventana declarada sale de claves de contexto reales."""
+    result = models.ModelsResult(
+        ok=True,
+        models=("m1", "m2", "m3"),
+        details={
+            "m1": {"id": "m1", "max_input_tokens": 200_000, "max_tokens": 8192},
+            "m2": {"id": "m2", "max_tokens": 8192},  # solo el tope de salida
+            "m3": {"id": "m3", "meta": {"n_ctx": 32_768}},
+        },
+    )
+    assert result.context_for("m1") == 200_000  # gana la ventana, no el tope de salida
+    assert result.context_for("m2") is None  # `max_tokens` NO es la ventana
+    assert result.context_for("m3") == 32_768  # claves anidadas (p. ej. LM Studio)
+
+
 def test_default_model() -> None:
     assert models.default_model(("a", "b")) == "a"
     assert models.default_model(()) == ""

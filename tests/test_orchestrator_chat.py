@@ -14,9 +14,6 @@ def run(coro):
     return asyncio.run(coro)
 
 
-ROOT = Path(r"C:\Users\Ian\Desktop\Satellite")
-
-
 class FakePlanner(Planner):
     def __init__(self):
         self.plans = 0
@@ -60,7 +57,7 @@ def make_services(provider) -> RuntimeServices:
     return RuntimeServices(registry=reg, provider=provider)
 
 
-def test_chat_goal_skips_graph() -> None:
+def test_chat_goal_skips_graph(tmp_path: Path) -> None:
     """Pregunta conversacional → responde directo, sin planificar ni correr."""
     # Heurística decide que es chat → solo 1 llamada (la respuesta directa)
     provider = FakeLLM(script=[
@@ -72,7 +69,7 @@ def test_chat_goal_skips_graph() -> None:
     services = make_services(provider)
     services.sink = sink
     orch = DefaultOrchestrator(planner, runner, services, sink=sink)
-    task = Task(goal="¿qué es la fotosíntesis?", project_root=ROOT)
+    task = Task(goal="¿qué es la fotosíntesis?", project_root=tmp_path)
     result = run(orch.execute(task))
     assert result.status.value == "ok"
     assert "fotosíntesis" in result.summary.lower()
@@ -86,13 +83,13 @@ def test_chat_goal_skips_graph() -> None:
     assert "graph_built" not in types
 
 
-def test_task_goal_does_use_graph() -> None:
+def test_task_goal_does_use_graph(tmp_path: Path) -> None:
     """Tarea de código → va al planner (no corta por chat)."""
     provider = FakeLLM()
     planner = FailingPlanner()
     runner = FakeRunner()
     orch = DefaultOrchestrator(planner, runner, make_services(provider))
-    task = Task(goal="crea una página html para el proyecto", project_root=ROOT)
+    task = Task(goal="crea una página html para el proyecto", project_root=tmp_path)
     try:
         run(orch.execute(task))
     except (AssertionError, TypeError, AttributeError):

@@ -84,6 +84,63 @@ def make_request(tools=False, **overrides) -> LLMRequest:
     return LLMRequest(**kwargs)
 
 
+def test_reasoning_models_use_max_completion_tokens_without_temperature() -> None:
+    """GPT-5 y las series `o` rechazan `max_tokens` y un `temperature` no estándar."""
+    for model in ("gpt-5-mini", "o3-mini", "o1-preview"):
+        client = FakeOpenAIClient()
+        client.response = FakeOpenAIResponse(content="ok")
+        provider = OpenAICompatProvider(
+            ProviderConfig(name="openai", model=model, api_key="test"), client=client
+        )
+        run(provider.complete(make_request(max_tokens=128, temperature=0.7)))
+        kwargs = client.calls[-1]
+        assert kwargs["max_completion_tokens"] == 128, model
+        assert "max_tokens" not in kwargs, model
+        assert "temperature" not in kwargs, model
+
+
+def test_classic_models_keep_temperature_and_max_tokens() -> None:
+    provider, client = make_provider()  # gpt-4o-mini
+    client.response = FakeOpenAIResponse(content="ok")
+    run(provider.complete(make_request(max_tokens=64, temperature=0.7)))
+    kwargs = client.calls[-1]
+    assert kwargs["max_tokens"] == 64
+    assert kwargs["temperature"] == 0.7
+    assert "max_completion_tokens" not in kwargs
+
+
+def test_model_capabilities_can_be_overridden_from_config() -> None:
+    """Una familia nueva se arregla por config, sin tocar el código."""
+    cfg = ProviderConfig(
+        name="openai",
+        model="mi-modelo-nuevo",
+        api_key="test",
+        model_overrides={"mi-modelo-nuevo": {"reasoning": True}},
+    )
+    client = FakeOpenAIClient()
+    client.response = FakeOpenAIResponse(content="ok")
+    run(OpenAICompatProvider(cfg, client=client).complete(make_request(max_tokens=10, temperature=0.5)))
+    assert client.calls[-1]["max_completion_tokens"] == 10
+    assert "temperature" not in client.calls[-1]
+
+    # y al revés: un modelo de la tabla al que no le aplica la sospecha
+    cfg2 = ProviderConfig(
+        name="openai",
+        model="o3-viejo",
+        api_key="test",
+        model_overrides={"o3-viejo": {"reasoning": False, "accepts_temperature": True}},
+    )
+    client2 = FakeOpenAIClient()
+    client2.response = FakeOpenAIResponse(content="ok")
+    run(
+        OpenAICompatProvider(cfg2, client=client2).complete(
+            make_request(max_tokens=10, temperature=0.5)
+        )
+    )
+    assert client2.calls[-1]["max_tokens"] == 10
+    assert client2.calls[-1]["temperature"] == 0.5
+
+
 def test_translates_request() -> None:
     provider, client = make_provider()
     client.response = FakeOpenAIResponse(content="respuesta", usage=FakeUsage(1, 2, 3))
