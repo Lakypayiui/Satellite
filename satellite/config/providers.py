@@ -66,7 +66,7 @@ class SavedProvider:
     api_key_set: bool = False
 
     def to_dict(self) -> dict:
-        """Forma pública (la que consumen la web, el CLI y la TUI)."""
+        """Forma pública (la que consumen el CLI y la TUI)."""
         return {
             "id": self.id,
             "name": self.name,

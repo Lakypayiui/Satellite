@@ -1,4 +1,4 @@
-"""Configuración de proveedores LLM compartida (web, CLI y TUI).
+"""Configuración de proveedores LLM compartida (CLI y TUI).
 
 Única fuente de verdad de las reglas de guardado:
 - `id` único por proveedor; se reutiliza solo si `name+model+base_url` coinciden.

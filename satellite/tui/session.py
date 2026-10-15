@@ -92,7 +92,7 @@ class Session:
         path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         self._runtime = None
 
-    # --- proveedor (configuración compartida con el CLI y la web) ---
+    # --- proveedor (configuración compartida con el CLI) ---
 
     def provider_catalog(self):
         """Catálogo de proveedores conocidos (con su URL base)."""

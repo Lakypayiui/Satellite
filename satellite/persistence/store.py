@@ -71,7 +71,7 @@ class FileStore(Store):
         return self._read_json(path)
 
     def list_tasks(self) -> list[str]:
-        """List task ids present in the store (for CLI/web)."""
+        """List task ids present in the store (for CLI/TUI)."""
         return [p.stem for p in (self.root / "tasks").glob("*.json")]
 
     # --- esquema, snapshots y rollback ---

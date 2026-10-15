@@ -1,6 +1,6 @@
 """Listado de modelos de un proveedor (stdlib, sin dependencias nuevas).
 
-Portado de ``/api/models`` de la consola web, con dos mejoras:
+Portado de la lógica de modelos de la consola web (ya retirada), con dos mejoras:
 - para ``anthropic`` usa ``x-api-key`` + ``anthropic-version`` (con ``Bearer``
   nunca funcionaba contra la API real);
 - la URL se normaliza para no duplicar ``/v1``.

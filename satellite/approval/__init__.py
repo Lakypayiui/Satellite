@@ -1,4 +1,4 @@
-"""Aprobación humana: puerto único (CLI/Web/MCP) y políticas deterministas."""
+"""Aprobación humana: puerto único (CLI/TUI/MCP) y políticas deterministas."""
 
 from satellite.approval.base import (
     ApprovalContext,
@@ -17,7 +17,6 @@ from satellite.approval.policy import (
 )
 from satellite.approval.state import PendingProposals
 from satellite.approval.tui import TuiApproval
-from satellite.approval.web import WebApproval
 
 __all__ = [
     "ApprovalContext",
@@ -27,7 +26,6 @@ __all__ = [
     "PendingApprovalPort",
     "proposal_id_of",
     "CliApproval",
-    "WebApproval",
     "McpApproval",
     "TuiApproval",
     "ApprovalPolicy",
