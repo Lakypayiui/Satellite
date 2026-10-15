@@ -1,0 +1,12 @@
+{
+  "id": "agent_creator",
+  "name": "Agent Creator",
+  "description": "Produce especificaciones declarativas de agentes (ProposedAgent) a partir de una necesidad de capacidad",
+  "capabilities": ["create_agent", "design_agent"],
+  "prompt_ref": "agent_creator",
+  "tools": [],
+  "validators": [],
+  "model_role": "creator",
+  "max_turns": 1,
+  "timeout_s": 120
+}

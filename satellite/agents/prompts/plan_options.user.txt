@@ -1,0 +1,6 @@
+# ENTRADAS
+<data>
+Tarea o duda: {task}
+Contexto del proyecto y catálogo: {context}
+Intentos o aclaraciones previas: {feedback}
+</data>

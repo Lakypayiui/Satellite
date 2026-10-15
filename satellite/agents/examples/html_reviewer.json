@@ -1,0 +1,12 @@
+{
+  "id": "html_reviewer",
+  "name": "HTML Reviewer",
+  "description": "Revisa documentos HTML buscando errores de estructura y accesibilidad",
+  "capabilities": ["review_html", "validate_html"],
+  "prompt_ref": "html_reviewer",
+  "tools": ["read_file"],
+  "validators": [],
+  "model_role": "agent",
+  "max_turns": 1,
+  "timeout_s": 120
+}

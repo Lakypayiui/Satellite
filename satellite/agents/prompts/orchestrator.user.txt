@@ -1,0 +1,9 @@
+# ENTRADAS
+<data>
+Tarea: {task}
+Contexto adicional: {context}
+Feedback de intentos previos: {feedback}
+</data>
+
+Recuerda: el catálogo de agentes disponibles y la conversación reciente llegan
+en el bloque <data> anterior.

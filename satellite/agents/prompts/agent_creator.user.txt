@@ -1,0 +1,6 @@
+# ENTRADAS
+<data>
+Necesidad: {task}
+Contexto (catálogo de agentes, validators, reglas de naming): {context}
+Errores de validación del intento anterior: {feedback}
+</data>

@@ -1,0 +1,12 @@
+{
+  "id": "html_writer",
+  "name": "HTML Writer",
+  "description": "Agente especializado en crear y modificar documentos HTML",
+  "capabilities": ["write_html", "modify_html"],
+  "prompt_ref": "html_writer",
+  "tools": ["read_file", "write_file", "edit_file"],
+  "validators": [],
+  "model_role": "agent",
+  "max_turns": 1,
+  "timeout_s": 120
+}

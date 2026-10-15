@@ -1,0 +1,12 @@
+{
+  "id": "test_runner",
+  "name": "Test Runner",
+  "description": "Ejecuta tests del proyecto y reporta resultados",
+  "capabilities": ["run_tests", "test_report"],
+  "prompt_ref": "test_runner",
+  "tools": ["run_command", "read_file"],
+  "validators": [],
+  "model_role": "agent",
+  "max_turns": 1,
+  "timeout_s": 120
+}

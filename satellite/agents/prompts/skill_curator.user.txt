@@ -1,0 +1,6 @@
+# ENTRADAS
+<data>
+Solicitud o modo (lote/bajo demanda): {task}
+Skills y estadísticas: {context}
+Feedback previo: {feedback}
+</data>
