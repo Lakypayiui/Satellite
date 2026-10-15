@@ -171,3 +171,92 @@ def test_summary_is_the_llm_text_when_there_is_nothing_else() -> None:
     assert _summarize({}, {"path": "src/a.py", "content": "x"}, None) == "Trabajó en src/a.py"
     assert _summarize({}, {}, "boom") == "Node falló: boom"
     assert _summarize({}, {}, None) == "Node completado"
+
+
+class _PuertoGrabador:
+    """Puerto de aprobación de mentira: graba lo que le piden y decide."""
+
+    def __init__(self, *, approve: bool = True, feedback: str = "") -> None:
+        self.approve = approve
+        self.feedback = feedback
+        self.calls: list = []
+
+    async def request(self, proposal, ctx):
+        from satellite.core.proposal import ApprovalDecision, ApprovalStatus
+
+        self.calls.append(ctx)
+        return ApprovalDecision(
+            status=ApprovalStatus.APPROVED if self.approve else ApprovalStatus.REJECTED,
+            feedback=self.feedback,
+        )
+
+
+def _denegado_por_ruta(fuera: Path, proyecto: Path):
+    from satellite.core.tool_models import ToolResult
+
+    return ToolResult(
+        call_id="c1",
+        success=False,
+        error=f"fuera del proyecto: {fuera}",
+        error_code="path_outside_project",
+        output={"path": str(fuera), "project_root": str(proyecto), "raw": str(fuera)},
+    )
+
+
+def _escribir_en(fuera: Path):
+    from satellite.core.tool_models import ToolCall
+
+    return ToolCall(id="c1", name="write_file", arguments={"path": str(fuera), "content": "hola"})
+
+
+def test_a_path_outside_is_asked_and_retried_with_permission(tmp_path: Path) -> None:
+    """La negativa deja de ser un callejón sin salida: se pregunta y, si sí, se hace."""
+    from satellite.tools.base import ToolContext
+
+    spec = make_spec()
+    agent, _ = make_agent(spec, [], tmp_path)
+    fuera = tmp_path.parent / "otra_zona" / "a.txt"
+    (tmp_path.parent / "otra_zona").mkdir(exist_ok=True)
+    port = _PuertoGrabador(approve=True, feedback="once")
+    ctx = ToolContext(project_root=tmp_path, policy=agent.policy, approval=port)
+
+    result = run(agent._ask_for_path(_escribir_en(fuera), ctx, _denegado_por_ruta(fuera, tmp_path)))
+
+    assert len(port.calls) == 1
+    assert port.calls[0].kind == "path"
+    assert port.calls[0].details["path"] == str(fuera)
+    assert result.success is True
+    assert fuera.read_text(encoding="utf-8") == "hola"
+
+
+def test_allowing_the_session_stops_asking(tmp_path: Path) -> None:
+    from satellite.tools.base import ToolContext
+
+    spec = make_spec()
+    agent, _ = make_agent(spec, [], tmp_path)
+    fuera = tmp_path.parent / "zona_sesion" / "b.txt"
+    (tmp_path.parent / "zona_sesion").mkdir(exist_ok=True)
+    port = _PuertoGrabador(approve=True, feedback="session")
+    ctx = ToolContext(project_root=tmp_path, policy=agent.policy, approval=port)
+
+    run(agent._ask_for_path(_escribir_en(fuera), ctx, _denegado_por_ruta(fuera, tmp_path)))
+
+    assert fuera in tuple(agent.policy.allowed_paths)
+    assert agent.policy.check_path(fuera, tmp_path) is True
+
+
+def test_a_rejected_path_keeps_the_honest_error(tmp_path: Path) -> None:
+    from satellite.tools.base import ToolContext
+
+    spec = make_spec()
+    agent, _ = make_agent(spec, [], tmp_path)
+    fuera = tmp_path.parent / "rechazada" / "c.txt"
+    port = _PuertoGrabador(approve=False)
+    ctx = ToolContext(project_root=tmp_path, policy=agent.policy, approval=port)
+
+    result = run(agent._ask_for_path(_escribir_en(fuera), ctx, _denegado_por_ruta(fuera, tmp_path)))
+
+    assert len(port.calls) == 1
+    assert result.success is False
+    assert str(fuera) in (result.error or "")
+    assert not fuera.exists()

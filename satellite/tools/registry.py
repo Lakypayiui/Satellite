@@ -55,13 +55,22 @@ class DefaultToolRegistry(ToolRegistry):
                 call_id=call.id,
                 success=False,
                 error=f"permiso denegado: tool '{call.name}' no está permitida",
+                error_code="tool_not_allowed",
             )
             self._emit_called(call, tool_ctx, result)
             return result
         try:
             result = await tool.execute(call.arguments, tool_ctx)
         except ToolError as exc:
-            result = ToolResult(call_id=call.id, success=False, error=str(exc))
+            result = ToolResult(
+                call_id=call.id,
+                success=False,
+                error=str(exc),
+                error_code=str(getattr(exc, "code", "") or ""),
+                # Si el error trae detalles estructurados (p.ej. la ruta denegada),
+                # viajan aquí: el runtime los usa para pedir permiso sin parsear texto.
+                output=getattr(exc, "details", None),
+            )
         self._emit_called(call, tool_ctx, result)
         return result
 

@@ -228,6 +228,40 @@ def test_plan_modal_makes_all_the_options_reachable(tmp_path, monkeypatch) -> No
     asyncio.run(scenario())
 
 
+def test_a_path_request_offers_allowing_it_for_the_session(tmp_path, monkeypatch) -> None:
+    """Una ruta de fuera del proyecto se puede permitir una vez o para la sesión."""
+    from satellite.core.proposal import ApprovalStatus
+    from satellite.tui.app import ApprovalScreen
+
+    async def scenario():
+        app = make_app(tmp_path, monkeypatch)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            tomada: dict = {}
+            app.push_screen(
+                ApprovalScreen(
+                    "p1",
+                    "read_file pide acceso a C:/otra/carpeta",
+                    {"path": "C:/otra/carpeta", "tool": "read_file", "consequence": "lectura"},
+                    "path",
+                ),
+                lambda decision: tomada.setdefault("d", decision),
+            )
+            await pilot.pause()
+            app.screen.query_one("#approve-session", Button).press()
+            await pilot.pause()
+            assert tomada["d"].status is ApprovalStatus.APPROVED
+            assert tomada["d"].feedback == "session"
+
+            # en una petición normal (agente/skill) ese botón no aparece
+            app.push_screen(ApprovalScreen("p2", "crear agente x", {}, "agent"), lambda d: None)
+            await pilot.pause()
+            assert not app.screen.query("#approve-session")
+            app.screen.query_one("#approve", Button).press()
+
+    asyncio.run(scenario())
+
+
 def test_the_number_keys_pick_the_right_option(monkeypatch) -> None:
     from satellite.core.plan import PlanOption, PlanOptions
     from satellite.tui.app import PlanOptionsScreen

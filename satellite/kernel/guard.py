@@ -24,6 +24,8 @@ from satellite.kernel.paths import DataPaths
 class KernelWriteError(ToolError):
     """Intento de escritura fuera de las raíces de datos permitidas."""
 
+    code = "protected_zone"
+
 
 def package_root() -> Path:
     """Raíz del paquete ``satellite/`` (el kernel)."""

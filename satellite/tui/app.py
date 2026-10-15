@@ -26,28 +26,55 @@ PROMPT_HINT = "Escríbele al agente: «necesito agregar X», «revisa esto»… 
 
 
 class ApprovalScreen(ModalScreen[ApprovalDecision]):
-    """Modal de aprobación humana (aprueba / pide cambios / rechaza)."""
+    """Modal de aprobación humana (aprueba / pide cambios / rechaza).
+
+    Para las peticiones de tipo ``path`` (acceso fuera del proyecto) ofrece además
+    «Permitir la sesión», que recuerda esa carpeta hasta cerrar la TUI.
+    """
 
     BINDINGS = [("escape", "reject", "Rechazar")]
 
-    def __init__(self, proposal_id: str, summary: str, details: dict) -> None:
+    def __init__(
+        self, proposal_id: str, summary: str, details: dict, kind: str = "agent"
+    ) -> None:
         super().__init__()
         self.proposal_id = proposal_id
         self.summary = summary
         self.details = details
+        self.kind = kind or "agent"
 
     def compose(self) -> ComposeResult:
+        es_ruta = self.kind == "path"
         with Container(id="approval-box"):
-            yield Static(render.proposal_panel(self.summary, self.details), id="approval-body")
+            with VerticalScroll(id="approval-scroll"):
+                yield Static(
+                    render.proposal_panel(self.summary, self.details, kind=self.kind),
+                    id="approval-body",
+                )
             with Horizontal(id="approval-actions"):
-                yield Button("Aprobar", variant="success", id="approve")
-                yield Button("Cambios", variant="warning", id="changes")
+                yield Button(
+                    "Permitir una vez" if es_ruta else "Aprobar",
+                    variant="success",
+                    id="approve",
+                )
+                if es_ruta:
+                    yield Button("Permitir la sesión", variant="primary", id="approve-session")
+                else:
+                    yield Button("Cambios", variant="warning", id="changes")
                 yield Button("Rechazar", variant="error", id="reject")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "approve":
             self.dismiss(
                 ApprovalDecision(status=ApprovalStatus.APPROVED, reason="aprobado en la TUI")
+            )
+        elif event.button.id == "approve-session":
+            self.dismiss(
+                ApprovalDecision(
+                    status=ApprovalStatus.APPROVED,
+                    reason="aprobado en la TUI",
+                    feedback="session",
+                )
             )
         elif event.button.id == "changes":
             self.dismiss(
@@ -145,6 +172,7 @@ class SatelliteTUI(App):
     }
     #plan-actions { height: auto; }
     #plan-actions Button { width: 1fr; margin-bottom: 1; }
+    #approval-scroll { height: auto; max-height: 24; }
     #provider-box {
         width: 92; height: auto; max-height: 90%;
         border: thick $accent; background: $panel; padding: 1 2;
@@ -370,6 +398,7 @@ class SatelliteTUI(App):
                 item.get("proposal_id", ""),
                 item.get("summary", ""),
                 item.get("details", {}),
+                item.get("kind", "agent"),
             ),
             lambda decision, pid=item.get("proposal_id", ""): self._resolve_approval(pid, decision),
         )
@@ -391,6 +420,22 @@ class SatelliteTUI(App):
         self._ensure_subscribed()
         self.run_worker(coro, name=name, group="runtime", exclusive=False)
 
+    def _approval_for_session(self):
+        """Puerto de aprobación de esta sesión.
+
+        En ``unrestricted`` no se pregunta nada (el usuario pidió no tener límites);
+        en ``ask`` y en ``auto`` sí se pregunta por las rutas de fuera del proyecto:
+        salir del proyecto no se concede en silencio. Las zonas protegidas las veta el
+        guard y no pasan por aquí.
+        """
+        from satellite.approval.base import AutoApprovalPort
+
+        try:
+            mode = self.session.status().policy_mode
+        except Exception:  # noqa: BLE001 — si no se puede leer, preguntar es lo seguro
+            mode = "ask"
+        return AutoApprovalPort() if mode == "unrestricted" else self.approval
+
     async def _do_chat(
         self, text: str, *, plan_mode: bool = False, extra_metadata: dict | None = None
     ) -> None:
@@ -398,7 +443,7 @@ class SatelliteTUI(App):
         try:
             reply = await self.session.send_message(
                 text,
-                approval=self.approval,
+                approval=self._approval_for_session(),
                 plan_mode=plan_mode,
                 extra_metadata=extra_metadata,
             )

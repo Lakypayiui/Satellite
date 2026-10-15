@@ -379,11 +379,23 @@ def event_text(event: ExecutionEvent) -> Text:
     return text
 
 
-def proposal_panel(summary: str, details: dict) -> Panel:
+_APPROVAL_TITLES = {
+    "path": "acceso fuera del proyecto",
+    "delegation": "permiso de delegación",
+    "permission_escalation": "escalado de permisos",
+}
+
+
+def proposal_panel(summary: str, details: dict, *, kind: str = "agent") -> Panel:
     """Panel con el contenido de una propuesta a aprobar."""
     body = Text()
     body.append(summary + "\n", style="bold")
     for key, value in (details or {}).items():
         body.append(f"\n{key}: ", style="bold dim")
-        body.append(str(value))
-    return Panel(body, title="aprobación requerida", title_align="left", border_style="yellow")
+        body.append(str(value), style="bold" if key == "path" else "")
+    return Panel(
+        body,
+        title=_APPROVAL_TITLES.get(str(kind), "aprobación requerida"),
+        title_align="left",
+        border_style="yellow",
+    )

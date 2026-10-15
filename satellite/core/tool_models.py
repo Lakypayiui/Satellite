@@ -74,6 +74,9 @@ class ToolResult:
     output: Any = None
     error: str | None = None
     duration_ms: int = 0
+    # Etiqueta de error para distinguir causas sin parsear el mensaje: p.ej.
+    # "path_outside_project" (autorizable) o "protected_zone" (veto incondicional).
+    error_code: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -82,6 +85,7 @@ class ToolResult:
             "output": self.output,
             "error": self.error,
             "duration_ms": self.duration_ms,
+            "error_code": self.error_code,
         }
 
     @classmethod
@@ -92,4 +96,5 @@ class ToolResult:
             output=d.get("output"),
             error=d.get("error"),
             duration_ms=int(d.get("duration_ms", 0)),
+            error_code=str(d.get("error_code", "")),
         )

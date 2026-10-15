@@ -117,6 +117,9 @@ class DefaultGraphRunner(GraphRunner):
                 task_id=task.task_id,
                 node_id=node_id,
                 project_root=task.project_root,
+                # El puerto de la sesión: sin esto, una tool que pide una ruta de
+                # fuera del proyecto no tenía a quién preguntar.
+                approval=getattr(services, "approval", None),
             )
             result = await agent.execute(entrada["task"], agent_ctx)
             results[node_id] = result

@@ -33,6 +33,9 @@ class ToolContext:
     delegation: object | None = None
     delegation_ctx: object | None = None
     active_spec: object | None = None
+    # Puerto de aprobación (por sesión): el runtime lo usa para pedir permiso
+    # cuando la política deniega una ruta autorizable.
+    approval: object | None = None
 
 
 class Tool(ABC):

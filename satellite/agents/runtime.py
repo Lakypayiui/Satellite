@@ -85,6 +85,19 @@ def build_user_prompt(
     )
 
 
+# Qué implica cada tool, para que el modal lo diga en una palabra.
+_ACCESS_KIND = {
+    "read_file": "lectura",
+    "list_dir": "lectura",
+    "search_files": "lectura",
+    "write_file": "escritura",
+    "edit_file": "escritura",
+    "run_command": "ejecución",
+    "run_shell": "ejecución",
+    "run_python": "ejecución",
+}
+
+
 class LLMAgent(Agent):
     """Ejecuta un nodo: LLM → tool_calls → tools → síntesis → AgentResult."""
 
@@ -246,6 +259,63 @@ class LLMAgent(Agent):
         self._emit(ctx, EventType.NODE_FINISHED, {"status": status.value, "summary": result.summary})
         return result
 
+    async def _ask_for_path(self, call: ToolCall, tool_ctx: ToolContext, result):
+        """Pide permiso para una ruta de fuera del proyecto y reintenta si lo dan.
+
+        Convierte la negativa en una decisión del usuario: antes era un callejón sin
+        salida y el modelo improvisaba (acabó presentando el proyecto como si fuera la
+        carpeta pedida). Las zonas protegidas no llegan aquí: traen otro código y no se
+        preguntan nunca.
+        """
+        from satellite.approval.base import ApprovalContext
+        from satellite.core.events import EventType, ExecutionEvent
+        from satellite.core.proposal import ApprovalStatus
+
+        details = dict(result.output) if isinstance(result.output, dict) else {}
+        resolved = str(details.get("path") or "")
+        if not resolved:
+            return result
+        summary = f"{call.name} pide acceso a {resolved}"
+        decision = await tool_ctx.approval.request(
+            {"kind": "path", "summary": summary},
+            ApprovalContext(
+                kind="path",
+                task_id=tool_ctx.task_id,
+                summary=summary,
+                details={
+                    "tool": call.name,
+                    "path": resolved,
+                    "project_root": str(details.get("project_root") or tool_ctx.project_root),
+                    "requested": str(details.get("raw") or ""),
+                    "consequence": _ACCESS_KIND.get(call.name, "acceso"),
+                },
+            ),
+        )
+        if decision is None or getattr(decision, "status", None) is not ApprovalStatus.APPROVED:
+            if tool_ctx.sink is not None:
+                tool_ctx.sink.emit(
+                    ExecutionEvent(
+                        event_type=EventType.POLICY_VIOLATION,
+                        task_id=tool_ctx.task_id,
+                        node_id=tool_ctx.node_id or None,
+                        payload={"reason": f"acceso denegado a {resolved}", "tool": call.name},
+                    )
+                )
+            return result
+        if str(getattr(decision, "feedback", "") or "") == "session":
+            self._grant_for_session(resolved)
+        tool_ctx.allowed_paths = tuple(getattr(tool_ctx, "allowed_paths", None) or ()) + (
+            Path(resolved),
+        )
+        return await self.tool_registry.execute(call, tool_ctx)
+
+    def _grant_for_session(self, resolved: str) -> None:
+        """Permiso de sesión: la raíz queda concedida en la política."""
+        if self.policy is None:
+            return
+        current = tuple(getattr(self.policy, "allowed_paths", ()) or ())
+        self.policy.allowed_paths = current + (Path(resolved),)
+
     async def _run_tool(self, call: ToolCall, ctx: AgentContext):
         started = time.monotonic()
         tool_ctx = ToolContext(
@@ -258,8 +328,11 @@ class LLMAgent(Agent):
             delegation=self.delegation_manager,
             delegation_ctx=self.delegation_ctx,
             active_spec=self.spec,
+            approval=getattr(ctx, "approval", None),
         )
         result = await self.tool_registry.execute(call, tool_ctx)
+        if result.error_code == "path_outside_project" and tool_ctx.approval is not None:
+            result = await self._ask_for_path(call, tool_ctx, result)
         record = ToolRecord(
             tool_name=call.name,
             arguments=call.arguments,

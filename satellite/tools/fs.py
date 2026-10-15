@@ -184,25 +184,47 @@ def _list_entries(path: Path, recursive: bool) -> list[dict]:
 
 
 def _resolve(raw: object, tool_ctx: ToolContext) -> Path:
-    """Resuelve la ruta pedida dentro del proyecto (via política y zonas).
+    """Resuelve la ruta pedida dentro del proyecto (via política, concesiones y zonas).
 
-    Lanza ToolError si la ruta queda fuera de las raíces permitidas o si toca una
-    zona protegida del framework (kernel, estado, auditoría, configuración): eso
-    vale también para **leer**, porque ahí vive la clave del proveedor.
+    Lanza ``PathOutsideProject`` si queda fuera del proyecto, que el runtime puede
+    convertir en una petición de permiso, y ``ProtectedZoneForbidden`` si toca una
+    zona interna del framework, que no se concede nunca (ni leyendo).
     """
     if not isinstance(raw, str) or not raw.strip():
         raise ToolError("se requiere el argumento 'path' (string no vacío)")
     base = tool_ctx.workdir or tool_ctx.project_root
     path = Path(raw) if Path(raw).is_absolute() else base / Path(raw)
     policy = tool_ctx.policy
-    if policy is not None and not policy.check_path(path, tool_ctx.project_root):
-        raise ToolError(f"permiso denegado: {path}")
+    if (
+        policy is not None
+        and not policy.check_path(path, tool_ctx.project_root)
+        and not _granted_for_this_call(path, tool_ctx)
+    ):
+        from satellite.core.errors import PathOutsideProject
+
+        raise PathOutsideProject(
+            path.resolve(), Path(tool_ctx.project_root).resolve(), str(raw)
+        )
     _assert_not_protected(path, tool_ctx, base)
     return path
 
 
+def _granted_for_this_call(path: Path, tool_ctx: ToolContext) -> bool:
+    """True si una aprobación puntual concedió esta ruta para esta llamada."""
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    for allowed in getattr(tool_ctx, "allowed_paths", None) or ():
+        base = Path(allowed).resolve()
+        if resolved == base or base in resolved.parents:
+            return True
+    return False
+
+
 def _assert_not_protected(path: Path, tool_ctx: ToolContext, base: Path) -> None:
     """Veta las zonas internas del framework (la ruta se resuelve antes de mirar)."""
+    from satellite.core.errors import ProtectedZoneForbidden
     from satellite.kernel.guard import protected_zone
     from satellite.kernel.paths import resolve_paths
 
@@ -214,4 +236,4 @@ def _assert_not_protected(path: Path, tool_ctx: ToolContext, base: Path) -> None
             return
     zone = protected_zone(path, paths)
     if zone:
-        raise ToolError(f"zona protegida ({zone}): no se puede tocar {path}")
+        raise ProtectedZoneForbidden(f"zona protegida ({zone}): no se puede tocar {path}")
