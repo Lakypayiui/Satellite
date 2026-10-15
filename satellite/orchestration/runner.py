@@ -17,6 +17,26 @@ from satellite.events.base import EventSink
 from satellite.observability.logger import ExecutionRecord
 
 
+def _with_conversation(bundle: ContextBundle, task) -> ContextBundle:
+    """Antepone la conversación reciente al contexto de un nodo.
+
+    Va como sección **dinámica** (nunca al prefijo estable: tools → system → catálogo),
+    así un seguimiento como «explícamela» tiene antecedente también cuando acaba
+    ejecutando un grafo. Sin historial no se añade nada.
+    """
+    from satellite.core.context_models import ContextRef, ContextRefKind, ContextSection
+    from satellite.orchestration.planner_prompt import render_history
+
+    conversacion = render_history(task.metadata.get("history")).strip()
+    if not conversacion:
+        return bundle
+    seccion = ContextSection(
+        ref=ContextRef(ContextRefKind.CONVERSATION, "conversación reciente"),
+        content=conversacion,
+    )
+    return ContextBundle(sections=(seccion,) + bundle.sections)
+
+
 class DefaultGraphRunner(GraphRunner):
     """Ejecuta A→B→C directo, sin pasar por el Orchestrator."""
 
@@ -106,6 +126,7 @@ class DefaultGraphRunner(GraphRunner):
             bundle = ContextBundle()
             if engine is not None and refs:
                 bundle = await engine.resolve(refs)
+            bundle = _with_conversation(bundle, task)
 
             # Agente
             agent = factory.create(node.spec_id, model_role=node.model_role)

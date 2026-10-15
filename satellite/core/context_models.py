@@ -18,6 +18,7 @@ class ContextRefKind(Enum):
     DIR = "dir"
     PATTERN = "pattern"
     SUMMARY = "summary"
+    CONVERSATION = "conversation"
 
 
 @dataclass(frozen=True)

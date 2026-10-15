@@ -196,13 +196,26 @@ class DefaultOrchestrator(Orchestrator):
         )
 
     async def _answer_direct(self, task: Task) -> TaskResult:
-        """Responde una consulta conversacional con el LLM (sin tools ni grafo)."""
-        prompt = (
+        """Responde una consulta conversacional con el LLM (sin tools ni grafo).
+
+        Incluye la conversación reciente: sin ella, un seguimiento como «explícamela»
+        llegaba sin antecedente y el modelo contestaba una obviedad.
+        """
+        from satellite.orchestration.planner_prompt import render_history
+
+        conversacion = render_history(task.metadata.get("history")).strip()
+        trozos = [
             "El usuario hace una consulta de tipo conversacional. Responde de "
             "forma clara y concisa, en el idioma del usuario. NO menciones tools, "
-            "agentes ni grafos.\n\n"
-            f"Consulta del usuario:\n{task.goal}"
-        )
+            "agentes ni grafos.",
+            "Si el mensaje se refiere a algo ya dicho («eso», «explícamelo», «y eso "
+            "por qué»), resuélvelo con la conversación de abajo. Si de verdad falta "
+            "el antecedente, dilo en vez de inventarlo.",
+        ]
+        if conversacion:
+            trozos.append(f"CONVERSACIÓN RECIENTE:\n{conversacion}")
+        trozos.append(f"Consulta del usuario:\n{task.goal}")
+        prompt = "\n\n".join(trozos)
         request = LLMRequest(
             messages=(
                 Message(
