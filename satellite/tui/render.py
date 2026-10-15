@@ -152,6 +152,15 @@ def status_bar(status) -> Text:
     text.append(f"agentes {status.agents}", style="cyan")
     text.append("  ·  ", style="dim")
     text.append(f"skills {status.skills}", style="magenta")
+    percent = int(getattr(status, "context_percent", 0) or 0)
+    if percent:
+        from satellite.context.compaction import render_bar, usage_style
+
+        style = {"ok": "dim", "aviso": "yellow", "peligro": "bold red"}[
+            usage_style(percent / 100)
+        ]
+        text.append("  ·  ", style="dim")
+        text.append(f"ctx {render_bar(percent / 100, 6, unicode_ok=True)} {percent}%", style=style)
     text.append("  ·  ", style="dim")
     provider = status.provider or "sin proveedor"
     model = f"/{status.model}" if status.model else ""

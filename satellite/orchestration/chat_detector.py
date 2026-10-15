@@ -1,8 +1,18 @@
 """Clasificador de consultas: ¿conversacional (chat-directo) o tarea de proyecto?
 
-Heurística rápida + confirmación LLM ligera. Diseñado para que una pregunta
-básica NO genere grafos ni llame tools: si es conversacional, se responde
-directo con el LLM.
+Heurística determinista + confirmación LLM **solo** para casos ambiguos. Objetivo:
+una pregunta simple NO genera grafos ni llama tools, y una petición de trabajo
+real sí se planifica.
+
+Orden de decisión:
+1. Preguntas sobre el propio sistema ("¿qué agentes tienes?") → conversación.
+2. **Acción o diagnóstico CON contexto real de proyecto** → tarea.
+3. Preguntas de conocimiento general ("¿qué es X?") → conversación.
+4. Cortesía y relleno ("hola", "gracias", "ok", "ayúdame") → conversación.
+5. Mensaje largo sin ninguna señal → tarea.
+6. Pregunta corta con "?" → conversación.
+
+Los patrones cubren español e inglés.
 """
 
 from __future__ import annotations
@@ -13,77 +23,136 @@ from satellite.core.messages import LLMRequest, Message, Role
 from satellite.core.task import Task
 from satellite.providers.base import LLMProvider
 
-# Palabras que indican claramente UNA TAREA de proyecto (código/archivos/tools)
-_TASK_HINTS_RE = re.compile(
+# Verbos de acción sobre el proyecto (por sí solos NO bastan: exigen contexto).
+_ACTION_RE = re.compile(
     r"\b(crea|crear|escribe|escribir|arregla|arreglar|corrige|corregir|actualiza|actualizar|"
-    r"modifica|modificar|genera|generar|implementa|implementar|haz|hacer|construye|construir|"
+    r"modifica|modificar|genera|generar|implementa|implementar|construye|construir|"
     r"instala|instalar|ejecuta|ejecutar|compila|compilar|refactoriza|refactorizar|"
-    r"script|clase|función|funcion|archivo|código|codigo|repo|proyecto|"
-    r"html|css|python|java|javascript|typescript|cpp|go|rust|sql|git|pytest|test)\b",
+    r"borra|elimina|renombra|mueve|añade|anade|agrega|documenta|revisa|"
+    r"create|write|add|remove|delete|update|fix|refactor|implement|build|generate|"
+    r"rename|move|install|run|execute|compile|review|document)\b",
     re.IGNORECASE,
 )
 
-# Palabras típicas de conversación simple
+# Señales de que algo NO funciona en el proyecto (preguntar por eso es tarea).
+_DIAGNOSTIC_RE = re.compile(
+    r"\b(falla|fallo|fallando|error|errores|no funciona|no anda|rompe|roto|"
+    r"excepci[oó]n|traceback|depura|depurar|debug|se cae|crash|bug|"
+    r"fails?|failing|broken|exception|breaks?)\b",
+    re.IGNORECASE,
+)
+
+# Contexto real de proyecto (convierte una acción o un diagnóstico en tarea).
+_CONTEXT_RE = re.compile(
+    r"\b(archivo|archivos|fichero|ficheros|carpeta|carpetas|directorio|"
+    r"c[oó]digo|codigo|script|clase|funci[oó]n|funcion|m[oó]dulo|modulo|repo|"
+    r"repositorio|proyecto|html|css|json|yaml|python|java|javascript|typescript|"
+    r"cpp|go|rust|sql|bash|powershell|git|commit|pytest|test|tests|readme|log|logs|"
+    r"agente|agentes|skill|skills|herramienta|herramientas|tool|tools|"
+    r"file|files|code|function|class|module|folder|directory|project|test|tests)\b",
+    re.IGNORECASE,
+)
+
+# Un path con extensión cuenta como contexto aunque no aparezca la palabra.
+_FILE_RE = re.compile(r"\b[\w./\\-]+\.[a-z0-9]{1,5}\b", re.IGNORECASE)
+
+# Preguntas sobre el propio sistema: conversación (y se responden localmente).
+_META_CHAT_RE = re.compile(
+    r"\b(qu[eé] puedes hacer|que puedes hacer|qu[eé] sabes hacer|qu[eé] eres|qui[eé]n eres|"
+    r"qu[eé] modelos?|qu[eé] agente?s?|qu[eé] skills?|qu[eé] habilidade?s?|"
+    r"qu[eé] herramientas?|qu[eé] tools?|qu[eé] capacidades|qu[eé] funciones|"
+    r"c[oó]mo funcionas|para qu[eé] sirves|qu[eé] versi[oó]n|"
+    r"what can you do|what are you|who are you|what agents|which agents|"
+    r"what tools|what skills|what model|how do you work)\b",
+    re.IGNORECASE,
+)
+
+# Conocimiento general: no requiere tocar el proyecto.
+_KNOWLEDGE_CHAT_RE = re.compile(
+    r"\b(qu[eé] es|que es|qu[eé] significa|significa|expl[ií]came|explica|explicar|"
+    r"diferencia entre|comparaci[oó]n|ventajas|desventajas|opini[oó]n|opinas|opina|"
+    r"cu[aá]nto es|ejemplo de|resumen de la teor[ií]a|qu[eé] son|"
+    r"what is|what are|how does|difference between|explain|your opinion)\b",
+    re.IGNORECASE,
+)
+
+# Cortesía, relleno y peticiones de ayuda sin objeto concreto.
 _CHAT_HINTS_RE = re.compile(
-    r"\b(hola|buenas|gracias|qué es|que es|quien|quién|cuál es|cual es|cuáles son|cuales son|"
-    r"explícame|explicame|dime|resume|explica|cómo estás|como estas|"
-    r"cuéntame|cuentame|significa|diferencia|ventajas|desventajas|opinión|opina|"
-    r"estás|puedes ayudarme|me ayudas|consejo|sugerencia)\b",
+    r"\b(hola|buenas|buenos d[ií]as|gracias|ok|okey|vale|perfecto|genial|entendido|"
+    r"de acuerdo|listo|ayúdame|ayudame|ayudarme|me ayudas|puedes ayudarme|"
+    r"consejo|sugerencia|dime algo|cu[eé]ntame algo|"
+    r"qu[eé] es|que es|quien|qui[eé]n|cu[aá]l es|cual es|cu[aá]les son|cuales son|"
+    r"qu[eé] hay|resume|resumen|est[aá]s|tal|hola de nuevo|"
+    r"help me|thanks|thank you|hello|hi|what is)\b",
     re.IGNORECASE,
 )
 
-# Longitud máxima para considerar "posible conversación corta"
+# Longitud máxima para considerar "posible conversación" si no hay más señales.
 _MAX_LEN = 160
 
 
+def has_project_context(goal: str) -> bool:
+    """True si el mensaje apunta a ficheros, código, tools o agentes del proyecto."""
+    text = str(goal or "").strip().lower()
+    return bool(_CONTEXT_RE.search(text) or _FILE_RE.search(text))
+
+
+def has_task_hint(goal: str) -> bool:
+    """True si pide una **acción** o reporta un **fallo** con contexto de proyecto."""
+    text = str(goal or "").strip().lower()
+    if not has_project_context(text):
+        return False
+    return bool(_ACTION_RE.search(text) or _DIAGNOSTIC_RE.search(text))
+
+
 def heuristic_is_chat(goal: str) -> bool:
-    """Regla rápida: ¿parece conversación simple (sin pista de tarea de código)?"""
-    text = goal.strip().lower()
+    """Regla rápida: ¿parece conversación (sin pista de trabajo)?"""
+    text = str(goal or "").strip().lower()
     if not text:
         return False
-    # Muy largo → probablemente tarea
-    if len(goal) > _MAX_LEN:
+    # 1) Preguntas sobre el propio sistema → conversación
+    if _META_CHAT_RE.search(text):
+        return True
+    # 2) Acción o diagnóstico con contexto de proyecto → tarea
+    if has_task_hint(text):
         return False
-    # Si contiene pistas de tarea de proyecto → NO es chat
-    if _TASK_HINTS_RE.search(text):
-        return False
-    # Si parece pregunta casual o saludo → ES chat
+    # 3) Conocimiento general → conversación
+    if _KNOWLEDGE_CHAT_RE.search(text):
+        return True
+    # 4) Cortesía, relleno o "ayúdame" → conversación
     if _CHAT_HINTS_RE.search(text):
         return True
-    # Pregunta corta sin verbos de acción de código → probablemente chat
-    return len(goal) <= 60 and goal.endswith("?")
+    # 5) Mensaje largo sin ninguna señal → tarea
+    if len(text) > _MAX_LEN:
+        return False
+    # 6) Pregunta corta → conversación
+    return len(text) <= 60 and text.endswith("?")
 
 
 def is_chat_goal(task: Task, provider: LLMProvider | None) -> bool:
     """Clasifica el goal: True = conversacional (responder directo sin tools).
 
-    Híbrido síncrono: heurística rápida. Solo consulta al LLM en casos
-    AMBIGUOS (pregunta corta sin pista clara de chat ni de tarea). Si la
-    heurística identifica chat claro (saludo, "qué es", "cómo estás") no
-    gasta una llamada: los modelos pequeños no clasifican bien y la heurística
-    ya es sólida para eso.
+    Híbrido: heurística determinista y, solo en casos AMBIGUOS (mensaje corto sin
+    pistas claras de chat ni de tarea), una consulta corta al LLM. Si la
+    heurística lo tiene claro no gasta llamada: los modelos pequeños no
+    clasifican bien y aquí la regla ya es sólida.
     """
-    # Heurística contundente: pistas de tarea presentes → NO chat (sin LLM)
-    if _TASK_HINTS_RE.search(task.goal.lower()):
+    if has_task_hint(task.goal):
         return False
-    heuristic = heuristic_is_chat(task.goal)
-    # Chat claro según heurística → confiar en ella (sin llamar al LLM)
-    if heuristic:
+    if heuristic_is_chat(task.goal):
         return True
-    # Dudoso: consulta corta sin pistas claras → consultar al LLM si hay provider
-    if len(task.goal) <= 60 and provider is not None:
+    if len(task.goal.strip()) <= 60 and provider is not None:
         return _run_sync(_llm_classify(task.goal, provider))
     return False
 
 
 async def async_is_chat_goal(task: Task, provider: LLMProvider | None) -> bool:
     """Versión async (usada dentro del orchestrator)."""
-    if _TASK_HINTS_RE.search(task.goal.lower()):
+    if has_task_hint(task.goal):
         return False
-    heuristic = heuristic_is_chat(task.goal)
-    if heuristic:
+    if heuristic_is_chat(task.goal):
         return True
-    if len(task.goal) <= 60 and provider is not None:
+    if len(task.goal.strip()) <= 60 and provider is not None:
         return await _llm_classify(task.goal, provider)
     return False
 

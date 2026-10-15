@@ -7,17 +7,32 @@ que un seguimiento ("agrega esto") se entienda en el contexto de lo anterior.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from satellite.approval.base import ApprovalPort
+from satellite.context.compaction import (
+    CompactionResult,
+    ContextUsage,
+    estimate_history,
+    should_compact,
+    strip_code_fences,
+    summarize_turns,
+)
 from satellite.core.task import Task, TaskResult
 from satellite.retrieval.sanitize import sanitize
 
 MAX_RECAP_TURNS = 8
 MAX_TURN_CHARS = 1200
+CONVERSATION_FILE = "conversation.json"
 
 _ROLE_LABEL = {"user": "usuario", "assistant": "asistente"}
+
+
+def conversation_path(project_root: Path | str) -> Path:
+    """Ruta de la conversación persistida (``.satellite/state/conversation.json``)."""
+    return Path(project_root) / ".satellite" / "state" / CONVERSATION_FILE
 
 
 @dataclass(frozen=True)
@@ -56,6 +71,7 @@ class ChatReply:
     status: str = ""
     error: str | None = None
     output: dict = field(default_factory=dict)
+    compaction: dict | None = None
 
 
 class ChatSession:
@@ -67,21 +83,84 @@ class ChatSession:
         orchestrator,
         *,
         max_recap_turns: int = MAX_RECAP_TURNS,
+        settings=None,
+        persist: bool = True,
     ) -> None:
         self.project_root = Path(project_root)
         self.orchestrator = orchestrator
         self.max_recap_turns = max_recap_turns
         self.history: list[Turn] = []
+        self._settings = settings
+        self._discovered: int | None = None
+        self.persist = persist
+
+    # --- persistencia de la conversación ---
+
+    def load(self) -> int:
+        """Carga la conversación guardada; devuelve cuántos turnos había."""
+        path = conversation_path(self.project_root)
+        if not path.exists():
+            return 0
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return 0
+        raw = data.get("turns") if isinstance(data, dict) else data
+        if not isinstance(raw, list):
+            return 0
+        loaded: list[Turn] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            try:
+                loaded.append(Turn.from_dict(item))
+            except (KeyError, TypeError, ValueError):
+                continue
+        self.history = loaded
+        return len(loaded)
+
+    def save(self) -> None:
+        """Guarda la conversación (atómico y tolerante)."""
+        if not self.persist:
+            return
+        from datetime import datetime, timezone
+
+        path = conversation_path(self.project_root)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(
+                json.dumps(
+                    {
+                        "turns": [turn.to_dict() for turn in self.history],
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+        except OSError:
+            return
 
     def reset(self) -> None:
-        """Empieza una conversación nueva."""
+        """Empieza una conversación nueva (y borra la guardada)."""
         self.history.clear()
+        if not self.persist:
+            return
+        path = conversation_path(self.project_root)
+        if path.exists():
+            try:
+                path.unlink()
+            except OSError:
+                return
 
     def add(self, role: str, content: str, *, task_id: str = "", status: str = "") -> Turn:
         """Añade un turno (sanitizado). El historial es **append-only**: nunca se
 
         reescribe ni se reordena; el único punto que puede acortarlo es
-        :meth:`compact`, y **no** se llama solo.
+        :meth:`compact_now`/:meth:`compact`. Se persiste al vuelo.
         """
         turn = Turn(
             role=role,
@@ -90,6 +169,7 @@ class ChatSession:
             status=status,
         )
         self.history.append(turn)
+        self.save()
         return turn
 
     def turns(self) -> tuple[Turn, ...]:
@@ -101,8 +181,8 @@ class ChatSession:
 
         Conserva los últimos ``keep`` turnos y, si se pasa ``summary``, deja un
         único turno ``role="summary"`` con ese resumen en lugar de los descartados.
-        Devuelve cuántos turnos se descartaron. No se invoca automáticamente en
-        ningún flujo: el historial crece sólo con :meth:`add`.
+        Devuelve cuántos turnos se descartaron. Para compactar con resumen del
+        LLM (o por umbral de contexto) usa :meth:`compact_now`.
         """
         limit = self.max_recap_turns if keep is None else max(0, int(keep))
         if len(self.history) <= limit:
@@ -116,6 +196,122 @@ class ChatSession:
         )
         self.history = prefix + kept
         return dropped
+
+    # --- contexto (ventana del modelo, medición y compactación) ---
+
+    def settings(self):
+        """Configuración del kernel (se carga perezosamente)."""
+        if self._settings is None:
+            from satellite.cli.runtime_builder import CONFIG_PATH
+            from satellite.kernel.policy import load_settings
+
+            self._settings = load_settings(self.project_root / CONFIG_PATH)
+        return self._settings
+
+    def provider(self):
+        """Proveedor LLM del runtime (``None`` si no está construido)."""
+        return getattr(getattr(self.orchestrator, "services", None), "provider", None)
+
+    def provider_window(self) -> tuple[str, str]:
+        """``(modelo, base_url)`` configurados, para resolver la ventana."""
+        path = self.project_root / CONFIG_PATH
+        data: dict = {}
+        if path.exists():
+            try:
+                import json
+
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                data = loaded if isinstance(loaded, dict) else {}
+            except (OSError, ValueError):
+                data = {}
+        llm = data.get("llm") if isinstance(data.get("llm"), dict) else {}
+        model = str(llm.get("model") or data.get("model") or "")
+        base_url = str(llm.get("base_url") or data.get("base_url") or "")
+        if not model:
+            provider = self.provider()
+            model = str(getattr(provider, "model", "") or "")
+        return model, base_url
+
+    def context_usage(self, pending_text: str = "") -> ContextUsage:
+        """Cuánto contexto se está usando (real de la última llamada + estimado).
+
+        La ventana del modelo sale de la data del proveedor activo (su ``/models``);
+        se descubre una vez y queda recordada en disco.
+        """
+        from satellite.context.compaction import project_usage
+
+        return project_usage(
+            self.project_root,
+            turns=self.history,
+            pending_text=pending_text,
+            config=self.settings().compaction,
+        )
+
+    def should_compact(self, pending_text: str = "") -> bool:
+        """True si el uso alcanzó el umbral configurado (85 % por defecto)."""
+        return should_compact(self.context_usage(pending_text), self.settings().compaction)
+
+    async def compact_now(self, *, keep: int | None = None, summary: str = "") -> CompactionResult:
+        """Compacta el historial ahora: resumen + últimos turnos.
+
+        El resumen lo hace el LLM si hay proveedor; si no (o si falla), se usa un
+        recorte determinista. Nunca deja el historial vacío.
+        """
+        config = self.settings().compaction
+        limit = config.keep if keep is None else max(2, int(keep))
+        before = list(self.history)
+        tokens_before = estimate_history(before)
+        if len(before) <= limit:
+            return CompactionResult(
+                dropped=0,
+                kept=len(before),
+                summary="",
+                method="sin-cambios",
+                tokens_before=tokens_before,
+                tokens_after=tokens_before,
+            )
+
+        dropped_turns = before[:-limit]
+        kept_turns = before[-limit:]
+        if summary:
+            text, method = summary, "manual"
+        else:
+            text, method = await summarize_turns(dropped_turns, self.provider())
+        text = strip_code_fences(text)
+        header = (
+            [Turn(role="summary", content=text, status="compactado")]
+            if text
+            else []
+        )
+        candidate = header + list(kept_turns)
+        after_tokens = estimate_history(candidate)
+        if after_tokens >= tokens_before:
+            # compactar no reduciría nada (conversación pequeña): no tocamos nada
+            return CompactionResult(
+                dropped=0,
+                kept=len(before),
+                summary="",
+                method="sin-efecto",
+                tokens_before=tokens_before,
+                tokens_after=tokens_before,
+            )
+        self.history = candidate
+        self.save()
+        return CompactionResult(
+            dropped=len(dropped_turns),
+            kept=len(kept_turns),
+            summary=text,
+            method=method,
+            tokens_before=tokens_before,
+            tokens_after=after_tokens,
+        )
+
+    async def maybe_compact(self, pending_text: str = "") -> CompactionResult | None:
+        """Compacta automáticamente si se alcanzó el umbral; ``None`` si no hacía falta."""
+        if not self.should_compact(pending_text):
+            return None
+        result = await self.compact_now()
+        return result if result.dropped else None
 
     def recent(self, limit: int | None = None) -> tuple[Turn, ...]:
         """Últimos turnos (los más recientes al final)."""
@@ -138,7 +334,8 @@ class ChatSession:
         plan_mode: bool = False,
         extra_metadata: dict | None = None,
     ) -> ChatReply:
-        """Envía un mensaje: planifica/ejecuta y guarda la respuesta."""
+        """Envía un mensaje: compacta si hace falta, planifica/ejecuta y guarda."""
+        compaction = await self.maybe_compact(text)
         history = [turn.to_dict() for turn in self.recent()]
         self.add("user", text)
 
@@ -158,7 +355,12 @@ class ChatSession:
         except Exception as exc:  # noqa: BLE001 — la conversación no debe romperse
             text = f"No pude completarlo: {exc}"
             self.add("assistant", text, status="failed")
-            return ChatReply(text=text, status="failed", error=str(exc))
+            return ChatReply(
+                text=text,
+                status="failed",
+                error=str(exc),
+                compaction=compaction.to_dict() if compaction else None,
+            )
 
         reply_text = reply_from_result(result)
         self.add(
@@ -173,6 +375,7 @@ class ChatSession:
             status=result.status.value,
             error=result.error,
             output=dict(result.output or {}),
+            compaction=compaction.to_dict() if compaction else None,
         )
 
     async def choose(self, option, *, approval: ApprovalPort | None = None) -> ChatReply:

@@ -50,6 +50,10 @@ class SessionStatus:
     policy_mode: str = "ask"
     sandbox: str = "N0"
     safe_mode: bool = False
+    context_percent: int = 0
+    context_tokens: int = 0
+    context_window: int = 0
+    context_source: str = ""
 
 
 class Session:
@@ -60,6 +64,7 @@ class Session:
         self._home = Path(home) if home is not None else None
         self._runtime: tuple | None = None
         self._chat: ChatSession | None = None
+        self._restored = 0
 
     # --- rutas y configuración ---
 
@@ -190,9 +195,10 @@ class Session:
         return load_cache_report(self.project_root)
 
     def status(self) -> SessionStatus:
-        """Estado resumido para la barra superior."""
+        """Estado resumido para la barra superior (incluye el uso de contexto)."""
         config = self.config_data()
         settings = self.settings()
+        usage = self.context_usage()
         return SessionStatus(
             project_root=str(self.project_root),
             initialized=(self.project_root / ".satellite").exists(),
@@ -203,6 +209,10 @@ class Session:
             policy_mode=settings.policy_mode.value,
             sandbox=settings.sandbox_level,
             safe_mode=bool(runtime_builder._SAFE_MODE),
+            context_percent=usage.percent,
+            context_tokens=usage.used_tokens,
+            context_window=usage.window_tokens,
+            context_source=usage.window_source,
         )
 
     def doctor(self) -> list[tuple[bool, str]]:
@@ -247,11 +257,16 @@ class Session:
     # --- conversación ---
 
     def chat(self) -> ChatSession:
-        """Sesión de conversación (se recrea si el runtime cambia)."""
+        """Sesión de conversación; **recuerda** la guardada entre arranques."""
         orchestrator = self.runtime()[0]
         if self._chat is None or self._chat.orchestrator is not orchestrator:
             self._chat = ChatSession(self.project_root, orchestrator)
+            self._restored = self._chat.load()
         return self._chat
+
+    def restored_turns(self) -> int:
+        """Turnos recuperados de la conversación guardada (0 si empezó limpia)."""
+        return getattr(self, "_restored", 0)
 
     async def send_message(
         self,
@@ -281,6 +296,35 @@ class Session:
     def conversation(self) -> tuple[Turn, ...]:
         """Turnos de la conversación actual."""
         return self._chat.recent() if self._chat is not None else ()
+
+    # --- contexto de la conversación ---
+
+    def window_source(self) -> tuple[str, str]:
+        """``(modelo, base_url)`` configurados (para resolver la ventana)."""
+        config = self.config_data()
+        llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
+        model = str(llm.get("model") or config.get("model") or "")
+        base_url = str(llm.get("base_url") or config.get("base_url") or "")
+        return model, base_url
+
+    def context_usage(self):
+        """Uso de contexto actual (real de la última llamada + estimado)."""
+        from satellite.context.compaction import measure
+
+        if self._chat is not None:
+            return self._chat.context_usage()
+        model, base_url = self.window_source()
+        return measure(
+            turns=(),
+            model=model,
+            project_root=self.project_root,
+            config=self.settings().compaction,
+            base_url=base_url,
+        )
+
+    async def compact_context(self, *, keep: int | None = None):
+        """Compacta el contexto de la conversación (resumen + últimos turnos)."""
+        return await self.chat().compact_now(keep=keep)
 
     async def create_agent(
         self, need: str, *, approval: ApprovalPort | None = None

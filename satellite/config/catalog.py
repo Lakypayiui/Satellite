@@ -28,6 +28,7 @@ class CatalogEntry:
     group: str = "API"
     note: str = ""
     needs_edit: bool = False
+    context_window: int = 0  # 0 = desconocida (se estima por modelo o por defecto)
 
     @property
     def family_label(self) -> str:
@@ -91,17 +92,17 @@ CATALOG: tuple[CatalogEntry, ...] = (
     CatalogEntry("tiangong", "Tiangong (Kunlun)", OPENAI, "https://api.singularity-ai.com/v1", group="Asia"),
 
     # --- Local ------------------------------------------------------------
-    CatalogEntry("ollama", "Ollama (local, sin clave)", OPENAI, "http://localhost:11434/v1", group="Local", note="no necesita API key"),
-    CatalogEntry("lmstudio", "LM Studio (local, sin clave)", OPENAI, "http://localhost:1234/v1", group="Local", note="no necesita API key"),
-    CatalogEntry("llamacpp", "llama.cpp server (local, sin clave)", OPENAI, "http://localhost:8080/v1", group="Local", note="no necesita API key"),
-    CatalogEntry("vllm", "vLLM (local, sin clave)", OPENAI, "http://localhost:8000/v1", group="Local", note="no necesita API key"),
-    CatalogEntry("localai", "LocalAI (local, sin clave)", OPENAI, "http://localhost:8080/v1", group="Local", note="no necesita API key"),
-    CatalogEntry("jan", "Jan (local, sin clave)", OPENAI, "http://localhost:1337/v1", group="Local", note="no necesita API key"),
-    CatalogEntry("llamafile", "Llamafile (local, sin clave)", OPENAI, "http://localhost:8080/v1", group="Local", note="no necesita API key"),
-    CatalogEntry("koboldcpp", "KoboldCpp (local, sin clave)", OPENAI, "http://localhost:5001/v1", group="Local", note="no necesita API key"),
-    CatalogEntry("textgen", "Text Generation WebUI (local)", OPENAI, "http://localhost:5000/v1", group="Local", note="no necesita API key"),
-    CatalogEntry("gpt4all", "GPT4All (local, sin clave)", OPENAI, "http://localhost:4891/v1", group="Local", note="no necesita API key"),
-    CatalogEntry("docker", "Docker Model Runner (local)", OPENAI, "http://localhost:12434/engines/v1", group="Local", note="no necesita API key"),
+    CatalogEntry("ollama", "Ollama (local, sin clave)", OPENAI, "http://localhost:11434/v1", group="Local", note="no necesita API key", context_window=32_768),
+    CatalogEntry("lmstudio", "LM Studio (local, sin clave)", OPENAI, "http://localhost:1234/v1", group="Local", note="no necesita API key", context_window=32_768),
+    CatalogEntry("llamacpp", "llama.cpp server (local, sin clave)", OPENAI, "http://localhost:8080/v1", group="Local", note="no necesita API key", context_window=32_768),
+    CatalogEntry("vllm", "vLLM (local, sin clave)", OPENAI, "http://localhost:8000/v1", group="Local", note="no necesita API key", context_window=32_768),
+    CatalogEntry("localai", "LocalAI (local, sin clave)", OPENAI, "http://localhost:8080/v1", group="Local", note="no necesita API key", context_window=32_768),
+    CatalogEntry("jan", "Jan (local, sin clave)", OPENAI, "http://localhost:1337/v1", group="Local", note="no necesita API key", context_window=32_768),
+    CatalogEntry("llamafile", "Llamafile (local, sin clave)", OPENAI, "http://localhost:8080/v1", group="Local", note="no necesita API key", context_window=32_768),
+    CatalogEntry("koboldcpp", "KoboldCpp (local, sin clave)", OPENAI, "http://localhost:5001/v1", group="Local", note="no necesita API key", context_window=32_768),
+    CatalogEntry("textgen", "Text Generation WebUI (local)", OPENAI, "http://localhost:5000/v1", group="Local", note="no necesita API key", context_window=32_768),
+    CatalogEntry("gpt4all", "GPT4All (local, sin clave)", OPENAI, "http://localhost:4891/v1", group="Local", note="no necesita API key", context_window=32_768),
+    CatalogEntry("docker", "Docker Model Runner (local)", OPENAI, "http://localhost:12434/engines/v1", group="Local", note="no necesita API key", context_window=32_768),
     CatalogEntry("azure", "Azure OpenAI (necesita tu recurso)", OPENAI, "https://<recurso>.openai.azure.com/openai/v1", group="Cloud (editar URL)", needs_edit=True),
     CatalogEntry("cloudflare", "Cloudflare Workers AI (necesita account_id)", OPENAI, "https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1", group="Cloud (editar URL)", needs_edit=True),
     CatalogEntry("lepton", "Lepton (necesita subdominio)", OPENAI, "https://<modelo>.lepton.run/api/v1", group="Cloud (editar URL)", needs_edit=True),

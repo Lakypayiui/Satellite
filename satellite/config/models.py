@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from satellite.config.catalog import ANTHROPIC, OPENAI
 
@@ -30,6 +30,18 @@ class ModelsResult:
     models: tuple[str, ...] = ()
     url: str = ""
     error: str = ""
+    details: dict = field(default_factory=dict)
+
+    def context_for(self, model: str) -> int | None:
+        """Longitud de contexto que **declara el proveedor** para ese modelo."""
+        wanted = str(model or "")
+        entry = self.details.get(wanted)
+        if entry is None and wanted:
+            for key, value in self.details.items():
+                if key.endswith(wanted) or wanted.endswith(key):
+                    entry = value
+                    break
+        return _context_from_entry(entry) if isinstance(entry, dict) else None
 
 
 def models_url(base_url: str, family: str = OPENAI) -> str:
@@ -53,17 +65,58 @@ def _headers(family: str, api_key: str | None) -> dict[str, str]:
 
 
 def _parse(payload: object) -> list[str]:
+    return sorted(_parse_details(payload))
+
+
+def _parse_details(payload: object) -> dict[str, dict]:
+    """Modelos con su metadata completa (id → entrada del proveedor)."""
+    details: dict[str, dict] = {}
     if isinstance(payload, dict):
         for field in ("data", "models"):
             items = payload.get(field)
             if isinstance(items, list):
-                ids = [
-                    str(item.get("id") or item.get("name") or "")
-                    for item in items
-                    if isinstance(item, dict)
-                ]
-                return sorted({model for model in ids if model})
-    return []
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    model_id = str(item.get("id") or item.get("name") or "")
+                    if model_id:
+                        details[model_id] = item
+    return details
+
+
+# Nombres con los que distintos proveedores publican la ventana de contexto.
+_CONTEXT_KEYS: tuple[str, ...] = (
+    "context_length",
+    "max_context_length",
+    "context_window",
+    "max_model_len",
+    "max_context_tokens",
+    "max_input_tokens",
+    "max_tokens",
+    "n_ctx",
+    "context",
+)
+_NESTED_KEYS: tuple[str, ...] = ("meta", "metadata", "details", "architecture", "settings")
+
+
+def _context_from_entry(entry: dict | None) -> int | None:
+    """Busca la ventana de contexto en la entrada del modelo (varias formas)."""
+    if not isinstance(entry, dict):
+        return None
+    for source in (entry, *(entry.get(key) for key in _NESTED_KEYS)):
+        if not isinstance(source, dict):
+            continue
+        for key in _CONTEXT_KEYS:
+            value = source.get(key)
+            if isinstance(value, bool):
+                continue
+            try:
+                tokens = int(value)
+            except (TypeError, ValueError):
+                continue
+            if tokens > 0:
+                return tokens
+    return None
 
 
 def fetch_models(
@@ -93,7 +146,7 @@ def fetch_models(
         return ModelsResult(
             ok=True, url=url, error="la respuesta no traía modelos ('data'/'models' vacío)"
         )
-    return ModelsResult(ok=True, models=tuple(models), url=url)
+    return ModelsResult(ok=True, models=tuple(models), url=url, details=_parse_details(payload))
 
 
 def default_model(models: tuple[str, ...] | list[str]) -> str:

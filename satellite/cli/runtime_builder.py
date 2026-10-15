@@ -108,23 +108,7 @@ def build_runtime(project_root: Path, *, approval: object | None = None):
 
     # Seguridad + tools (deny-by-default).
     policy = DefaultSecurityPolicy(allowed_tools=set(DEFAULT_ALLOWED_TOOLS))
-    tools = DefaultToolRegistry(policy=policy)
-    for tool in (
-        ReadFileTool(),
-        WriteFileTool(),
-        EditFileTool(),
-        ListDirTool(),
-        RunCommandTool(),
-        RunShellTool(),
-        RunPythonTool(),
-        SearchFilesTool(),
-        GitStatusTool(),
-        RequestContextTool(),
-        DelegateTool(),
-        SearchSkillsTool(),
-        ProposeSkillTool(),
-    ):
-        tools.register(tool)
+    tools = build_tool_registry(policy)
 
     bus = EventBus()
     provider = _metered(_load_provider(project_root), project_root=project_root, settings=settings)
@@ -249,6 +233,34 @@ def _build_preprocessor(
         return LocalPreprocessor(provider, project_root)
     except Exception:
         return None
+
+
+def build_tool_registry(policy: DefaultSecurityPolicy | None = None) -> DefaultToolRegistry:
+    """Registro de herramientas del runtime (primitivas del kernel incluidas).
+
+    Se expone aparte para poder listarlas desde el CLI sin levantar el runtime
+    completo (y por tanto sin necesitar un proveedor configurado).
+    """
+    if policy is None:
+        policy = DefaultSecurityPolicy(allowed_tools=set(DEFAULT_ALLOWED_TOOLS))
+    tools = DefaultToolRegistry(policy=policy)
+    for tool in (
+        ReadFileTool(),
+        WriteFileTool(),
+        EditFileTool(),
+        ListDirTool(),
+        RunCommandTool(),
+        RunShellTool(),
+        RunPythonTool(),
+        SearchFilesTool(),
+        GitStatusTool(),
+        RequestContextTool(),
+        DelegateTool(),
+        SearchSkillsTool(),
+        ProposeSkillTool(),
+    ):
+        tools.register(tool)
+    return tools
 
 
 def _metered(

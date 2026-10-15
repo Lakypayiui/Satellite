@@ -20,6 +20,7 @@ from satellite.orchestration.base import (
     PlanningResult,
     RuntimeServices,
 )
+from satellite.orchestration.catalog_answer import answer_catalog_question
 from satellite.orchestration.chat_detector import async_is_chat_goal
 from satellite.persistence.base import Store
 
@@ -59,6 +60,22 @@ class DefaultOrchestrator(Orchestrator):
             task, early = await self._preprocess(task)
             if early is not None:
                 return await self._finish(task, early)
+
+        if self.allow_chat_direct:
+            # Preguntas sobre el propio sistema ("¿qué agentes tienes?", "¿qué
+            # herramientas?", "¿qué modelo eres?"): se contestan localmente desde
+            # el catálogo real, sin LLM y sin grafo.
+            local = answer_catalog_question(task.goal, self.services)
+            if local is not None:
+                return await self._finish(
+                    task,
+                    TaskResult(
+                        task_id=task.task_id,
+                        status=TaskStatus.OK,
+                        summary=local,
+                        output={"mode": "direct_reply", "content": local},
+                    ),
+                )
 
         if self.allow_chat_direct and self.services.provider is not None:
             if await async_is_chat_goal(task, self.services.provider):

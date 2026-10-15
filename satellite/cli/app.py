@@ -15,7 +15,9 @@ from satellite.persistence.store import FileStore
 
 app = typer.Typer(help="Satellite 2.0 — microagent framework CLI.")
 skills_app = typer.Typer(help="Gestión de skills globales.")
+tools_app = typer.Typer(help="Herramientas (primitivas) del runtime.")
 app.add_typer(skills_app, name="skills")
+app.add_typer(tools_app, name="tools")
 app.add_typer(provider_app, name="provider")
 
 
@@ -52,7 +54,7 @@ def run(
     if services is not None and getattr(services, "approval", None) is None:
         services.approval = AutoApprovalPort() if yes else CliApproval()
     result = asyncio.run(orchestrator.execute(Task(goal=goal, project_root=project.resolve())))
-    _print_result(result)
+    _print_result(result, project=project.resolve())
 
 
 @app.command()
@@ -213,19 +215,47 @@ def _load_skills():
     return registry, paths
 
 
+@tools_app.command("list")
+def tools_list() -> None:
+    """Lista las herramientas del runtime, marcando las primitivas del kernel."""
+    from satellite.cli.runtime_builder import build_tool_registry
+    from satellite.kernel.manifest import is_reserved
+
+    items = build_tool_registry().all()
+    for tool in items:
+        categories = ", ".join(getattr(tool, "categories", ()) or ()) or "-"
+        mark = "*" if is_reserved(tool.id) else " "
+        say(f"{mark} {tool.id:<14} {categories:<16} {tool.description}")
+    primitives = sum(1 for tool in items if is_reserved(tool.id))
+    say("")
+    say(f"{len(items)} herramientas · {primitives} primitivas del kernel (*)")
+    say(
+        "Las primitivas no salen en 'skills list': son kernel inmutable "
+        "(no se editan ni se borran). Las skills son datos declarativos."
+    )
+
+
 @skills_app.command("list")
 def skills_list() -> None:
     """Lista las skills globales con su estado y uso."""
     registry, _paths = _load_skills()
     skills = registry.all()
     if not skills:
-        say("(sin skills)")
+        say("(todavía no hay skills creadas)")
+        say(
+            "  Ojo: las primitivas del runtime (run_python, run_shell, read_file, "
+            "write_file, list_dir, search_files)"
+        )
+        say("  NO son skills, por eso no aparecen aquí. Míralas con 'satellite tools list'.")
+        say("  Para crear una skill: pídesela al agente ('/create ...') o al curador ('/curate').")
         return
     for manifest in skills:
         say(
             f"{manifest.id}: {manifest.description} [{manifest.status.value}] "
             f"uses={manifest.stats.uses}"
         )
+    say("")
+    say("(las primitivas del runtime no aparecen aquí: 'satellite tools list')")
 
 
 @skills_app.command("search")
@@ -293,6 +323,55 @@ def stats(project: Path = typer.Option(Path.cwd(), "--project", help="Project ro
         )
     say("")
     say(cache.format())
+    from satellite.context.compaction import format_usage, project_usage
+
+    say(format_usage(project_usage(project)))
+
+
+@app.command()
+def compact(
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+    keep: int = typer.Option(0, "--keep", help="Turnos a conservar (0 = config)."),
+    no_llm: bool = typer.Option(
+        False, "--no-llm", help="Resumen determinista, sin llamar al modelo."
+    ),
+) -> None:
+    """Compacta la conversación guardada (resumen + últimos turnos)."""
+    import asyncio
+
+    from satellite.context.compaction import format_usage, project_usage
+    from satellite.orchestration.chat import ChatSession, conversation_path
+
+    root = project.resolve()
+    path = conversation_path(root)
+    if not path.exists():
+        say(f"no hay conversación guardada ({path})")
+        say("  se guarda sola al chatear en la TUI ('satellite tui')")
+        raise typer.Exit(code=1)
+
+    orchestrator = None
+    if not no_llm:
+        try:
+            orchestrator, _bus, _store, _registry = build_runtime(root)
+        except Exception as exc:  # noqa: BLE001
+            say(f"! sin proveedor utilizable ({exc}); resumen determinista")
+
+    session = ChatSession(root, orchestrator)
+    turns = session.load()
+    say(f"conversación: {turns} turnos")
+    say(format_usage(project_usage(root, turns=session.turns())))
+    result = asyncio.run(session.compact_now(keep=keep or None))
+    if not result.dropped:
+        reason = (
+            "no reduciría el contexto"
+            if result.method == "sin-efecto"
+            else "no hacía falta (conversación corta)"
+        )
+        say(f"no se compactó: {reason}")
+        return
+    say(f"compactado: {result.dropped} turnos → resumen ({result.method})")
+    say(format_usage(project_usage(root, turns=session.turns())))
+    say(f"guardado en {path}")
 
 
 # ---------------------------------------------------------------- mantenimiento
@@ -323,7 +402,7 @@ def doctor(
     import os
 
     from satellite.kernel import migrations
-    from satellite.kernel.manifest import verify_and_restore
+    from satellite.kernel.manifest import is_reserved, verify_and_restore
     from satellite.kernel.paths import ensure_dirs, resolve_paths
 
     root = project.resolve()
@@ -345,6 +424,11 @@ def doctor(
         say(f"✓ catálogo: {len(specs)} agentes")
         for spec in specs:
             say(f"    {spec.id}: {spec.capabilities}")
+        tool_registry = getattr(getattr(orchid, "services", None), "tools", None)
+        if tool_registry is not None:
+            found = tool_registry.all()
+            primitives = sum(1 for tool in found if is_reserved(tool.id))
+            say(f"✓ herramientas: {len(found)} ({primitives} primitivas del kernel)")
         if getattr(registry, "errors", None):
             say(f"✗ catálogo: {len(registry.errors)} specs inválidos")
             ok = False
@@ -429,8 +513,41 @@ def _clear_dir(root: Path) -> None:
             child.unlink()
 
 
-def _print_result(result) -> None:
+def _print_result(result, *, project: Path | None = None) -> None:
     say(f"status: {result.status.value}")
     say(f"summary: {result.summary}")
     if result.error:
         say(f"error: {result.error}")
+    if project is not None:
+        from satellite.context.compaction import format_usage, project_usage
+
+        say("")
+        say(format_usage(project_usage(project)))
+
+
+@app.command()
+def context(project: Path = typer.Option(Path.cwd(), "--project", help="Project root.")) -> None:
+    """Muestra cuánto contexto llevas usado del modelo activo (barra y %)."""
+    from satellite.context.compaction import (
+        format_usage,
+        is_declared,
+        project_usage,
+        window_config,
+    )
+
+    usage = project_usage(project)
+    say(format_usage(usage))
+    threshold = int(window_config(project).compact_at * 100)
+    say(
+        f"  real={usage.real_tokens}  estimado={usage.estimated_tokens}  "
+        f"ventana={usage.window_tokens} ({usage.window_source})  "
+        f"autocompactado al {threshold}%"
+    )
+    if not is_declared(usage.window_source):
+        say(
+            "  ! ese modelo no declara su ventana en /models, así que es una "
+            "estimación: fija 'llm.compaction.window' en "
+            ".satellite/config/config.json con el valor real"
+        )
+    if usage.percent >= threshold:
+        say("  se compactará al enviar el próximo mensaje ('/compact' en la TUI)")

@@ -97,8 +97,8 @@ def test_reply_from_result_modes() -> None:
     assert "boom" in reply_from_result(failed)
 
 
-def test_turn_roundtrip() -> None:
-    chat = ChatSession(Path("."), StubOrchestrator())
+def test_turn_roundtrip(tmp_path: Path) -> None:
+    chat = ChatSession(tmp_path, StubOrchestrator())
     turn = chat.add("user", "hola", task_id="t1", status="ok")
     from satellite.orchestration.chat import Turn
 

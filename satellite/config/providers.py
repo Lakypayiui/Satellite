@@ -211,6 +211,39 @@ def role_config(project_root: Path | str) -> dict[str, dict]:
     }
 
 
+def active_connection(project_root: Path | str) -> dict:
+    """Datos de conexión del proveedor activo **incluida la clave** (uso interno).
+
+    Sirve para consultar al proveedor (p. ej. ``/models``) con las mismas
+    credenciales con las que se ejecuta el runtime.
+    """
+    data = load_config(project_root)
+    llm = data.get("llm") if isinstance(data.get("llm"), dict) else {}
+    role = llm.get("orchestrator") if isinstance(llm.get("orchestrator"), dict) else {}
+    provider_id = str(role.get("provider") or llm.get("provider_id") or "")
+    entries = _entries(data)
+    entry = next((p for p in entries if str(p.get("id")) == provider_id), None) if provider_id else None
+    if isinstance(entry, dict):
+        key = str(entry.get("api_key") or "")
+        if not key:
+            env = str(entry.get("api_key_env") or "")
+            key = os.getenv(env, "") if env else ""
+        return {
+            "id": provider_id,
+            "name": str(entry.get("name", "")),
+            "model": str(role.get("model") or entry.get("model", "")),
+            "base_url": str(entry.get("base_url", "")),
+            "api_key": key,
+        }
+    return {
+        "id": provider_id,
+        "name": str(llm.get("provider") or data.get("name", "")),
+        "model": str(llm.get("model") or data.get("model", "")),
+        "base_url": str(llm.get("base_url") or data.get("base_url", "")),
+        "api_key": str(llm.get("api_key") or data.get("api_key") or ""),
+    }
+
+
 def api_key_for_base_url(project_root: Path | str, base_url: str) -> str:
     """Clave guardada para esa ``base_url`` (uso interno del servidor)."""
     for entry in _entries(load_config(project_root)):

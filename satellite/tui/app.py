@@ -137,6 +137,7 @@ class SatelliteTUI(App):
         self.transcript: list[str] = []
         self._subscribed = False
         self._pending_options = None
+        self._chat_announced = False
 
     # --- composición ---
 
@@ -251,7 +252,27 @@ class SatelliteTUI(App):
                 plan_mode=plan_mode,
                 extra_metadata=extra_metadata,
             )
+            if not self._chat_announced:
+                self._chat_announced = True
+                restored = self.session.restored_turns()
+                if restored:
+                    self._log(
+                        Text(
+                            f"conversación recuperada: {restored} turnos "
+                            "(usa /new para empezar limpia)"
+                        ),
+                        plain=f"restaurados {restored}",
+                    )
             self._log(render.reply_panel(reply), plain=f"respuesta {reply.status}")
+            if reply.compaction and reply.compaction.get("dropped"):
+                self._log(
+                    Text(
+                        f"contexto compactado automáticamente: "
+                        f"{reply.compaction['dropped']} turnos → resumen "
+                        f"({reply.compaction.get('method', '')})"
+                    ),
+                    plain="compactado-auto",
+                )
             if (reply.output or {}).get("mode") == "plan_options":
                 self._open_plan_options(reply.output.get("plan_options") or {})
         except Exception as exc:  # noqa: BLE001
@@ -259,6 +280,36 @@ class SatelliteTUI(App):
         finally:
             self._busy(False)
             self._refresh_status()
+
+    def _cmd_compact(self, arg: str) -> None:
+        """Compacta el contexto de la conversación a mano."""
+        self._spawn(self._do_compact(), name="compact")
+
+    async def _do_compact(self) -> None:
+        self._busy(True, "compactando contexto…")
+        try:
+            result = await self.session.compact_context()
+        except Exception as exc:  # noqa: BLE001
+            self._log(Text(f"error al compactar: {exc}", style="red"))
+            return
+        finally:
+            self._busy(False)
+            self._refresh_status()
+        if result is None or not getattr(result, "dropped", 0):
+            reason = (
+                "compactar no reduciría el contexto (conversación pequeña)"
+                if getattr(result, "method", "") == "sin-efecto"
+                else "no hacía falta compactar (conversación corta)"
+            )
+            self._log(Text(reason), plain="compact")
+            return
+        self._log(
+            Text(
+                f"contexto compactado: {result.dropped} turnos → resumen ({result.method}), "
+                f"~{result.tokens_before} → ~{result.tokens_after} tokens"
+            ),
+            plain=f"compactado {result.dropped}",
+        )
 
     def _open_plan_options(self, payload: dict) -> None:
         """Muestra las alternativas y abre el modal de elección."""
@@ -464,6 +515,10 @@ class SatelliteTUI(App):
         report = self.session.stats()
         self._log(render.stats_table(report), plain=f"ahorro_total={report.total_savings}")
         self._log(Text(self.session.cache_report().format()), plain="cache")
+        from satellite.context.compaction import format_usage
+
+        usage = self.session.context_usage()
+        self._log(Text(format_usage(usage)), plain=f"contexto {usage.percent}%")
 
     def _cmd_doctor(self, arg: str) -> None:
         checks = self.session.doctor()

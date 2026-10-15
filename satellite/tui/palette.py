@@ -18,6 +18,7 @@ COMMANDS: tuple[Command, ...] = (
     Command("run", "/run <mensaje>", "Envía un mensaje al agente (igual que texto libre)"),
     Command("plan", "/plan <tarea>", "Modo plan: el LLM propone alternativas para elegir"),
     Command("new", "/new", "Empieza una conversación nueva"),
+    Command("compact", "/compact", "Compacta el contexto (resumen + últimos turnos)"),
     Command("history", "/history", "Muestra la conversación actual"),
     Command("help", "/help", "Muestra esta ayuda"),
     Command("agents", "/agents", "Lista el catálogo de agentes"),

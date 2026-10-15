@@ -204,7 +204,7 @@ class FakeOrchestrator:
 
 
 def test_history_is_append_only() -> None:
-    session = ChatSession(Path.cwd(), FakeOrchestrator())
+    session = ChatSession(Path.cwd(), FakeOrchestrator(), persist=False)
     session.add("user", "uno")
     session.add("assistant", "dos")
     assert [turn.content for turn in session.turns()] == ["uno", "dos"]
@@ -212,7 +212,7 @@ def test_history_is_append_only() -> None:
 
 
 def test_compact_is_the_only_manual_trim_point() -> None:
-    session = ChatSession(Path.cwd(), FakeOrchestrator(), max_recap_turns=4)
+    session = ChatSession(Path.cwd(), FakeOrchestrator(), max_recap_turns=4, persist=False)
     for index in range(6):
         session.add("user", f"m{index}")
 
@@ -227,15 +227,17 @@ def test_compact_is_the_only_manual_trim_point() -> None:
 
 
 def test_compact_does_nothing_when_history_is_short() -> None:
-    session = ChatSession(Path.cwd(), FakeOrchestrator(), max_recap_turns=4)
+    session = ChatSession(Path.cwd(), FakeOrchestrator(), max_recap_turns=4, persist=False)
     session.add("user", "uno")
     assert session.compact() == 0
     assert len(session.turns()) == 1
 
 
-def test_chat_never_compacts_automatically() -> None:
+def test_chat_does_not_compact_with_a_large_window() -> None:
+    """Con ventana holgada no se compacta solo (el auto depende del umbral)."""
+
     async def scenario():
-        session = ChatSession(Path.cwd(), FakeOrchestrator(), max_recap_turns=2)
+        session = ChatSession(Path.cwd(), FakeOrchestrator(), max_recap_turns=2, persist=False)
         for index in range(6):
             await session.send(f"mensaje {index}")
         # 6 mensajes + 6 respuestas: nada se recorta por su cuenta

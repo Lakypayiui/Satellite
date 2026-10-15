@@ -62,6 +62,26 @@ class Quotas:
 
 
 @dataclass(frozen=True)
+class CompactionConfig:
+    """Reglas de compactación de contexto (``llm.compaction`` en config.json).
+
+    ``window`` es la ventana del modelo en tokens: ``None`` = detectarla por
+    modelo/proveedor. ``compact_at`` es el umbral (0.85 = 85 %).
+    """
+
+    window: int | None = None
+    compact_at: float = 0.85
+    keep: int = 6
+
+    def to_dict(self) -> dict:
+        return {
+            "window": self.window,
+            "compact_at": self.compact_at,
+            "keep": self.keep,
+        }
+
+
+@dataclass(frozen=True)
 class Settings:
     """Configuración del kernel leída de ``config.json`` (con valores por defecto)."""
 
@@ -71,6 +91,7 @@ class Settings:
     refine_goal: bool = False
     direct_reply: bool = True
     max_tokens: dict = field(default_factory=dict)
+    compaction: CompactionConfig = field(default_factory=CompactionConfig)
 
     def max_tokens_for(self, role: str) -> int | None:
         """Límite de salida por rol (``llm.max_tokens.<rol>``); ``*`` = general."""
@@ -87,7 +108,34 @@ class Settings:
             "refine_goal": self.refine_goal,
             "direct_reply": self.direct_reply,
             "max_tokens": dict(self.max_tokens),
+            "compaction": self.compaction.to_dict(),
         }
+
+
+def _compaction_from(data: dict) -> CompactionConfig:
+    """Lee ``llm.compaction`` (tolerante). Ojo: ``llm.context`` es un ROL."""
+    llm = data.get("llm") if isinstance(data.get("llm"), dict) else {}
+    raw = llm.get("compaction")
+    if raw is None:
+        raw = data.get("compaction")
+    if not isinstance(raw, dict):
+        return CompactionConfig()
+    window: int | None = None
+    try:
+        value = int(raw.get("window", 0) or 0)
+        window = value if value > 0 else None
+    except (TypeError, ValueError):
+        window = None
+    try:
+        compact_at = float(raw.get("compact_at", 0.85))
+    except (TypeError, ValueError):
+        compact_at = 0.85
+    compact_at = min(1.0, max(0.1, compact_at))
+    try:
+        keep = int(raw.get("keep", 6))
+    except (TypeError, ValueError):
+        keep = 6
+    return CompactionConfig(window=window, compact_at=compact_at, keep=max(2, keep))
 
 
 def _max_tokens_from(data: dict) -> dict:
@@ -136,4 +184,5 @@ def load_settings(path: Path | None = None) -> Settings:
         refine_goal=bool(data.get("refine_goal", False)),
         direct_reply=bool(data.get("direct_reply", True)),
         max_tokens=_max_tokens_from(data),
+        compaction=_compaction_from(data),
     )

@@ -39,7 +39,18 @@ def test_skills_list_empty(tmp_path: Path, monkeypatch) -> None:
     _use_home(monkeypatch, tmp_path)
     result = CliRunner().invoke(app, ["skills", "list"])
     assert result.exit_code == 0
-    assert "(sin skills)" in result.output
+    # sin skills, pero aclarando que las primitivas del runtime no son skills
+    assert "no hay skills creadas" in result.output
+    assert "satellite tools list" in result.output
+
+
+def test_tools_list_shows_primitives(tmp_path: Path, monkeypatch) -> None:
+    _use_home(monkeypatch, tmp_path)
+    result = CliRunner().invoke(app, ["tools", "list"])
+    assert result.exit_code == 0
+    for expected in ("run_python", "run_shell", "read_file", "write_file", "list_dir", "search_files"):
+        assert expected in result.output
+    assert "6 primitivas del kernel" in result.output
 
 
 def test_skills_search(tmp_path: Path, monkeypatch) -> None:
