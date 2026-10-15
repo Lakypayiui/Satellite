@@ -12,7 +12,7 @@ from pathlib import Path
 
 from rich.text import Text
 from textual.app import App, ComposeResult
-from textual.containers import Container, Horizontal
+from textual.containers import Container, Horizontal, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Input, RichLog, Static
 
@@ -105,7 +105,19 @@ class SatelliteTUI(App):
 
     CSS = """
     Screen { background: $surface; }
-    #log { height: 1fr; border: round $accent; padding: 0 1; }
+    #main { height: 1fr; }
+    #log { height: 1fr; width: 1fr; border: round $accent; padding: 0 1; }
+    #agents-panel {
+        width: 34; height: 1fr; display: none;
+        border: round $accent; background: $surface; padding: 0 1;
+    }
+    .agent-card {
+        border: round $secondary; background: $panel;
+        padding: 0 1; margin-bottom: 1; height: auto;
+    }
+    .agent-card.running { border: round $accent; }
+    .agent-card.done { border: round $success; }
+    .agent-card.failed { border: round $error; }
     #statusbar { height: 1; padding: 0 1; }
     #prompt { border: round $accent; }
     #approval-box { width: 78; height: auto; border: thick $warning; background: $panel; padding: 1 2; }
@@ -138,12 +150,18 @@ class SatelliteTUI(App):
         self._subscribed = False
         self._pending_options = None
         self._chat_announced = False
+        self._agents: dict[str, dict] = {}
+        self._node_agent: dict[str, str] = {}
+        self._cards: dict[str, Static] = {}
 
     # --- composición ---
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield RichLog(id="log", highlight=True, markup=True, wrap=True)
+        with Horizontal(id="main"):
+            yield RichLog(id="log", highlight=True, markup=True, wrap=True)
+            with VerticalScroll(id="agents-panel"):
+                pass
         yield Static(id="statusbar")
         yield Input(placeholder=PROMPT_HINT, id="prompt")
         yield Footer()
@@ -185,6 +203,116 @@ class SatelliteTUI(App):
 
     def _on_event(self, event) -> None:
         self._log(render.event_text(event), plain=event.event_type.value)
+        self._track_agent(event)
+
+    # --- panel de agentes ---
+
+    def _show_agents(self, show: bool) -> None:
+        """El panel solo ocupa sitio cuando hay agentes trabajando."""
+        try:
+            self.query_one("#agents-panel").display = show
+        except Exception:  # noqa: BLE001 — la app puede estar desmontándose
+            return
+
+    def _agent_of(self, event) -> str:
+        """A qué agente pertenece el evento (nodo → agente, o el id del payload)."""
+        payload = getattr(event, "payload", {}) or {}
+        node_id = str(getattr(event, "node_id", "") or "")
+        if node_id and node_id in self._node_agent:
+            return self._node_agent[node_id]
+        for key in ("spec", "spec_id", "agent_id"):
+            value = payload.get(key)
+            if value:
+                if node_id:
+                    self._node_agent[node_id] = str(value)
+                return str(value)
+        return node_id or "satellite"
+
+    def _upsert_agent(self, agent: str, *, status: str, action: str = "") -> None:
+        state = self._agents.setdefault(agent, {"status": "idle", "action": ""})
+        state["status"] = status
+        if action:
+            state["action"] = action
+        self._sync_cards()
+        self._show_agents(True)
+
+    def _sync_cards(self) -> None:
+        """Un rectángulo por agente, en el orden en que aparecieron."""
+        try:
+            panel = self.query_one("#agents-panel", VerticalScroll)
+        except Exception:  # noqa: BLE001
+            return
+        for agent, state in self._agents.items():
+            card = self._cards.get(agent)
+            if card is None:
+                card = Static(render.agent_card(agent, state["status"], state["action"]))
+                card.add_class("agent-card")
+                self._set_card_status(card, state["status"])
+                self._cards[agent] = card
+                panel.mount(card)
+            else:
+                card.update(render.agent_card(agent, state["status"], state["action"]))
+                self._set_card_status(card, state["status"])
+
+    @staticmethod
+    def _set_card_status(card: Static, status: str) -> None:
+        for name in ("running", "done", "failed", "idle"):
+            card.set_class(status == name, name)
+
+    def _clear_agents(self) -> None:
+        for card in self._cards.values():
+            card.remove()
+        self._cards.clear()
+        self._agents.clear()
+        self._node_agent.clear()
+        self._show_agents(False)
+
+    def _track_agent(self, event) -> None:
+        """Traduce los eventos del runtime en tarjetas de agente."""
+        from satellite.core.events import EventType
+
+        try:
+            kind = getattr(event, "event_type", None)
+            payload = getattr(event, "payload", {}) or {}
+            if kind is EventType.TASK_STARTED:
+                self._clear_agents()
+            elif kind is EventType.NODE_STARTED:
+                self._upsert_agent(self._agent_of(event), status="running", action="razonando")
+            elif kind is EventType.TOOL_CALLED:
+                tool = str(getattr(event, "tool_name", "") or payload.get("tool", ""))
+                if tool:
+                    self._upsert_agent(
+                        self._agent_of(event), status="running", action=f"⚙ {tool}"
+                    )
+            elif kind is EventType.NODE_FINISHED:
+                failed = "fail" in str(payload.get("status", "")).lower()
+                self._upsert_agent(
+                    self._agent_of(event),
+                    status="failed" if failed else "done",
+                    action=str(payload.get("summary", "") or ""),
+                )
+            elif kind is EventType.DELEGATION_STARTED:
+                self._upsert_agent(
+                    self._agent_of(event), status="running", action="recibiendo delegación"
+                )
+            elif kind is EventType.DELEGATION_COMPLETED:
+                self._upsert_agent(
+                    self._agent_of(event),
+                    status="done" if payload.get("ok", True) else "failed",
+                    action=str(payload.get("summary", "") or ""),
+                )
+            elif kind in (EventType.AGENT_CREATED, EventType.AGENT_EXTENDED):
+                label = "creado" if kind is EventType.AGENT_CREATED else "extendido"
+                self._upsert_agent(self._agent_of(event), status="done", action=label)
+            elif kind is EventType.TASK_FINISHED:
+                for state in self._agents.values():
+                    if state["status"] == "running":
+                        state["status"] = "done"
+                self._sync_cards()
+                if all(state["status"] != "running" for state in self._agents.values()):
+                    self._show_agents(False)
+        except Exception:  # noqa: BLE001 — el panel nunca debe tumbar la sesión
+            return
 
     # --- entrada ---
 

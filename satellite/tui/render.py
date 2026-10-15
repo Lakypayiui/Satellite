@@ -178,6 +178,41 @@ def status_bar(status) -> Text:
     return text
 
 
+# Mismo criterio de color que la barra de estado: un solo idioma visual.
+_AGENT_STATUS: dict[str, tuple[str, str, str]] = {
+    "running": ("◍", "en curso", "cyan"),
+    "done": ("●", "hecho", "green"),
+    "failed": ("✗", "fallo", "bold red"),
+    "idle": ("·", "inactivo", "dim"),
+}
+
+CARD_WIDTH = 26
+
+
+def _clip(text: object, width: int = CARD_WIDTH) -> str:
+    """Deja el texto en una línea y dentro del ancho de la tarjeta."""
+    flat = " ".join(str(text or "").split())
+    return flat if len(flat) <= width else flat[: width - 1] + "…"
+
+
+def agent_card(name: str, status: str, action: str = "", detail: str = "") -> Text:
+    """Rectángulo de un agente: quién es, cómo va y qué está haciendo."""
+    mark, label, style = _AGENT_STATUS.get(str(status), _AGENT_STATUS["idle"])
+    text = Text()
+    text.append(_clip(name, 14), style="bold cyan")
+    text.append("  ")
+    text.append(f"{mark} {label}", style=style)
+    text.append("\n")
+    text.append(
+        _clip(action or "sin actividad"),
+        style="dim" if status in ("done", "idle") else "bold",
+    )
+    if detail:
+        text.append("\n")
+        text.append(_clip(detail), style="dim")
+    return text
+
+
 def agent_table(specs) -> Table:
     """Tabla del catálogo de agentes."""
     table = Table(title=f"Agentes ({len(specs)})", title_justify="left", expand=True)
