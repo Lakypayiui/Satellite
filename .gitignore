@@ -54,3 +54,6 @@ build/
 
 # --- Herramienta del asistente ---
 .commandcode/
+
+# --- Documentos internos (no se publican) ---
+SATELLITE2_*.md
