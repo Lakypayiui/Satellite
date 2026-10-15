@@ -110,6 +110,28 @@ def test_index_find_symbol(tmp_path: Path) -> None:
     assert hits[0]["kind"] == "functions"
 
 
+def test_index_listing_does_not_depend_on_path_walk(tmp_path: Path, monkeypatch) -> None:
+    """`Path.walk` llegó en 3.12: en 3.11 el listado reventaba con AttributeError.
+
+    Se simula ese Python quitando el método (es exactamente lo que hacía el
+    intérprete del CI, por eso fallaba allí y no en local, que corre 3.12).
+    """
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "a.py").write_text("def f():\n    pass\n", encoding="utf-8")
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "ruido.js").write_text("", encoding="utf-8")
+
+    def sin_walk(self, *args, **kwargs):  # lo que tiene Python 3.11: nada
+        raise AttributeError("'PosixPath' object has no attribute 'walk'")
+
+    monkeypatch.setattr(Path, "walk", sin_walk, raising=False)
+
+    index = ProjectIndex(tmp_path)
+    assert [p.name for p in index.list_project_files()] == ["a.py"]
+    assert index.list_project_files(["**/*.py"]) == [tmp_path / "pkg" / "a.py"]
+    assert index.find_symbol("f")[0]["path"] == "pkg/a.py"
+
+
 def test_index_all_imports(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("import json\n", encoding="utf-8")
     (tmp_path / "b.py").write_text("import os\n", encoding="utf-8")

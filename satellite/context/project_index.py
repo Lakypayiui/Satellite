@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import os
 import re
 from pathlib import Path
 
@@ -142,9 +143,15 @@ class ProjectIndex:
         return result
 
     def list_project_files(self, patterns: list[str] | None = None) -> list[Path]:
-        """Lista archivos del proyecto (con glob simple), ignorando dirs típicos."""
+        """Lista archivos del proyecto (con glob simple), ignorando dirs típicos.
+
+        Se recorre con ``os.walk`` y no con ``Path.walk``: el segundo existe desde
+        Python 3.12 y aquí se soporta 3.11, donde no es sólo que falte, sino un
+        ``AttributeError`` en tiempo de ejecución.
+        """
         files: list[Path] = []
-        for root, dirs, names in self.project_root.walk():
+        for raw_root, dirs, names in os.walk(self.project_root):
+            root = Path(raw_root)
             dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
             for name in names:
                 rel = (root / name).relative_to(self.project_root)
