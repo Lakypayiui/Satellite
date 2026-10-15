@@ -8,5 +8,6 @@
   "validators": [],
   "model_role": "creator",
   "max_turns": 1,
-  "timeout_s": 120
+  "timeout_s": 120,
+  "lifecycle": "persistent"
 }

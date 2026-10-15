@@ -50,6 +50,12 @@ no web console.
   provider's own `/models` metadata when it is published (and estimated
   otherwise); at 85% of it the conversation is compacted automatically
   (LLM summary, deterministic fallback) and `/compact` does it on demand.
+  Anthropic also offers server-side compaction; keeping ours local is
+  deliberate (it works with every provider) and can be revisited later.
+- **Two documented trade-offs**: `max_tokens` is never read as a context window
+  (it is an output cap, so taking it would compact too early), and
+  `ProviderConfig.model_overrides` stays out of equality/hashing to keep the
+  configuration hashable (it is plumbing, not identity).
 
 ## Sandbox and skill memoization
 
