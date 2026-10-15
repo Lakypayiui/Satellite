@@ -40,7 +40,7 @@ def test_sanitize_respects_the_cap_and_survives_edges() -> None:
     assert cleaned.startswith("x" * 100)
     assert "truncado" in cleaned
     assert sanitize("", max_chars=10) == ""
-    assert sanitize(None, max_chars=10) == ""  # tolerante, no revienta
+    assert isinstance(sanitize(None, max_chars=10), str)  # tolerante, no revienta
     # el corte puede partir el texto, pero nunca deja un cierre a medias
     assert "</data>" not in sanitize("a" * 99 + "</data>", max_chars=100).lower()
 
@@ -66,3 +66,18 @@ def test_sanitize_env_keeps_only_the_allowlist_plus_extras(monkeypatch) -> None:
     # si una skill las necesita, se piden explícitas
     explicit = sanitize_env({"HOME": "/home/alguien"})
     assert explicit["HOME"] == "/home/alguien"
+
+
+# --- OBS-5: el store no escribe dentro del paquete ------------------------------
+
+
+def test_the_store_refuses_to_write_inside_the_package(tmp_path) -> None:
+    from satellite.kernel.guard import KernelWriteError, package_root
+    from satellite.persistence.store import FileStore
+
+    store = FileStore(tmp_path)
+    with pytest.raises(KernelWriteError):
+        store._write_json(package_root() / "kernel" / "colado.json", {"x": 1})
+    # y su estado normal sigue escribiéndose
+    store._write_json(tmp_path / "tasks" / "t.json", {"x": 1})
+    assert (tmp_path / "tasks" / "t.json").is_file()

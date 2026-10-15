@@ -114,7 +114,8 @@ class DefaultOrchestrator(Orchestrator):
             raise ContractError("planner devolvió kind='plan' sin grafo")
         if self.store is not None:
             await self.store.save_graph(task.task_id, graph)
-        self._emit(task, EventType.GRAPH_BUILT, {"nodes": len(graph.nodes)})
+        # GRAPH_BUILT del plan inicial lo emite el runner al arrancar el grafo;
+        # aquí solo se emite el de un replan (que el runner no puede saber).
 
         result = await self.runner.run(graph, task, self.services)
 

@@ -475,7 +475,26 @@ def doctor(
         paths.skills_root.glob("_quarantine/*")
     )
     say(f"✓ cuarentenas: {len(quarantines)}")
-    say(f"✓ sandbox: N0 por defecto")
+
+    # Aislamiento real, sin promesas de más: N0 aísla el proceso, no el sistema
+    # de archivos, y los modos auto/unrestricted aprueban sin preguntar.
+    from satellite.kernel.policy import PolicyMode, load_settings
+
+    settings = load_settings(cfg_path)
+    level = str(settings.sandbox_level or "N0").upper()
+    mode = settings.policy_mode.value
+    permissive = settings.policy_mode is PolicyMode.UNRESTRICTED or level == "N2"
+    if permissive:
+        say(f"! sandbox: {level} · política {mode} — SIN confinamiento")
+        say("    ! las skills y los subprocesos corren con tus permisos y sin límites")
+    else:
+        say(f"✓ sandbox: {level} · política {mode}")
+    if level == "N0":
+        say("    i N0 es aislamiento de PROCESO (entorno limpio, sin red, con timeout),")
+        say("      no del sistema de archivos: para confinarlo de verdad usa N1")
+    if settings.policy_mode is PolicyMode.AUTO:
+        say("    i política auto: las acciones que exigen aprobación se aprueban solas")
+
     env_keys = [k for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY") if os.getenv(k)]
     say("✓ env keys: " + (", ".join(env_keys) if env_keys else "(ninguna)"))
     say("DOCTOR: " + ("PASS" if ok else "FALLOS ENCONTRADOS"))

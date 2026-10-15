@@ -10,6 +10,7 @@ from satellite.core.events import ExecutionEvent
 from satellite.core.graph import ExecutionGraph
 from satellite.core.task import Task
 from satellite.kernel import migrations
+from satellite.kernel.guard import KernelWriteError
 from satellite.persistence.base import Store
 
 SUBDIRS = ("tasks", "plans", "executions", "state", "context", "logs", "config", "agents")
@@ -111,6 +112,13 @@ class FileStore(Store):
         return self.root / "state" / f"{task_id}.json"
 
     def _write_json(self, path: Path, data: dict) -> None:
+        # El store escribe su propio estado, no ficheros del framework: si un
+        # ``root`` manipulado apunta al paquete, se corta aquí (misma regla que
+        # el guard, sin importarlo para no crear un ciclo).
+        target = Path(path).resolve()
+        package = Path(__file__).resolve().parents[1]
+        if target == package or package in target.parents:
+            raise KernelWriteError(f"el store no escribe dentro del paquete: {target}")
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
