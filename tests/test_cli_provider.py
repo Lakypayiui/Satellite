@@ -10,7 +10,11 @@ from satellite.cli.app import app
 from satellite.config import providers as pconfig
 from satellite.config.models import ModelsResult
 
-runner = CliRunner()
+# Rich activa color cuando ve CI=true (los runners de GitHub lo ponen) y, con una
+# consola de 80 columnas, envuelve el texto de ayuda y parte los nombres de opción
+# ("--model" -> "--mo" + "del"), así que las aserciones no los encuentran. Se fija
+# un ancho amplio y sin color para que la salida sea la misma aquí y en CI.
+runner = CliRunner(env={"COLUMNS": "200", "NO_COLOR": "1", "TERM": "dumb"})
 
 
 def read(root: Path) -> dict:
