@@ -89,7 +89,23 @@ def tui(
     project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
 ) -> None:
     """Lanza la interfaz interactiva (TUI)."""
-    from satellite.tui.app import run_tui
+    try:
+        from satellite.tui.app import run_tui
+    except ModuleNotFoundError as exc:
+        # Fallar en claro: lo normal es estar usando otro intérprete (el del sistema
+        # en lugar del entorno del proyecto) y un ModuleNotFoundError pelado no lo dice.
+        import os
+
+        missing = getattr(exc, "name", "") or "una dependencia"
+        venv_python = ".venv\\Scripts\\python" if os.name == "nt" else ".venv/bin/python"
+        typer.echo(
+            f"la TUI no puede arrancar: falta '{missing}'."
+            "\nNecesita las dependencias del proyecto (entre ellas 'textual'):"
+            "\n  - instálalas en este intérprete:  python -m pip install -e ."
+            f"\n  - o lánzala con el entorno del proyecto:  {venv_python} -m satellite.cli tui",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
 
     run_tui(project)
 

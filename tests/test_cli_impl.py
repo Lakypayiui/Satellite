@@ -8,6 +8,18 @@ from satellite.cli.app import app
 from satellite.core.task import TaskResult, TaskStatus
 
 
+def test_tui_command_says_what_is_missing(monkeypatch) -> None:
+    """Sin el paquete de la TUI, el CLI lo explica en vez de soltar el traceback."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "satellite.tui.app", None)  # simula que falta
+    runner = CliRunner()
+    result = runner.invoke(app, ["tui"])
+    assert result.exit_code == 1
+    assert "textual" in result.output
+    assert "pip install" in result.output
+
+
 def test_agents_command(tmp_path: Path, monkeypatch) -> None:
     """agents lista el catálogo sin red ni LLM real."""
 
