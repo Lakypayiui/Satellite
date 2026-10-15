@@ -260,3 +260,22 @@ def test_a_rejected_path_keeps_the_honest_error(tmp_path: Path) -> None:
     assert result.success is False
     assert str(fuera) in (result.error or "")
     assert not fuera.exists()
+
+
+def test_the_system_prompt_says_where_paths_end() -> None:
+    """Regla de framework: una ruta de fuera se reporta, no se sustituye por otra.
+
+    Es la que faltaba cuando el agente, tras un "permiso denegado", listó el proyecto
+    y lo presentó como si fuera la carpeta pedida.
+    """
+    from satellite.agents.runtime import build_system_prompt
+
+    texto = build_system_prompt("Eres un escritor.\n{tools}")
+    assert "ALCANCE DE RUTAS" in texto
+    assert "no sustituyas otra carpeta" in texto
+
+    # si el prompt ya lo dice, no se duplica la sección
+    repetido = build_system_prompt(
+        "Eres un escritor.\n{tools}\nNo salgas del proyecto: si algo queda fuera del proyecto, informa."
+    )
+    assert repetido.lower().count("alcance de rutas") <= 1

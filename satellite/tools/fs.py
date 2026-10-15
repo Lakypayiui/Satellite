@@ -64,7 +64,7 @@ class WriteFileTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Ruta del archivo a escribir."},
+                "path": {"type": "string", "description": "Ruta del archivo a escribir, relativa al proyecto."},
                 "content": {"type": "string", "description": "Contenido a escribir."},
             },
             "required": ["path", "content"],
@@ -100,7 +100,7 @@ class EditFileTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Ruta del archivo a editar."},
+                "path": {"type": "string", "description": "Ruta del archivo a editar, relativa al proyecto."},
                 "old_string": {"type": "string", "description": "Texto a reemplazar."},
                 "new_string": {"type": "string", "description": "Texto de reemplazo."},
             },
@@ -144,7 +144,7 @@ class ListDirTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Ruta del directorio a listar."},
+                "path": {"type": "string", "description": "Ruta del directorio a listar, relativa al proyecto."},
                 "recursive": {"type": "boolean", "description": "Si listar recursivamente (default false)."},
             },
             "required": ["path"],
@@ -193,7 +193,10 @@ def _resolve(raw: object, tool_ctx: ToolContext) -> Path:
     if not isinstance(raw, str) or not raw.strip():
         raise ToolError("se requiere el argumento 'path' (string no vacío)")
     base = tool_ctx.workdir or tool_ctx.project_root
-    path = Path(raw) if Path(raw).is_absolute() else base / Path(raw)
+    # `~` se expande de verdad: si no, "~/Desktop/x" quedaba como
+    # "<proyecto>/~/Desktop/x" y el error decía "no existe", que es una pista falsa.
+    candidata = Path(raw).expanduser()
+    path = candidata if candidata.is_absolute() else base / candidata
     policy = tool_ctx.policy
     if (
         policy is not None

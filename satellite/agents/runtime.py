@@ -61,6 +61,17 @@ def build_system_prompt(
         )
     if "no confiable" not in rendered.lower():
         rendered = f"# DATOS NO CONFIABLES\n{UNTRUSTED_RULE}\n\n{rendered}"
+    if "fuera del proyecto" not in rendered.lower():
+        # Regla de framework para TODOS los agentes ejecutores (también los que crea
+        # el usuario): sin ella, al negarse una ruta el modelo improvisaba y acababa
+        # presentando el proyecto como si fuera la carpeta que se le pidió.
+        regla = (
+            "Solo puedes acceder a rutas dentro del proyecto. Si una tool te dice que "
+            "una ruta queda fuera, informa del error y de la ruta pedida tal cual "
+            "(puede autorizarla el usuario): no sustituyas otra carpeta por ella ni "
+            "presentes el proyecto como si fuera lo que se pidió."
+        )
+        rendered = f"# ALCANCE DE RUTAS\n{regla}\n\n{rendered}"
     return rendered
 
 
