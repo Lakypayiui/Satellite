@@ -1,12 +1,18 @@
 """Tests de tools de filesystem (con asyncio.run, sin pytest-asyncio)."""
 
 import asyncio
+import sys
 from pathlib import Path
 
 from satellite.security.policy import DefaultSecurityPolicy
 from satellite.tools.base import ToolContext
 from satellite.tools.fs import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from satellite.tools.terminal import RunCommandTool
+
+# El comando viaja como string y se parte con shlex en modo POSIX, que se come los
+# backslashes: la ruta del intérprete se escapa y se entrecomilla para que sobreviva
+# al split igual en Windows (ruta absoluta) que en Linux (donde "python" no existe).
+_PYTHON = '"%s"' % str(sys.executable).replace("\\", "\\\\")
 
 
 def run(coro):
@@ -83,14 +89,14 @@ def test_path_out_of_root_denied(tmp_path: Path) -> None:
 
 def test_terminal_exit_zero(tmp_path: Path) -> None:
     ctx = make_ctx(tmp_path)
-    t = run(RunCommandTool().execute({"command": "python -c \"print(1+1)\""}, ctx))
+    t = run(RunCommandTool().execute({"command": f'{_PYTHON} -c "print(1+1)"'}, ctx))
     assert t.success is True
     assert "2" in t.output["stdout"]
 
 
 def test_terminal_exit_nonzero(tmp_path: Path) -> None:
     ctx = make_ctx(tmp_path)
-    t = run(RunCommandTool().execute({"command": "python -c \"import sys; sys.exit(3)\""}, ctx))
+    t = run(RunCommandTool().execute({"command": f'{_PYTHON} -c "import sys; sys.exit(3)"'}, ctx))
     assert t.success is False
     assert t.output["exit_code"] == 3
 
@@ -99,7 +105,7 @@ def test_terminal_timeout(tmp_path: Path) -> None:
     ctx = make_ctx(tmp_path)
     t = run(
         RunCommandTool().execute(
-            {"command": "python -c \"import time; time.sleep(5)\"", "timeout_s": 1}, ctx
+            {"command": f'{_PYTHON} -c "import time; time.sleep(5)"', "timeout_s": 1}, ctx
         )
     )
     assert t.success is False

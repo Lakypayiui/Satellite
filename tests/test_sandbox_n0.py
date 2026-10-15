@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import sys
 from pathlib import Path
 
 from satellite.sandbox.base import (
@@ -29,7 +30,7 @@ def test_n0_runs_and_captures(tmp_path: Path) -> None:
     sandbox = SubprocessSandbox()
     result = run(
         sandbox.run(
-            ["python", "-c", "print(1 + 1)"],
+            [sys.executable, "-c", "print(1 + 1)"],
             SandboxSpec(project_root=tmp_path, level=SandboxLevel.N0, timeout_s=30),
         )
     )
@@ -41,7 +42,7 @@ def test_n0_timeout(tmp_path: Path) -> None:
     sandbox = SubprocessSandbox()
     result = run(
         sandbox.run(
-            ["python", "-c", "import time; time.sleep(5)"],
+            [sys.executable, "-c", "import time; time.sleep(5)"],
             SandboxSpec(project_root=tmp_path, level=SandboxLevel.N0, timeout_s=1),
         )
     )
@@ -65,7 +66,7 @@ def test_n0_stdin(tmp_path: Path) -> None:
     sandbox = SubprocessSandbox()
     result = run(
         sandbox.run(
-            ["python", "-c", "import sys; print(sys.stdin.read().upper())"],
+            [sys.executable, "-c", "import sys; print(sys.stdin.read().upper())"],
             SandboxSpec(project_root=tmp_path, stdin="hola"),
         )
     )
@@ -116,7 +117,9 @@ def test_docker_run_graceful_without_docker(tmp_path: Path, monkeypatch) -> None
 
 def test_host_sandbox_runs(tmp_path: Path) -> None:
     sandbox = HostSandbox()
-    result = run(sandbox.run(["python", "-c", "print('n2')"], SandboxSpec(project_root=tmp_path)))
+    result = run(
+        sandbox.run([sys.executable, "-c", "print('n2')"], SandboxSpec(project_root=tmp_path))
+    )
     assert result.success is True
     assert "n2" in result.stdout
 
