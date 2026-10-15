@@ -83,10 +83,16 @@ def sanitize(
 
 
 def wrap_data(label: str, text: object, *, max_chars: int | None = DEFAULT_MAX_CHARS) -> str:
-    """Envuelve contenido no confiable en un bloque ``<data>`` etiquetado."""
+    """Envuelve contenido no confiable en un bloque ``<data>`` etiquetado.
+
+    Si el texto parece intentar dar instrucciones, el bloque lo marca con
+    ``suspicious="true"`` para que quede a la vista de quien lo lea. Sigue siendo
+    una heurística informativa: los controles reales son código.
+    """
     safe_label = (strip_control(label) or "data").strip()[:60]
+    flag = ' suspicious="true"' if looks_suspicious(text) else ""
     return (
-        f'<data source="{safe_label}">\n'
+        f'<data source="{safe_label}"{flag}>\n'
         f"{sanitize(text, max_chars=max_chars)}\n"
         "</data>"
     )

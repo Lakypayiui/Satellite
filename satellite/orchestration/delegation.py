@@ -222,7 +222,19 @@ class DelegationManager:
 
     async def _approve(self, ctx: DelegationContext, *, kind: str, summary: str) -> bool:
         if self.approval is None:
-            return False  # sin puerto de aprobación no se autoriza nada
+            # Sin puerto no se autoriza nada, pero el motivo real es que falta
+            # configurarlo: se emite para que no parezca una negativa de política.
+            self._emit(
+                EventType.POLICY_VIOLATION,
+                ctx,
+                {
+                    "kind": kind,
+                    "summary": summary,
+                    "reason": "aprobación no configurada: se deniega por defecto",
+                    "denied": True,
+                },
+            )
+            return False
         decision = await self.approval.request(
             {"kind": kind, "summary": summary},
             ApprovalContext(
