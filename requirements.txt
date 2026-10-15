@@ -3,4 +3,7 @@ openai>=1.0
 anthropic>=0.25
 typer>=0.9
 httpx>=0.27
+# Consolas legacy de Windows: el click vendorizado de typer importa colorama
+# para envolver el ANSI (si falta, cualquier comando del CLI revienta).
+colorama>=0.4; platform_system == "Windows"
 pytest>=7.0
