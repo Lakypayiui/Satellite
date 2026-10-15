@@ -71,8 +71,9 @@ class SkillRunner:
     ) -> SkillRunResult:
         """Ejecuta la skill y devuelve su salida (con stats actualizadas)."""
         manifest = self.registry.get(skill_id)
+        skill_dir = self.registry.root / manifest.id
         use_cache = self.cache is not None and self.cache.eligible(
-            manifest, allow_network=allow_network
+            manifest, allow_network=allow_network, skill_dir=skill_dir
         )
         cache_key = (
             self.cache.key_for(manifest, payload, project_root=project_root)

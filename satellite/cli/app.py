@@ -238,8 +238,11 @@ def tools_list() -> None:
 @skills_app.command("list")
 def skills_list() -> None:
     """Lista las skills globales con su estado y uso."""
-    registry, _paths = _load_skills()
+    from satellite.skills.cache import SkillResultCache
+
+    registry, paths = _load_skills()
     skills = registry.all()
+    cache = SkillResultCache()
     if not skills:
         say("(todavía no hay skills creadas)")
         say(
@@ -254,6 +257,13 @@ def skills_list() -> None:
             f"{manifest.id}: {manifest.description} [{manifest.status.value}] "
             f"uses={manifest.stats.uses}"
         )
+        if getattr(manifest, "deterministic", False):
+            reason = cache.reason(manifest, skill_dir=paths.skills_root / manifest.id)
+            say(
+                "    memoizable: determinista (auditado)"
+                if not reason
+                else f"    NO memoizable: {reason}"
+            )
     say("")
     say("(las primitivas del runtime no aparecen aquí: 'satellite tools list')")
 

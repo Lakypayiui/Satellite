@@ -2,14 +2,23 @@
 
 Reglas ([AJ-4]):
 
-- Sólo se memoizan skills con ``deterministic: true`` en el manifest. Es una
-  marca **declarativa**: no se analiza el código del script, sólo se validan los
-  ``permissions`` declarados y el lenguaje.
+- Sólo se memoizan skills con ``deterministic: true`` **y** que pasen la
+  auditoría estática (:mod:`satellite.skills.audit`): imports no deterministas,
+  ejecución dinámica, escrituras o dependencias no auditables descalifican. La
+  marca del manifest es declarativa; la auditoría es la que la contrasta.
+- ``bash`` **nunca** se memoiza: no se puede auditar estáticamente.
+- Sin directorio de skill no se puede auditar ⇒ **no** se memoiza (fail-closed).
 - **Nunca** se memoizan primitivas (el runtime no las ejecuta por aquí).
 - La clave incluye el hash del manifest **y** del script, y el hash de contenido
   de los ficheros referenciados por el input (si el input es una ruta).
-- **No se cachean fallos**.
+- **No se cachean fallos**, ni resultados cuyo JSON supere ``max_entry_bytes``.
 - Se invalida al cambiar versión/hash y al entrar en cuarentena.
+
+Aislamiento (sin prometer de más): el fichero de la cache vive en el directorio
+de estado del proyecto, que las tools alcanzan a través de la guardia del kernel
+(nunca con una tool). En N1 (Docker) el workspace se monta **solo-lectura**, así
+que un contenedor no puede tocarlo; en **N0 (subproceso) no hay aislamiento del
+SO** y un script podría escribir ese fichero si se lo propone.
 """
 
 from __future__ import annotations
@@ -19,6 +28,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from satellite.skills.audit import Finding, audit_skill, reason_for
 from satellite.skills.models import ALLOWED_LANGUAGES, SkillManifest, SkillStatus
 
 # Permisos declarados que rompen el determinismo (si están activos, no se memoiza).
@@ -39,6 +49,10 @@ _EFFECT_KEYS: tuple[str, ...] = (
 _FALSEY = (False, None, 0, "", (), [], {})
 
 MAX_CONTENT_BYTES = 5_000_000
+# Tope por entrada: un resultado enorme infla el fichero y no compensa cachearlo.
+MAX_ENTRY_BYTES = 256_000
+# Tope de entradas: al superarlo se desaloja la más antigua (orden de inserción).
+MAX_ENTRIES = 500
 
 
 @dataclass(frozen=True)
@@ -48,6 +62,7 @@ class CacheStats:
     hits: int = 0
     misses: int = 0
     entries: int = 0
+    skipped: int = 0
 
     @property
     def hit_rate(self) -> float | None:
@@ -60,6 +75,7 @@ class CacheStats:
             "hits": self.hits,
             "misses": self.misses,
             "entries": self.entries,
+            "skipped": self.skipped,
             "hit_rate": self.hit_rate,
         }
 
@@ -117,29 +133,60 @@ def content_digest(payload: object, project_root: Path | str | None) -> str:
 
 
 class SkillResultCache:
-    """Memoiza resultados de skills deterministas (en memoria, con persistencia opcional)."""
+    """Memoiza resultados de skills deterministas; persiste si se le da ruta."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        path: Path | str | None = None,
+        *,
+        max_entry_bytes: int = MAX_ENTRY_BYTES,
+        max_entries: int = MAX_ENTRIES,
+    ) -> None:
         self._entries: dict[str, object] = {}
         self._keys_by_skill: dict[str, set] = {}
         self.hits = 0
         self.misses = 0
+        self.skipped = 0
+        self._audits: dict[tuple[str, str, str], list[Finding]] = {}
+        self.path = Path(path) if path is not None else None
+        self.max_entry_bytes = int(max_entry_bytes)
+        self.max_entries = int(max_entries)
+        if self.path is not None:
+            self.load(self.path)
 
     # --- política ---
 
-    def eligible(self, manifest: SkillManifest, *, allow_network: bool = False) -> bool:
-        """¿Se puede memoizar esta skill tal como está declarada?"""
-        if not getattr(manifest, "deterministic", False):
-            return False
-        if manifest.status is not SkillStatus.ACTIVE:
-            return False
-        if allow_network:
-            return False  # si hay que abrir red para ejecutarla, no es determinista
-        if manifest.language not in ALLOWED_LANGUAGES:
-            return False
-        return not unsafe_permissions(manifest.permissions)
+    def audit(self, manifest: SkillManifest, skill_dir: Path | str | None) -> list[Finding]:
+        """Hallazgos de la auditoría estática (recordada por skill, hash y entrypoint)."""
+        if skill_dir is None:
+            return [Finding("unreadable", "sin directorio de skill para auditar")]
+        root = Path(skill_dir)
+        key = (str(root), str(getattr(manifest, "hash", "")), str(manifest.entrypoint))
+        findings = self._audits.get(key)
+        if findings is None:
+            findings = audit_skill(root, manifest.entrypoint, language=manifest.language)
+            self._audits[key] = findings
+        return findings
 
-    def reason(self, manifest: SkillManifest, *, allow_network: bool = False) -> str:
+    def eligible(
+        self,
+        manifest: SkillManifest,
+        *,
+        allow_network: bool = False,
+        skill_dir: Path | str | None = None,
+    ) -> bool:
+        """¿Se puede memoizar? Declaración del manifest **y** auditoría del código."""
+        return self.reason(
+            manifest, allow_network=allow_network, skill_dir=skill_dir
+        ) == ""
+
+    def reason(
+        self,
+        manifest: SkillManifest,
+        *,
+        allow_network: bool = False,
+        skill_dir: Path | str | None = None,
+    ) -> str:
         """Motivo legible por el que NO se memoiza (``""`` si sí se memoiza)."""
         if not getattr(manifest, "deterministic", False):
             return "la skill no declara deterministic=true"
@@ -149,10 +196,13 @@ class SkillResultCache:
             return "la ejecución requiere red"
         if manifest.language not in ALLOWED_LANGUAGES:
             return f"lenguaje no soportado: {manifest.language}"
+        if str(manifest.language).lower() != "python":
+            # bash no se puede auditar: sin auditoría no hay determinismo probado.
+            return f"lenguaje {manifest.language!r} no auditable"
         unsafe = unsafe_permissions(manifest.permissions)
         if unsafe:
             return f"permisos declarados no deterministas: {', '.join(unsafe)}"
-        return ""
+        return reason_for(self.audit(manifest, skill_dir))
 
     # --- clave ---
 
@@ -206,12 +256,44 @@ class SkillResultCache:
         return None
 
     def put(self, key: str, value: object, *, skill_id: str = "") -> None:
-        """Guarda un resultado **exitoso** (los fallos no se cachean)."""
+        """Guarda un resultado **exitoso** (los fallos no se cachean).
+
+        Se omiten los resultados cuyo JSON pase de ``max_entry_bytes`` y se
+        desaloja la entrada más antigua al superar ``max_entries``.
+        """
         if not key:
+            return
+        if self._too_large(value):
+            self.skipped += 1
             return
         self._entries[key] = value
         if skill_id:
             self._keys_by_skill.setdefault(str(skill_id), set()).add(key)
+        self._evict_if_needed()
+        self.save_if_configured()
+
+    def _too_large(self, value: object) -> bool:
+        """True si el resultado no se puede/debe persistir (tope o no serializable)."""
+        try:
+            size = len(
+                json.dumps(value, ensure_ascii=False, default=str).encode("utf-8")
+            )
+        except (TypeError, ValueError):
+            return True
+        return size > self.max_entry_bytes
+
+    def _evict_if_needed(self) -> None:
+        """Desaloja las entradas más antiguas (orden de inserción)."""
+        while len(self._entries) > self.max_entries:
+            oldest = next(iter(self._entries))
+            self._entries.pop(oldest, None)
+            for keys in self._keys_by_skill.values():
+                keys.discard(oldest)
+
+    def save_if_configured(self) -> None:
+        """Persiste si la cache tiene ruta (best-effort y atómico)."""
+        if self.path is not None:
+            self.save(self.path)
 
     def invalidate(self, skill_id: str) -> int:
         """Invalida las entradas de esa skill (cuarentena/cambio de versión)."""
@@ -228,10 +310,16 @@ class SkillResultCache:
         self._keys_by_skill.clear()
         self.hits = 0
         self.misses = 0
+        self.skipped = 0
 
     def stats(self) -> CacheStats:
-        """Aciertos, fallos y tamaño actual."""
-        return CacheStats(hits=self.hits, misses=self.misses, entries=len(self._entries))
+        """Aciertos, fallos, tamaño actual y entradas omitidas."""
+        return CacheStats(
+            hits=self.hits,
+            misses=self.misses,
+            entries=len(self._entries),
+            skipped=self.skipped,
+        )
 
     def keys_for(self, skill_id: str) -> set:
         """Claves memoizadas de esa skill (copia)."""
@@ -258,6 +346,7 @@ class SkillResultCache:
                         },
                         "hits": self.hits,
                         "misses": self.misses,
+                        "skipped": self.skipped,
                     },
                     ensure_ascii=False,
                 ),
@@ -290,6 +379,7 @@ class SkillResultCache:
                     )
         self.hits = int(data.get("hits", 0) or 0)
         self.misses = int(data.get("misses", 0) or 0)
+        self.skipped = int(data.get("skipped", 0) or 0)
 
 
 __all__ = [

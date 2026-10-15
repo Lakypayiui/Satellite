@@ -50,6 +50,14 @@ def make_registry(tmp_path: Path, **kwargs) -> SkillRegistry:
     return registry
 
 
+def clean_dir(tmp_path: Path, *, skill_id: str = "count_words") -> Path:
+    """Directorio de una skill cuyo script pasa la auditoría (determinista de verdad)."""
+    root = tmp_path / skill_id
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "main.py").write_text("print(1)\n", encoding="utf-8")
+    return root
+
+
 def make_runner(tmp_path: Path, *, cache=None, sandbox=None, **kwargs):
     registry = make_registry(tmp_path, **kwargs)
     sandbox = sandbox or FakeSandbox()
@@ -59,20 +67,25 @@ def make_runner(tmp_path: Path, *, cache=None, sandbox=None, **kwargs):
 # ---------------------------------------------------------------- política
 
 
-def test_only_deterministic_skills_are_memoizable() -> None:
+def test_only_deterministic_skills_are_memoizable(tmp_path: Path) -> None:
     cache = SkillResultCache()
-    assert cache.eligible(make_manifest(deterministic=True)) is True
-    assert cache.eligible(make_manifest(deterministic=False)) is False
-    assert "deterministic" in cache.reason(make_manifest(deterministic=False))
+    skill_dir = clean_dir(tmp_path)
+    assert cache.eligible(make_manifest(), skill_dir=skill_dir) is True
+    assert cache.eligible(make_manifest(deterministic=False), skill_dir=skill_dir) is False
+    assert "deterministic" in cache.reason(make_manifest(deterministic=False), skill_dir=skill_dir)
 
 
-def test_unsafe_permissions_block_memoization() -> None:
+def test_unsafe_permissions_block_memoization(tmp_path: Path) -> None:
     cache = SkillResultCache()
+    skill_dir = clean_dir(tmp_path)
     manifest = make_manifest(permissions={"network": True})
-    assert cache.eligible(manifest) is False
-    assert "network" in cache.reason(manifest)
+    assert cache.eligible(manifest, skill_dir=skill_dir) is False
+    assert "network" in cache.reason(manifest, skill_dir=skill_dir)
     # declararlo en falso es seguro
-    assert cache.eligible(make_manifest(permissions={"network": False})) is True
+    assert (
+        cache.eligible(make_manifest(permissions={"network": False}), skill_dir=skill_dir)
+        is True
+    )
 
 
 def test_unsafe_permissions_detection() -> None:
@@ -91,6 +104,14 @@ def test_quarantined_and_networked_skills_are_not_memoizable() -> None:
     assert "quarantined" in cache.reason(quarantined)
     # si hay que abrir red para ejecutarla, deja de ser determinista
     assert cache.eligible(make_manifest(), allow_network=True) is False
+
+
+def test_without_skill_dir_there_is_no_audit_and_no_memoization(tmp_path: Path) -> None:
+    """Sin directorio no se puede auditar ⇒ fail-closed (y se explica)."""
+    cache = SkillResultCache()
+    manifest = make_manifest()
+    assert cache.eligible(manifest) is False
+    assert "auditar" in cache.reason(manifest)
 
 
 # ---------------------------------------------------------------- clave

@@ -51,6 +51,19 @@ no web console.
   otherwise); at 85% of it the conversation is compacted automatically
   (LLM summary, deterministic fallback) and `/compact` does it on demand.
 
+## Sandbox and skill memoization
+
+- **N0 (default)** — subprocess with a clean environment, no network and a timeout. This is
+  process isolation, **not** OS isolation: a script runs with your user's permissions.
+- **N1** — Docker container with `--network none` and the workspace mounted **read-only**.
+- **N2** — no confinement, for trusted local work only.
+
+A skill's result is memoized only when its manifest declares `deterministic: true` **and** a
+static audit of the script and its local modules finds nothing non-deterministic (randomness,
+clocks, environment, dynamic execution, writes, unauditable dependencies). `bash` skills are
+never memoized. The audit raises the bar, it does not prove determinism; `satellite skills list`
+says which skills are memoizable and why not.
+
 ## Surfaces
 
 | Surface | How |

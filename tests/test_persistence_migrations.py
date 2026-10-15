@@ -1,13 +1,48 @@
-"""Tests de migraciones de esquema y snapshots/rollback (Fase 8)."""
+"""Tests de migraciones de esquema, snapshots/rollback y lifecycle (Fase 8)."""
 
 from pathlib import Path
 
+import pytest
+
+from satellite.core.errors import SpecValidationError
 from satellite.kernel import migrations
 from satellite.persistence.store import FileStore
+from satellite.skills.models import SkillManifest
+
+
+def test_schema_version_is_four() -> None:
+    # Guardia explícita: subir la versión es una decisión consciente (v4: lifecycle).
+    assert migrations.SCHEMA_VERSION == 4
 
 
 def test_current_version_starts_at_zero(tmp_path: Path) -> None:
     assert migrations.current_version(tmp_path / ".satellite") == 0
+
+
+# ---------------------------------------------------------------- lifecycle
+
+
+def test_skill_manifest_lifecycle_defaults_to_persistent() -> None:
+    manifest = SkillManifest(id="mi_skill", description="hace algo")
+    assert manifest.lifecycle == "persistent"
+    assert SkillManifest.from_dict(manifest.to_dict()).lifecycle == "persistent"
+
+
+def test_skill_manifest_lifecycle_roundtrip() -> None:
+    manifest = SkillManifest(id="mi_skill", description="hace algo", lifecycle="ephemeral")
+    assert manifest.to_dict()["lifecycle"] == "ephemeral"
+    assert SkillManifest.from_dict(manifest.to_dict()).lifecycle == "ephemeral"
+
+
+def test_skill_manifest_tolerates_missing_lifecycle() -> None:
+    """Un manifest antiguo (sin el campo) se carga como persistente."""
+    old = {"id": "mi_skill", "description": "hace algo", "entrypoint": "main.py"}
+    assert SkillManifest.from_dict(old).lifecycle == "persistent"
+
+
+def test_skill_manifest_rejects_unknown_lifecycle() -> None:
+    with pytest.raises(SpecValidationError):
+        SkillManifest(id="mi_skill", description="hace algo", lifecycle="inventado")
 
 
 def test_migrate_sets_version_and_creates_dirs(tmp_path: Path) -> None:

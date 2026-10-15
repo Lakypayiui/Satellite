@@ -119,7 +119,11 @@ def build_runtime(project_root: Path, *, approval: object | None = None):
     skill_registry = SkillRegistry(paths.skills_root, sink=None)
     skill_registry.load_all()
     sandbox = SubprocessSandbox()
-    skill_runner = SkillRunner(skill_registry, sandbox, cache=SkillResultCache())
+    skill_runner = SkillRunner(
+        skill_registry,
+        sandbox,
+        cache=SkillResultCache(_skill_cache_path(paths)),
+    )
 
     # Catálogo: base (ya sincronizado) + agentes creados por el usuario.
     loaded_specs = {spec.id: spec for spec in catalog_store.load_specs()}
@@ -235,6 +239,13 @@ def _build_preprocessor(
         return LocalPreprocessor(provider, project_root)
     except Exception:
         return None
+
+
+def _skill_cache_path(paths) -> Path | None:
+    """Ruta del caché de resultados de skills (``None`` si no hay proyecto)."""
+    if paths.project_data is None:
+        return None
+    return Path(paths.project_data) / "state" / "skill_cache.json"
 
 
 def build_tool_registry(policy: DefaultSecurityPolicy | None = None) -> DefaultToolRegistry:
