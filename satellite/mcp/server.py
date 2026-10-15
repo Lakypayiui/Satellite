@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import json
+import queue
 import sys
+import threading
+import time
 from typing import Any
 
 from satellite.mcp.handlers import TOOLS_LIST, RuntimeBundle, get_handlers
+
+# Versión base de este servidor y la primera que incluye elicitación (client-side).
+PROTOCOL_BASE = "2024-11-05"
+PROTOCOL_WITH_ELICITATION = "2025-06-18"
 
 
 class MCPServer:
@@ -23,6 +30,17 @@ class MCPServer:
         self._stdin = stdin or sys.stdin
         self._stdout = stdout or sys.stdout
         self._initialized = False
+        # La elicitación es una capacidad del **cliente**: se lee, no se declara.
+        self.client_elicitation = False
+        self._elicitation_seq = 0
+        self._queued: list[dict] = []
+        # El puerto de aprobación pregunta por este canal (y si no hay, rechaza).
+        approval = getattr(self.bundle, "approval", None)
+        if approval is not None:
+            try:
+                approval.elicitation = self.request_elicitation
+            except AttributeError:  # puerto sin canal: sigue fail-closed
+                pass
 
     def _send(self, obj: dict) -> None:
         self._stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
@@ -34,12 +52,23 @@ class MCPServer:
         msg_id = message.get("id")
 
         if method == "initialize":
+            params = message.get("params")
+            capabilities = params.get("capabilities") if isinstance(params, dict) else None
+            self.client_elicitation = bool(
+                isinstance(capabilities, dict) and "elicitation" in capabilities
+            )
             self._initialized = True
             return {
                 "jsonrpc": "2.0",
                 "id": msg_id,
                 "result": {
-                    "protocolVersion": "2024-11-05",
+                    # Se ofrece la versión que soporta elicitación solo si el
+                    # cliente la declara; si no, la base de siempre.
+                    "protocolVersion": (
+                        PROTOCOL_WITH_ELICITATION
+                        if self.client_elicitation
+                        else PROTOCOL_BASE
+                    ),
                     "capabilities": {"tools": {"listChanged": False}},
                     "serverInfo": {"name": "satellite", "version": "0.2.0"},
                 },
@@ -113,6 +142,81 @@ class MCPServer:
             except json.JSONDecodeError:
                 self._send({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}})
                 continue
+            response = self.dispatch(message)
+            if response is not None:
+                self._send(response)
+            self._drain_queue()
+
+    # --- elicitación (pregunta al cliente) ---
+
+    def request_elicitation(
+        self, message: str, requested_schema: dict, timeout_s: float = 120.0
+    ) -> dict:
+        """Envía ``elicitation/create`` y espera la respuesta del cliente.
+
+        Se llama desde el handler (que corre en ``asyncio.to_thread``), así que
+        mientras espera nadie más lee el stdin. Devuelve siempre un dict con
+        ``action``: ``accept``/``decline``/``cancel``, o ``timeout``/``unavailable``
+        cuando no hay veredicto (fail-closed).
+        """
+        if not self.client_elicitation:
+            return {"action": "unavailable"}
+        self._elicitation_seq += 1
+        request_id = f"elicitation-{self._elicitation_seq}"
+        self._send(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": "elicitation/create",
+                "params": {"message": message, "requestedSchema": requested_schema},
+            }
+        )
+        return self._wait_for_reply(request_id, timeout_s)
+
+    def _wait_for_reply(self, request_id: str, timeout_s: float) -> dict:
+        """Espera la respuesta con ese id; lo demás se **encola** para el bucle."""
+        incoming: "queue.Queue[dict]" = queue.Queue()
+
+        def reader() -> None:
+            while True:
+                line = self._stdin.readline()
+                if not line:
+                    incoming.put({"__eof__": True})
+                    return
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    message = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                incoming.put(message)
+
+        threading.Thread(target=reader, daemon=True).start()
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return {"action": "timeout"}
+            try:
+                message = incoming.get(timeout=min(remaining, 0.5))
+            except queue.Empty:
+                continue
+            if message.get("__eof__"):
+                return {"action": "timeout"}
+            if str(message.get("id")) == str(request_id):
+                result = message.get("result")
+                return result if isinstance(result, dict) else {"action": "cancel"}
+            # Otro mensaje del cliente: no se pierde, lo procesa el bucle principal.
+            self._queued.append(message)
+
+    def _drain_queue(self) -> None:
+        """Procesa los mensajes que llegaron mientras se esperaba una elicitación."""
+        pending = list(self._queued)
+        self._queued.clear()
+        for message in pending:
+            if not isinstance(message, dict) or "method" not in message:
+                continue  # respuestas sueltas: no hay nada que despachar
             response = self.dispatch(message)
             if response is not None:
                 self._send(response)

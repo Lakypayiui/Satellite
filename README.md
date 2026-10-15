@@ -72,6 +72,16 @@ says which skills are memoizable and why not.
 | TUI | `python -m satellite.cli tui` — chat, `/plan`, `/provider`, `/compact`, `/stats`… |
 | MCP | `python -m satellite.mcp` — exposes the same runtime to MCP clients |
 
+### Approvals over MCP
+
+MCP never approves anything by itself. Creating an agent or a skill is asked to the
+**client** through `elicitation` (a client capability, per the 2025-06-18 spec), and only for
+**low-risk** proposals: no network, no shell, no writes outside the workspace. Anything risky
+(those permissions, delegation, edits) is resolved **only in the CLI or the TUI**; over MCP it is
+refused with that reason. If the client does not declare elicitation, does not answer, declines or
+cancels, the answer is a rejection — the server fails closed and never blocks. Asking the client
+does not guarantee a human is behind it: that is the client's responsibility.
+
 ## Quick start
 
 ```bash
