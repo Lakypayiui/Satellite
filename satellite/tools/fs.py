@@ -184,9 +184,11 @@ def _list_entries(path: Path, recursive: bool) -> list[dict]:
 
 
 def _resolve(raw: object, tool_ctx: ToolContext) -> Path:
-    """Resuelve la ruta pedida dentro del proyecto (via política).
+    """Resuelve la ruta pedida dentro del proyecto (via política y zonas).
 
-    Lanza ToolError si la ruta queda fuera de las raíces permitidas.
+    Lanza ToolError si la ruta queda fuera de las raíces permitidas o si toca una
+    zona protegida del framework (kernel, estado, auditoría, configuración): eso
+    vale también para **leer**, porque ahí vive la clave del proveedor.
     """
     if not isinstance(raw, str) or not raw.strip():
         raise ToolError("se requiere el argumento 'path' (string no vacío)")
@@ -195,4 +197,21 @@ def _resolve(raw: object, tool_ctx: ToolContext) -> Path:
     policy = tool_ctx.policy
     if policy is not None and not policy.check_path(path, tool_ctx.project_root):
         raise ToolError(f"permiso denegado: {path}")
+    _assert_not_protected(path, tool_ctx, base)
     return path
+
+
+def _assert_not_protected(path: Path, tool_ctx: ToolContext, base: Path) -> None:
+    """Veta las zonas internas del framework (la ruta se resuelve antes de mirar)."""
+    from satellite.kernel.guard import protected_zone
+    from satellite.kernel.paths import resolve_paths
+
+    paths = getattr(tool_ctx, "paths", None)
+    if paths is None:
+        try:
+            paths = resolve_paths(tool_ctx.project_root)
+        except Exception:  # noqa: BLE001 — sin rutas no se puede afirmar nada
+            return
+    zone = protected_zone(path, paths)
+    if zone:
+        raise ToolError(f"zona protegida ({zone}): no se puede tocar {path}")

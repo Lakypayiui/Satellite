@@ -64,6 +64,17 @@ no web console.
 - **N1** — Docker container with `--network none` and the workspace mounted **read-only**.
 - **N2** — no confinement, for trusted local work only.
 
+Tools can only write inside the workspace (plus the extra roots you declare) and
+inside the runtime catalogs. Four zones are always off limits, for reading and for
+writing: the package itself (**kernel**), the framework's state (`state/`, where the
+conversation, the context window and the skill cache live), the **audit** log and
+the provider **config** (where the API key is stored). A symlink from the workspace
+into any of them resolves to the protected zone and is refused.
+
+Note that only **N1** confines `run_command`/`run_python`: in N0 they are plain
+subprocesses running with your user's permissions, so the zones above protect the
+framework's own files, not the machine.
+
 A skill's result is memoized only when its manifest declares `deterministic: true` **and** a
 static audit of the script and its local modules finds nothing non-deterministic (randomness,
 clocks, environment, dynamic execution, writes, unauditable dependencies). `bash` skills are

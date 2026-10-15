@@ -52,7 +52,12 @@ def test_guard_allows_data_roots(tmp_path: Path) -> None:
     paths = ensure_dirs(resolve_paths(project_root=tmp_path / "proj", env={"SATELLITE_HOME": str(tmp_path / "home")}))
     assert is_write_allowed(paths.agents_root / "new.json", paths)
     assert is_write_allowed(paths.skills_root / "s" / "manifest.json", paths)
-    assert is_write_allowed(paths.project_data / "state" / "x.json", paths)
+    # cambio deliberado de modelo: el estado del framework ya NO es escribible por
+    # una tool (lo escribe el propio framework por su camino) y el workspace sí.
+    assert not is_write_allowed(paths.project_data / "state" / "x.json", paths)
+    assert is_write_allowed(
+        paths.project_data / "tasks" / "t.json", paths, workspace=tmp_path / "proj"
+    )
 
 
 def test_guard_denies_audit_and_kernel(tmp_path: Path) -> None:
