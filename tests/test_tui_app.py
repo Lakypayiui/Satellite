@@ -96,10 +96,12 @@ def test_app_approval_modal_resolves_request(tmp_path, monkeypatch) -> None:
             await pilot.pause()
             context = ApprovalContext(kind="agent", proposal_id="p1", summary="crear x", details={})
             task = asyncio.ensure_future(app.approval.request({}, context))
-            # el timer abre el modal
+            # el timer abre el modal; hay que esperar a que el botón exista, no sólo
+            # a que la pantalla sea ApprovalScreen (push_screen la activa antes de
+            # componer y ahí query_one("#approve") podía reventar: era un flake).
             for _ in range(30):
                 await pilot.pause(0.05)
-                if isinstance(app.screen, ApprovalScreen):
+                if isinstance(app.screen, ApprovalScreen) and app.screen.query("#approve"):
                     break
             assert isinstance(app.screen, ApprovalScreen)
             app.screen.query_one("#approve", Button).press()
