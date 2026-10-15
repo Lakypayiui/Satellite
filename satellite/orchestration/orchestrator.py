@@ -61,7 +61,12 @@ class DefaultOrchestrator(Orchestrator):
             if early is not None:
                 return await self._finish(task, early)
 
-        if self.allow_chat_direct:
+        # Elegir una alternativa del plan es una orden de ejecución: no puede acabar
+        # en el atajo del catálogo («tengo N skills guardadas») ni en una respuesta
+        # directa de charla, que era justo lo que pasaba al elegir una opción.
+        execute_choice = bool(task.metadata.get("execute_choice"))
+
+        if self.allow_chat_direct and not execute_choice:
             # Preguntas sobre el propio sistema ("¿qué agentes tienes?", "¿qué
             # herramientas?", "¿qué modelo eres?"): se contestan localmente desde
             # el catálogo real, sin LLM y sin grafo.
@@ -77,7 +82,7 @@ class DefaultOrchestrator(Orchestrator):
                     ),
                 )
 
-        if self.allow_chat_direct and self.services.provider is not None:
+        if self.allow_chat_direct and not execute_choice and self.services.provider is not None:
             if await async_is_chat_goal(task, self.services.provider):
                 return await self._finish(task, await self._answer_direct(task))
 

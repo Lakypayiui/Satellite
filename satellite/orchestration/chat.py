@@ -386,8 +386,45 @@ class ChatSession:
             f"{getattr(option, 'summary', '')} Pasos: {steps}. Procede con esta opción."
         )
         return await self.send(
-            text, approval=approval, extra_metadata={"allow_plan_options": False}
+            text,
+            approval=approval,
+            # execute_choice: es una orden de ejecución, no una pregunta, así que el
+            # orquestador no debe atajarla con el catálogo ni con respuesta directa.
+            extra_metadata={"allow_plan_options": False, "execute_choice": True},
         )
+
+
+_OUTPUT_TEXT_KEYS = ("content", "answer", "text", "summary", "result", "output")
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def readable_output(output: dict | None, *, limit: int = 1200) -> str:
+    """El texto legible de un output de nodo, sea cual sea su forma.
+
+    Un nodo con ``output_schema`` devuelve las claves que dicte el schema (p.ej.
+    ``skill``/``result``), así que mirar sólo ``content`` dejaba al usuario sin
+    respuesta. Como último recurso se serializa el JSON: mejor eso que el silencio.
+    """
+    if not isinstance(output, dict) or not output:
+        return ""
+    for key in _OUTPUT_TEXT_KEYS:
+        value = output.get(key)
+        if isinstance(value, str) and value.strip():
+            return _clip(value.strip(), limit)
+        if isinstance(value, (list, tuple)) and value and all(
+            isinstance(item, str) for item in value
+        ):
+            return _clip(" ".join(str(item) for item in value), limit)
+    try:
+        import json
+
+        rendered = json.dumps(output, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):  # pragma: no cover - un dict simple siempre serializa
+        return ""
+    return _clip(rendered, limit) if rendered not in ("", "{}", "null") else ""
 
 
 def reply_from_result(result: TaskResult) -> str:
@@ -408,9 +445,9 @@ def reply_from_result(result: TaskResult) -> str:
         return f"Me falta una capacidad: {missing}. ¿Quieres que la cree?"
     if result.error:
         return f"No pude completarlo: {result.error}"
-    content = str(output.get("content") or "").strip()
+    content = readable_output(output)
     if content:
-        # Camino del grafo: el texto que produjo el último nodo ES la respuesta.
-        # Antes se ignoraba y el usuario sólo veía el resumen «Node completado».
+        # Camino del grafo: el texto del último nodo es la respuesta, tenga `content`
+        # o las claves que dicte su `output_schema`.
         return content
     return result.summary or "(sin respuesta)"

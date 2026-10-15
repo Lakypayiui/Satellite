@@ -333,4 +333,15 @@ def _summarize(task: dict, output: dict | None, error: str | None) -> str:
         # El texto que respondió el LLM. Sin esto el resumen era "Node completado" y
         # la respuesta se quedaba en el output sin que nadie la pintara.
         return _clip_summary(output["content"])
+    if output:
+        # Un nodo con `output_schema` devuelve sus propias claves: se resume con el
+        # JSON en una línea antes que perderlo y decir "Node completado".
+        try:
+            import json
+
+            rendered = json.dumps(output, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):  # pragma: no cover
+            rendered = ""
+        if rendered and rendered not in ("{}", "null"):
+            return _clip_summary(rendered)
     return "Node completado"

@@ -352,4 +352,55 @@ def test_choose_sends_followup_without_options(tmp_path: Path) -> None:
     option = make_options().options[0]
     run(chat.choose(option))
     assert orchestrator.tasks[0].metadata["allow_plan_options"] is False
+    assert orchestrator.tasks[0].metadata["execute_choice"] is True
     assert "Cambio mínimo" in orchestrator.tasks[0].goal
+
+
+class _PlannerQueRevienta:
+    """Si el orquestador llega a planificar, es que no atajó por el catálogo."""
+
+    async def plan(self, task, registry):
+        raise RuntimeError("planificado")
+
+
+class _SkillsVacias:
+    """Doble del registro de skills: el catálogo usa `.all()`."""
+
+    def all(self):
+        return []
+
+
+def _orchestrator_sin_proveedor(planner) -> DefaultOrchestrator:
+    from types import SimpleNamespace
+
+    services = SimpleNamespace(provider=None, skills=_SkillsVacias(), registry=None)
+    return DefaultOrchestrator(planner, object(), services)
+
+
+def test_a_chosen_option_is_not_answered_from_the_catalog(tmp_path: Path) -> None:
+    """Elegir una alternativa es una orden de ejecución, no una pregunta al catálogo.
+
+    Antes, la frase que manda `ChatSession.choose` («Opción elegida: … Procede con
+    esta opción») casaba con la intención de catálogo y el usuario recibía «Tengo N
+    skills guardadas» con un task_finished, sin ejecutar nada.
+    """
+    from satellite.core.task import Task
+
+    # control: sin la marca, el catálogo contesta (y no se planifica)
+    placer = _orchestrator_sin_proveedor(_PlannerQueRevienta())
+    respuesta = run(placer.execute(Task(goal="¿qué skills tienes?", project_root=tmp_path)))
+    assert respuesta.output.get("mode") == "direct_reply"
+    assert "skills guardadas" in respuesta.summary
+
+    # con la marca de "opción elegida", sigue el camino normal: planifica
+    marcado = _orchestrator_sin_proveedor(_PlannerQueRevienta())
+    with pytest.raises(RuntimeError, match="planificado"):
+        run(
+            marcado.execute(
+                Task(
+                    goal="¿qué skills tienes?",
+                    project_root=tmp_path,
+                    metadata={"execute_choice": True},
+                )
+            )
+        )

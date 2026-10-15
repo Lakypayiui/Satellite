@@ -121,3 +121,22 @@ def test_reply_from_a_graph_result_is_the_llm_answer() -> None:
 
     vacio = TaskResult(task_id="t2", status=TaskStatus.OK, summary="", output={})
     assert reply_from_result(vacio) == "(sin respuesta)"
+
+
+def test_reply_reads_outputs_that_do_not_have_content() -> None:
+    """Un nodo con `output_schema` devuelve sus claves: hay que saber leerlas.
+
+    Mirar solo `content` dejaba al usuario con «Node completado» aunque el nodo
+    hubiera producido un resultado perfectamente legible.
+    """
+    from satellite.orchestration.chat import readable_output
+
+    assert readable_output({"skill": "csv", "result": "3 filas"}) == "3 filas"
+    assert readable_output({"answer": "así es"}) == "así es"
+    assert readable_output({"clave": 7, "otra": True}) == '{"clave": 7, "otra": true}'
+    assert readable_output({}) == ""
+
+    con_schema = TaskResult(
+        task_id="t", status=TaskStatus.OK, summary="", output={"clave": 7, "otra": True}
+    )
+    assert reply_from_result(con_schema) == '{"clave": 7, "otra": true}'

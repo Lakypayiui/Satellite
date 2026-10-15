@@ -70,16 +70,26 @@ class PlanOptionsScreen(ModalScreen[str]):
     Devuelve el id de la opción elegida, o ``""`` para «otra cosa».
     """
 
-    BINDINGS = [("escape", "other", "Otra cosa")]
+    BINDINGS = [
+        ("escape", "other", "Otra cosa"),
+        ("o", "other", "Otra cosa"),
+        ("1", "pick(1)", "Opción 1"),
+        ("2", "pick(2)", "Opción 2"),
+        ("3", "pick(3)", "Opción 3"),
+        ("4", "pick(4)", "Opción 4"),
+    ]
 
     def __init__(self, options) -> None:
         super().__init__()
         self.options = options
 
     def compose(self) -> ComposeResult:
-        with Container(id="approval-box"):
+        # Los botones van en vertical dentro de un contenedor con scroll: en una fila
+        # no caben (cada uno mide >=16 columnas) y los de la derecha quedaban
+        # recortados, así que algunas opciones no se podían elegir.
+        with VerticalScroll(id="plan-box"):
             yield Static(render.plan_options_panel(self.options), id="approval-body")
-            with Horizontal(id="approval-actions"):
+            with Container(id="plan-actions"):
                 for index, option in enumerate(self.options.options, 1):
                     label = f"{index}. {option.title}"
                     if len(label) > 40:
@@ -98,6 +108,12 @@ class PlanOptionsScreen(ModalScreen[str]):
 
     def action_other(self) -> None:
         self.dismiss("")
+
+    def action_pick(self, index: int) -> None:
+        """Elegir por número, sin depender del foco ni del ratón."""
+        options = list(getattr(self.options, "options", ()) or ())
+        if 1 <= index <= len(options):
+            self.dismiss(options[index - 1].id)
 
 
 class SatelliteTUI(App):
@@ -123,6 +139,12 @@ class SatelliteTUI(App):
     #approval-box { width: 78; height: auto; border: thick $warning; background: $panel; padding: 1 2; }
     #approval-actions { height: auto; align-horizontal: center; }
     #approval-actions Button { margin: 0 2; }
+    #plan-box {
+        width: 84; max-width: 95%; height: auto; max-height: 90%;
+        border: thick $warning; background: $panel; padding: 1 2;
+    }
+    #plan-actions { height: auto; }
+    #plan-actions Button { width: 1fr; margin-bottom: 1; }
     #provider-box {
         width: 92; height: auto; max-height: 90%;
         border: thick $accent; background: $panel; padding: 1 2;
