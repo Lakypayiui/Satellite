@@ -11,6 +11,9 @@ from pathlib import Path
 DEFAULT_OUTPUT_LIMIT = 64_000
 
 # Variables de entorno mínimas para que un intérprete resuelva rutas y binarios.
+# Deliberadamente **fuera**: HOME/USERPROFILE y TEMP/TMP. Un script no necesita
+# conocer las carpetas del usuario y tenerlas le da alcance fuera del workspace;
+# si una skill las necesita de verdad, se piden explícitas por ``extra``.
 ENV_ALLOWLIST: tuple[str, ...] = (
     "PATH",
     "PATHEXT",
@@ -18,10 +21,6 @@ ENV_ALLOWLIST: tuple[str, ...] = (
     "SYSTEMROOT",
     "windir",
     "ComSpec",
-    "TEMP",
-    "TMP",
-    "USERPROFILE",
-    "HOME",
     "LANG",
     "LC_ALL",
     "PYTHONIOENCODING",
