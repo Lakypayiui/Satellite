@@ -204,12 +204,18 @@ class LLMRequest:
 
 @dataclass(frozen=True)
 class LLMResponse:
-    """Respuesta de un proveedor LLM."""
+    """Respuesta de un proveedor LLM.
+
+    ``response_id`` es el id opaco del proveedor (para diagnósticos de caché) y
+    ``cache_diagnostics`` el informe opcional que compara con la petición anterior.
+    """
 
     content: str | None = None
     tool_calls: tuple[ToolCall, ...] | None = None
     stop_reason: str = ""
     usage: Usage | None = None
+    response_id: str = ""
+    cache_diagnostics: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -217,15 +223,20 @@ class LLMResponse:
             "tool_calls": [t.to_dict() for t in self.tool_calls] if self.tool_calls else None,
             "stop_reason": self.stop_reason,
             "usage": self.usage.to_dict() if self.usage else None,
+            "response_id": self.response_id,
+            "cache_diagnostics": dict(self.cache_diagnostics or {}) or None,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "LLMResponse":
         calls = d.get("tool_calls")
         usage = d.get("usage")
+        diagnostics = d.get("cache_diagnostics")
         return cls(
             content=d.get("content"),
             tool_calls=tuple(ToolCall.from_dict(t) for t in calls) if calls else None,
             stop_reason=d.get("stop_reason", ""),
             usage=Usage.from_dict(usage) if usage else None,
+            response_id=str(d.get("response_id", "")),
+            cache_diagnostics=dict(diagnostics) if isinstance(diagnostics, dict) else None,
         )

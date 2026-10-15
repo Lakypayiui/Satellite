@@ -46,6 +46,7 @@ from satellite.orchestration.runner import DefaultGraphRunner
 from satellite.persistence.store import FileStore
 from satellite.providers.base import LLMProvider
 from satellite.providers.factory import ProviderConfig, ProviderFactory
+from satellite.providers.caching import parse_cache_config
 from satellite.sandbox.subprocess_sandbox import SubprocessSandbox
 from satellite.security.policy import DefaultSecurityPolicy
 from satellite.skills.registry import SkillRegistry
@@ -292,6 +293,8 @@ def _metered(
         return provider
     data = provider_config.load_config(project_root)
     cfg = _provider_config_from(data, role=role) or _provider_config_from(data)
+    llm = data.get("llm") if isinstance(data, dict) else None
+    cache = parse_cache_config(llm.get("cache") if isinstance(llm, dict) else None)
     return MeteredProvider(
         provider,
         CallRecorder(default_log_dir(project_root)),
@@ -299,6 +302,7 @@ def _metered(
         model=(cfg.model if cfg is not None else ""),
         price_book=PriceBook.from_config(data),
         max_tokens_by_role=settings.max_tokens,
+        prewarm=bool(cache.get("prewarm")),
     )
 
 
@@ -378,6 +382,8 @@ def _model_overrides(llm: dict, provider: dict | None = None) -> dict:
 def _provider_config_from(data: dict, role: str | None = None) -> ProviderConfig | None:
     """Construye ProviderConfig desde el config, priorizando el rol indicado."""
     llm = data.get("llm", {}) if isinstance(data.get("llm"), dict) else {}
+    # `llm.cache`: modo, diagnóstico, pre-calentado y límites del adaptador.
+    cache_options = parse_cache_config(llm.get("cache"))
     if role and isinstance(llm.get(role), dict):
         role_cfg = llm[role]
         ref = str(role_cfg.get("provider", ""))
@@ -393,6 +399,7 @@ def _provider_config_from(data: dict, role: str | None = None) -> ProviderConfig
                 api_key=saved_match.get("api_key"),
                 max_tokens=_max_tokens_for(llm, saved_match, role),
                 model_overrides=_model_overrides(llm, saved_match),
+                cache_options=cache_options,
             )
         if role_cfg.get("base_url") or role_cfg.get("model") or role_cfg.get("provider"):
             return ProviderConfig(
@@ -402,6 +409,7 @@ def _provider_config_from(data: dict, role: str | None = None) -> ProviderConfig
                 api_key=role_cfg.get("api_key"),
                 max_tokens=_max_tokens_for(llm, role_cfg, role),
                 model_overrides=_model_overrides(llm, role_cfg),
+                cache_options=cache_options,
             )
     if data.get("name") or data.get("model") or data.get("base_url"):
         return ProviderConfig(
@@ -412,5 +420,6 @@ def _provider_config_from(data: dict, role: str | None = None) -> ProviderConfig
             temperature=float(data.get("temperature", 0.0)),
             max_tokens=_max_tokens_for(llm, data),
             model_overrides=_model_overrides(llm, data),
+            cache_options=cache_options,
         )
     return None

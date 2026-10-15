@@ -65,7 +65,7 @@ class CallRecord:
     prefix_hash: str = ""
     prefix_tokens_estimate: int = 0
     cache_status: str = UNKNOWN
-    breakpoints: tuple[int, ...] = ()
+    breakpoints: tuple[str, ...] = ()
     input_tokens: int = 0
     output_tokens: int = 0
     cache_creation: int | None = None
@@ -73,6 +73,11 @@ class CallRecord:
     spec_fp: str = ""
     catalog_fp: str = ""
     tools_fp: str = ""
+    # Diagnóstico de caché de Anthropic (best-effort): id opaco del mensaje del
+    # proveedor, motivo que reportó la API y nuestro veredicto mapeado.
+    message_id: str = ""
+    cache_miss_reason: str = ""
+    diagnosis: str = ""
     kind: str = ""
 
     def to_dict(self) -> dict:
@@ -97,6 +102,9 @@ class CallRecord:
             "spec_fp": self.spec_fp,
             "catalog_fp": self.catalog_fp,
             "tools_fp": self.tools_fp,
+            "message_id": self.message_id,
+            "cache_miss_reason": self.cache_miss_reason,
+            "diagnosis": self.diagnosis,
             "kind": self.kind,
         }
 
@@ -119,7 +127,7 @@ class CallRecord:
             prefix_hash=str(d.get("prefix_hash", "")),
             prefix_tokens_estimate=int(d.get("prefix_tokens_estimate", 0)),
             cache_status=str(d.get("cache_status", UNKNOWN)),
-            breakpoints=tuple(int(b) for b in (d.get("breakpoints") or ())),
+            breakpoints=tuple(str(b) for b in (d.get("breakpoints") or ())),
             input_tokens=int(d.get("input_tokens", 0)),
             output_tokens=int(d.get("output_tokens", 0)),
             cache_creation=_optional("cache_creation"),
@@ -127,6 +135,9 @@ class CallRecord:
             spec_fp=str(d.get("spec_fp", "")),
             catalog_fp=str(d.get("catalog_fp", "")),
             tools_fp=str(d.get("tools_fp", "")),
+            message_id=str(d.get("message_id", "")),
+            cache_miss_reason=str(d.get("cache_miss_reason", "")),
+            diagnosis=str(d.get("diagnosis", "")),
             kind=str(d.get("kind", "")),
         )
 

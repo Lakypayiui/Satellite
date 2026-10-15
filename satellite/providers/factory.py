@@ -32,6 +32,8 @@ class ProviderConfig:
     # ``llm.models.<id>``: capacidades por modelo (p. ej. familias de razonamiento).
     # Fuera de ``eq``/``hash`` para que la config siga siendo hashable.
     model_overrides: dict = field(default_factory=dict, compare=False)
+    # ``llm.cache``: modo (explicit|auto), diagnóstico y pre-calentado.
+    cache_options: dict = field(default_factory=dict, compare=False)
 
 
 class ProviderFactory:
@@ -44,7 +46,7 @@ class ProviderFactory:
         if name == "fake":
             return FakeLLM()
         if name == "anthropic":
-            return AnthropicProvider(cfg)
+            return AnthropicProvider(cfg, cache_options=getattr(cfg, "cache_options", None))
         if name in _OPENAI_COMPAT_NAMES or cfg.base_url:
             return OpenAICompatProvider(cfg)
         raise ProviderError(

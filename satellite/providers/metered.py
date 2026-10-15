@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from satellite.core.messages import CallContext, LLMRequest, LLMResponse, Role
+from satellite.core.messages import CallContext, LLMRequest, LLMResponse, Message, Role
 from satellite.metrics.pricing import PriceBook
 from satellite.observability.call_log import CallRecord, CallRecorder, cache_status
-from satellite.observability.drift import PrefixDriftDetector
+from satellite.observability.drift import PrefixDriftDetector, diagnosis_kind
 from satellite.orchestration.prefix_rules import PrefixGate, PrefixGroupTracker
 from satellite.providers.base import LLMProvider
 from satellite.providers.prefix import (
@@ -22,6 +22,9 @@ from satellite.providers.prefix import (
     prefix_payload,
     tools_fingerprint,
 )
+
+# Mensaje de relleno del pre-calentado: su contenido no se responde nunca.
+PREWARM_PLACEHOLDER = "warmup"
 
 
 class MeteredProvider(LLMProvider):
@@ -39,6 +42,7 @@ class MeteredProvider(LLMProvider):
         max_tokens_by_role: dict | None = None,
         gate: PrefixGate | None = None,
         tracker: PrefixGroupTracker | None = None,
+        prewarm: bool = False,
     ) -> None:
         self.inner = inner
         self.recorder = recorder
@@ -50,6 +54,10 @@ class MeteredProvider(LLMProvider):
         # Reglas de ejecución (F5): calentamiento del prefijo y vigilancia del grupo.
         self.gate = gate if gate is not None else PrefixGate()
         self.tracker = tracker if tracker is not None else PrefixGroupTracker()
+        # Pre-calentado de caché (`llm.cache.prewarm`): opt-in y best-effort.
+        self.prewarm = bool(prewarm)
+        self.last_prewarmed = False
+        self.last_prewarm_creation: int | None = None
         self.last_record: CallRecord | None = None
         self.last_warmed = False
         self.last_group_status = ""
@@ -80,6 +88,8 @@ class MeteredProvider(LLMProvider):
         try:
             async with self.gate.enter(payload_hash) as warmed:
                 self.last_warmed = warmed
+                if warmed and self.prewarm:
+                    await self._prewarm(request)
                 response = await self.inner.complete(request)
         finally:
             self.last_group_status = self._observe_group(request, payload_hash)
@@ -87,6 +97,37 @@ class MeteredProvider(LLMProvider):
             self.last_record = self._build_record(request, response, payload, payload_hash)
             self.recorder.record(self.last_record)
         return response
+
+    async def _prewarm(self, request: LLMRequest) -> None:
+        """Calienta el prefijo estable con ``max_tokens=0`` (best-effort).
+
+        Se mandan los **mismos** tools y system que la llamada real, con el
+        breakpoint en el catálogo y sin la cola dinámica. Una respuesta con
+        contenido vacío y ``stop_reason: max_tokens`` es el resultado esperado (no
+        un fallo) y su ``cache_creation`` se reporta en ``last_prewarm_creation``.
+        """
+        keep = min(max(1, int(request.stable_user_count)), len(request.messages))
+        messages = tuple(request.messages[:keep]) + (
+            Message(role=Role.USER, content=PREWARM_PLACEHOLDER),
+        )
+        warm_request = replace(
+            request,
+            messages=messages,
+            max_tokens=0,
+            # El único bloque dinámico es el relleno: así el breakpoint cae en el
+            # catálogo (lo que se quiere calentar) y no en el placeholder.
+            stable_user_count=len(messages) - 1,
+        )
+        self.last_prewarmed = False
+        self.last_prewarm_creation = None
+        try:
+            response = await self.inner.complete(warm_request)
+        except Exception:  # noqa: BLE001 — el calentamiento nunca rompe la llamada
+            return
+        self.last_prewarmed = True
+        self.last_prewarm_creation = (
+            response.usage.cache_creation_input_tokens if response.usage else None
+        )
 
     # --- construcción del registro ---
 
@@ -140,7 +181,8 @@ class MeteredProvider(LLMProvider):
         read = usage.cache_read_input_tokens if usage else None
         plan = getattr(self.inner, "last_plan", None)
         ttl = str(getattr(plan, "ttl", "") or "") if plan is not None else ""
-        breakpoints = tuple(int(b) for b in (getattr(plan, "breakpoints", ()) or ()))
+        # Los breakpoints son **segmentos** ("system"/"catalog"/"anchor"/"tail").
+        breakpoints = tuple(str(b) for b in (getattr(plan, "breakpoints", ()) or ()))
         kind = self.detector.classify(
             task_id=call.task_id,
             agent_id=call.agent_id or call.role,
@@ -150,6 +192,8 @@ class MeteredProvider(LLMProvider):
             catalog_fp=call.catalog_fp,
             tools_fp=tools_fp,
         )
+        reason = response.cache_diagnostics or {}
+        cache_miss = (reason.get("cache_miss_reason") or {}) if isinstance(reason, dict) else {}
         return CallRecord(
             task_id=call.task_id,
             node_id=call.node_id,
@@ -170,4 +214,7 @@ class MeteredProvider(LLMProvider):
             catalog_fp=call.catalog_fp,
             tools_fp=tools_fp,
             kind=kind,
+            message_id=response.response_id,
+            cache_miss_reason=str(cache_miss.get("type", "")),
+            diagnosis=diagnosis_kind(response.cache_diagnostics),
         )

@@ -17,6 +17,10 @@ from satellite.core.messages import LLMRequest, LLMResponse, Message, Role, Usag
 from satellite.core.tool_models import ToolCall
 from satellite.providers.base import LLMProvider
 from satellite.providers.caching import (
+    ANCHOR_OFFSET,
+    MODE_AUTO,
+    MODE_EXPLICIT,
+    VALID_MODES,
     AnthropicCacheStrategy,
     CacheLimits,
     CachePlan,
@@ -53,6 +57,7 @@ class AnthropicProvider(LLMProvider):
         timeout_s: int = 120,
         limits: CacheLimits | None = None,
         strategy: CacheStrategy | None = None,
+        cache_options: dict | None = None,
     ) -> None:
         self.config = config
         self.timeout_s = timeout_s
@@ -61,6 +66,11 @@ class AnthropicProvider(LLMProvider):
         self._ttl_ledger = TtlLedger()
         self.last_plan: CachePlan | None = None
         self.last_ttl_degraded = False
+        self.last_prefix_hash = ""
+        # `llm.cache`: modo (`explicit`|`auto`), diagnóstico y pre-calentado.
+        self.cache_options = dict(cache_options or {})
+        # Id de la respuesta anterior por prefijo (para el diagnóstico de la API).
+        self._response_ids: dict[str, str] = {}
         if client is not None:
             self._client = client
         else:
@@ -96,6 +106,11 @@ class AnthropicProvider(LLMProvider):
         messages = [_to_anthropic_message(m) for m in others]
         if plan.mark_catalog and stable > 0:
             messages[stable - 1] = _mark_last_block(messages[stable - 1], marker)
+        if plan.mark_anchor and len(messages) > ANCHOR_OFFSET:
+            # Ancla rodante: la API solo mira 20 bloques hacia atrás, así que en
+            # conversaciones largas hace falta una marca intermedia.
+            index = len(messages) - 1 - ANCHOR_OFFSET
+            messages[index] = _mark_last_block(messages[index], marker)
         if plan.mark_tail and messages:
             messages[-1] = _mark_last_block(messages[-1], marker)
 
@@ -122,11 +137,48 @@ class AnthropicProvider(LLMProvider):
         if limit is None:
             limit = DEFAULT_MAX_OUTPUT_TOKENS
         kwargs["max_tokens"] = limit
+        if self.cache_mode() == MODE_AUTO:
+            # Caching automático: un `cache_control` de nivel superior y la API
+            # mueve el breakpoint sola (no se marcan bloques).
+            kwargs["cache_control"] = marker
+
+        create = self._diagnostics_create()
+        sent = None
+        if create is not None:
+            previous = self._response_ids.get(self.last_prefix_hash, "")
+            # Primera vez de este prefijo: `null` para optar por el diagnóstico.
+            sent = {"previous_message_id": previous or None}
         try:
-            resp = await self._client.messages.create(**kwargs)
+            if create is not None:
+                resp = await create(**kwargs, diagnostics=sent)
+            else:
+                resp = await self._client.messages.create(**kwargs)
         except Exception as exc:  # noqa: BLE001
             raise ProviderError(f"error del proveedor Anthropic: {exc}") from exc
-        return _from_anthropic_response(resp)
+        if create is not None:
+            response_id = str(getattr(resp, "id", "") or "")
+            if response_id:
+                self._response_ids[self.last_prefix_hash] = response_id
+        return _from_anthropic_response(resp, diagnostics=sent)
+
+    # --- diagnóstico de caché (opt-in, best-effort) ---
+
+    def cache_mode(self) -> str:
+        """Modo de caché pedido (``explicit`` por defecto)."""
+        mode = str(self.cache_options.get("mode", "") or "").lower()
+        return mode if mode in VALID_MODES else MODE_EXPLICIT
+
+    def _diagnostics_create(self):
+        """``create`` de la ruta beta si el diagnóstico está activo; si no, ``None``.
+
+        Es observacional: si el cliente no expone la ruta beta, simplemente no se
+        pide el diagnóstico (nunca bloquea la llamada).
+        """
+        if not self.cache_options.get("diagnostics"):
+            return None
+        beta = getattr(self._client, "beta", None)
+        create = getattr(getattr(beta, "messages", None), "create", None)
+        return create if callable(create) else None
 
     def _plan(
         self,
@@ -145,10 +197,15 @@ class AnthropicProvider(LLMProvider):
             has_catalog=catalog is not None,
             has_tail=len(others) - stable > 1,
             limits=self.limits,
+            blocks=len(request.messages),
+            mode=self.cache_mode(),
         )
+        digest = prefix_hash(request.tools, system_text, catalog)
+        # El diagnóstico de la API se recuerda por prefijo, así que se calcula
+        # siempre (aunque no se marque ningún breakpoint, p. ej. en modo auto).
+        self.last_prefix_hash = digest
         if plan.count == 0:
             return plan
-        digest = prefix_hash(request.tools, system_text, catalog)
         ttl, degraded = self._ttl_ledger.effective(digest, plan.ttl)
         self.last_ttl_degraded = degraded
         return replace(plan, ttl=ttl) if degraded else plan
@@ -220,7 +277,7 @@ def _to_anthropic_message(m: Message) -> dict:
     return {"role": "user", "content": m.content}
 
 
-def _from_anthropic_response(resp: Any) -> LLMResponse:
+def _from_anthropic_response(resp: Any, diagnostics: dict | None = None) -> LLMResponse:
     """Convierte una respuesta Anthropic a LLMResponse."""
     content_parts = []
     tool_calls = []
@@ -250,7 +307,37 @@ def _from_anthropic_response(resp: Any) -> LLMResponse:
         tool_calls=tuple(tool_calls) if tool_calls else None,
         stop_reason=stop_reason,
         usage=usage,
+        response_id=str(getattr(resp, "id", "") or ""),
+        cache_diagnostics=_diagnostics_payload(resp, diagnostics),
     )
+
+
+def _diagnostics_payload(resp: Any, sent: dict | None) -> dict | None:
+    """Normaliza el `diagnostics` de la respuesta (o ``None`` si no se pidió).
+
+    Tres casos según la documentación: el campo **ausente** (no se pidió, primer
+    turno, o comparó y no hay divergencia), ``{"cache_miss_reason": null}`` (la
+    comparación sigue en curso) y un motivo con ``type``.
+    """
+    if sent is None:
+        return None
+    previous = sent.get("previous_message_id")
+    raw = getattr(resp, "diagnostics", None)
+    if raw is None:
+        return {"previous_message_id": previous, "present": False, "cache_miss_reason": None}
+    reason = getattr(raw, "cache_miss_reason", None)
+    return {
+        "previous_message_id": previous,
+        "present": True,
+        "cache_miss_reason": (
+            None
+            if reason is None
+            else {
+                "type": str(getattr(reason, "type", "") or ""),
+                "cache_missed_input_tokens": getattr(reason, "cache_missed_input_tokens", None),
+            }
+        ),
+    }
 
 
 def _normalise_anthropic_usage(raw_usage: Any) -> Usage:

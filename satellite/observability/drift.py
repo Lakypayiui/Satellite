@@ -17,6 +17,43 @@ from satellite.observability.call_log import (
     KIND_MODEL_OR_TOOLS_CHANGED,
 )
 
+# Diagnóstico de caché de Anthropic (best-effort): la API compara dos peticiones
+# consecutivas y dice dónde divergió el prefijo.
+DIAGNOSIS_INCONCLUSIVE = "inconcluso"
+
+_DIAGNOSIS_KINDS: dict[str, str] = {
+    "model_changed": KIND_MODEL_OR_TOOLS_CHANGED,
+    "tools_changed": KIND_MODEL_OR_TOOLS_CHANGED,
+    # `system_changed` y `messages_changed` son cambios genéricos: nuestras
+    # huellas dicen cuál de ellos y si es deriva. Nota: el catálogo viaja en un
+    # bloque USER, así que un cambio **suyo** aparece como `messages_changed`.
+    "system_changed": KIND_CHANGED,
+    "messages_changed": KIND_CHANGED,
+}
+
+
+def diagnosis_kind(diagnostics: dict | None) -> str:
+    """Traduce el diagnóstico de la API a nuestro veredicto.
+
+    Devuelve ``""`` (comparó y no hay divergencia), un ``kind`` de cambio, o
+    ``DIAGNOSIS_INCONCLUSIVE`` cuando la API no da un veredicto: primer turno del
+    prefijo, comparación aún en curso, ``previous_message_not_found`` (huella
+    caducada o de otro espacio de trabajo) o ``unavailable`` (parámetros que
+    afectan al prompt, o conversación demasiado larga).
+    """
+    if not isinstance(diagnostics, dict):
+        return DIAGNOSIS_INCONCLUSIVE
+    if not diagnostics.get("previous_message_id"):
+        return DIAGNOSIS_INCONCLUSIVE  # primer turno: no hay nada que comparar
+    if not diagnostics.get("present"):
+        # El campo no vino: comparó y no encontró divergencia.
+        return ""
+    reason = diagnostics.get("cache_miss_reason")
+    if reason is None:
+        return DIAGNOSIS_INCONCLUSIVE  # la comparación seguía en curso
+    kind = _DIAGNOSIS_KINDS.get(str(reason.get("type", "")))
+    return kind or DIAGNOSIS_INCONCLUSIVE
+
 
 @dataclass(frozen=True)
 class PrefixSnapshot:

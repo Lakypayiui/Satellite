@@ -20,10 +20,21 @@ VALID_TTLS: tuple[str, ...] = (TTL_5M, TTL_1H)
 DEFAULT_TTL = TTL_5M
 DEFAULT_MAX_BREAKPOINTS = 4
 DEFAULT_MIN_PREFIX_TOKENS = 1024
+# Modos de caché: `explicit` marca bloques; `auto` deja que la API mueva el
+# breakpoint sola (y consume uno de los 4 slots, por eso es excluyente con el ancla).
+MODE_EXPLICIT = "explicit"
+MODE_AUTO = "auto"
+VALID_MODES: tuple[str, ...] = (MODE_EXPLICIT, MODE_AUTO)
+
+# La API de Anthropic solo mira 20 bloques hacia atrás: en conversaciones largas
+# la cola se sale de la ventana y se pierde el acierto, así que a partir de
+# `ANCHOR_MIN_BLOCKS` se marca además una posición `ANCHOR_OFFSET` antes de la cola.
+ANCHOR_MIN_BLOCKS = 16
+ANCHOR_OFFSET = 8
 
 _TTL_ORDER = {TTL_5M: 1, TTL_1H: 2}
 # Prioridad: del final del prefijo hacia atrás (cachear cuanto más, mejor).
-_CACHEABLE_SEGMENTS: tuple[str, ...] = ("tail", "catalog", "system")
+_CACHEABLE_SEGMENTS: tuple[str, ...] = ("tail", "anchor", "catalog", "system")
 
 
 @dataclass(frozen=True)
@@ -60,6 +71,7 @@ class CachePlan:
     mark_system: bool = False
     mark_catalog: bool = False
     mark_tail: bool = False
+    mark_anchor: bool = False
     skipped_reason: str = ""
 
     @property
@@ -70,6 +82,7 @@ class CachePlan:
             for name, enabled in (
                 ("system", self.mark_system),
                 ("catalog", self.mark_catalog),
+                ("anchor", self.mark_anchor),
                 ("tail", self.mark_tail),
             )
             if enabled
@@ -140,12 +153,23 @@ class CacheStrategy(ABC):
         has_catalog: bool,
         has_tail: bool,
         limits: CacheLimits,
+        blocks: int = 0,
+        mode: str = MODE_EXPLICIT,
     ) -> CachePlan:
-        """Calcula los breakpoints, o explica por qué no se marca nada."""
+        """Calcula los breakpoints, o explica por qué no se marca nada.
+
+        ``blocks`` es el número de bloques del prefijo (para el ancla rodante) y
+        ``mode`` permite delegar en el caching automático de la API.
+        """
         if not self.supports_breakpoints():
             return CachePlan(
                 ttl=limits.ttl,
                 skipped_reason="el proveedor no acepta breakpoints explícitos",
+            )
+        if mode == MODE_AUTO:
+            return CachePlan(
+                ttl=limits.ttl,
+                skipped_reason="modo auto: el breakpoint lo gestiona la API",
             )
         if prefix_tokens < limits.min_prefix_tokens:
             return CachePlan(
@@ -159,6 +183,9 @@ class CacheStrategy(ABC):
             "system": has_system,
             "catalog": has_catalog,
             "tail": has_tail,
+            # El ancla solo tiene sentido en conversaciones que ya se salen de la
+            # ventana de 20 bloques (y nunca junto al modo auto: ocupan slots).
+            "anchor": has_tail and blocks >= ANCHOR_MIN_BLOCKS,
         }
         chosen: list[str] = []
         for segment in _CACHEABLE_SEGMENTS:
@@ -171,6 +198,7 @@ class CacheStrategy(ABC):
             mark_system="system" in chosen,
             mark_catalog="catalog" in chosen,
             mark_tail="tail" in chosen,
+            mark_anchor="anchor" in chosen,
         )
 
 
@@ -268,13 +296,23 @@ def limits_for(
 
 
 def parse_cache_config(data: dict | None) -> dict:
-    """Lee la sección `llm.cache` de config.json (tolerante)."""
+    """Lee la sección `llm.cache` de config.json (tolerante).
+
+    Devuelve ``ttl``/``max_breakpoints``/``min_prefix_tokens`` para los límites y
+    ``mode``/``diagnostics``/``prewarm`` para el comportamiento del adaptador.
+    """
     if not isinstance(data, dict):
         return {}
     result: dict = {}
     ttl = str(data.get("ttl", "") or "")
     if ttl in VALID_TTLS:
         result["ttl"] = ttl
+    mode = str(data.get("mode", "") or "").lower()
+    if mode in VALID_MODES:
+        result["mode"] = mode
+    for flag in ("diagnostics", "prewarm"):
+        if data.get(flag) is not None:
+            result[flag] = bool(data[flag])
     for key, caster in (("max_breakpoints", int), ("min_prefix_tokens", int)):
         if data.get(key) is not None:
             try:
