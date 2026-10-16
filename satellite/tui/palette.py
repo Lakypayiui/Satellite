@@ -82,4 +82,5 @@ def help_text() -> str:
         lines.append(f"  {command.usage.ljust(width)}  {command.summary}")
     lines.append("")
     lines.append("  (texto libre)  Envía un mensaje al agente (conversación)")
+    lines.append("  @contexto      Adjunta contexto: @src/api.py, @src/, @login (símbolo)")
     return "\n".join(lines)

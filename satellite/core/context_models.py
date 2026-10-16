@@ -19,6 +19,7 @@ class ContextRefKind(Enum):
     PATTERN = "pattern"
     SUMMARY = "summary"
     CONVERSATION = "conversation"
+    PROJECT_RULES = "project_rules"
 
 
 @dataclass(frozen=True)

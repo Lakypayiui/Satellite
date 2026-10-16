@@ -44,6 +44,8 @@ class ContextResolver:
             return self._resolve_symbol(ref, limits)
         if kind is ContextRefKind.SUMMARY:
             return self._resolve_summary(ref)
+        if kind is ContextRefKind.PROJECT_RULES:
+            return self._resolve_instructions(ref, limits)
         return None
 
     async def resolve_many(
@@ -114,9 +116,20 @@ class ContextResolver:
         return ContextSection(ref=ref, content="".join(parts))
 
     def _resolve_symbol(self, ref: ContextRef, limits: ContextLimits | None) -> ContextSection | None:
+        """Todas las coincidencias del símbolo, no solo la primera.
+
+        Antes se cortaba en la primera aparición del primer fichero, así que la búsqueda
+        devolvía una sola pista. Ahora se recorre todo (los filtros de extensión y tamaño
+        siguen aplicándose) y lo que se corta es el volumen: al pasarse, se dice cuántas
+        coincidencias quedaron fuera en vez de fingir que eso era todo.
+        """
         symbol = ref.value
         files = self.index.list_project_files()
+        cap = limits.max_chars_per_section if limits and limits.max_chars_per_section else 8_000
+        max_hits = 20
         hits: list[str] = []
+        total = 0
+        omitted = 0
         for file in files:
             if file.suffix.lower() not in TEXT_EXTENSIONS:
                 continue
@@ -127,22 +140,40 @@ class ContextResolver:
             except OSError:
                 continue
             for i, line in enumerate(lines):
-                if symbol in line:
-                    start = max(0, i - 3)
-                    end = min(len(lines), i + 4)
-                    context_lines = "\n".join(
-                        f"{j + 1}: {lines[j]}" for j in range(start, end)
-                    )
-                    hits.append(
-                        f"--- {file.relative_to(self.project_root)} ---\n{context_lines}"
-                    )
-                    break
-            if hits:
-                break
+                if symbol not in line:
+                    continue
+                start = max(0, i - 3)
+                end = min(len(lines), i + 4)
+                block = (
+                    f"--- {file.relative_to(self.project_root)}:{i + 1} ---\n"
+                    + "\n".join(f"{j + 1}: {lines[j]}" for j in range(start, end))
+                )
+                if len(hits) >= max_hits or total + len(block) > cap:
+                    omitted += 1
+                    continue
+                hits.append(block)
+                total += len(block)
         if not hits:
             return None
         content = "\n\n".join(hits)
-        content = self._cap_section(content, limits)
+        if omitted:
+            aviso = (
+                f"\n\n[hay {omitted} coincidencia(s) más de '{symbol}': "
+                "pide el fichero concreto o usa un patrón]"
+            )
+            content = content[: max(0, cap - len(aviso))] + aviso
+        return ContextSection(ref=ref, content=content)
+
+    def _resolve_instructions(self, ref: ContextRef, limits: ContextLimits | None) -> ContextSection | None:
+        """Las instrucciones del proyecto (``AGENTS.md`` / ``SATELLITE.md``), si las hay."""
+        from satellite.context.instructions import load_instructions
+
+        nombre, texto = load_instructions(self.project_root)
+        if not texto:
+            return None
+        content = self._cap_section(
+            f"Instrucciones del proyecto ({nombre}):\n{texto}", limits
+        )
         return ContextSection(ref=ref, content=content)
 
     def _resolve_summary(self, ref: ContextRef) -> ContextSection:

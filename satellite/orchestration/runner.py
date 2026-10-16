@@ -121,8 +121,14 @@ class DefaultGraphRunner(GraphRunner):
                 payload={"spec": node.spec_id},
             )
 
-            # Contexto
+            # Contexto: lo que pide el nodo + las menciones @del usuario + las reglas
+            # del proyecto. Las tres cosas van por el mismo motor, así que se resuelven
+            # igual y se recortan igual.
+            from satellite.context.instructions import instructions_ref
+            from satellite.context.mentions import user_refs
+
             refs: list[ContextRef] | tuple[ContextRef, ...] = entrada.get("context_refs", [])
+            refs = tuple(refs) + user_refs(task) + instructions_ref(task)
             bundle = ContextBundle()
             if engine is not None and refs:
                 bundle = await engine.resolve(refs)

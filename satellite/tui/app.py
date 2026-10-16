@@ -220,6 +220,14 @@ class SatelliteTUI(App):
         self.title = "Satellite"
         self.sub_title = str(self.session.project_root)
         self._log(render.welcome(), plain="bienvenido")
+        from satellite.context.instructions import load_instructions
+
+        nombre_instrucciones, _texto = load_instructions(self.session.project_root)
+        if nombre_instrucciones:
+            self._log(
+                Text(f"instrucciones del proyecto: {nombre_instrucciones}", style="dim"),
+                plain=f"instrucciones={nombre_instrucciones}",
+            )
         self._refresh_status()
         self.set_interval(0.4, self._poll_approvals)
         self.query_one("#prompt", Input).focus()
@@ -440,6 +448,14 @@ class SatelliteTUI(App):
     async def _do_chat(
         self, text: str, *, plan_mode: bool = False, extra_metadata: dict | None = None
     ) -> None:
+        from satellite.context.mentions import parse as parse_mentions
+
+        mencionadas = parse_mentions(text, self.session.project_root)
+        if mencionadas.refs or mencionadas.missing:
+            resumen = mencionadas.summary()
+            self._log(
+                Text(f"contexto: {resumen}", style="dim"), plain=f"contexto: {resumen}"
+            )
         self._busy(True, "el agente está trabajando…")
         try:
             reply = await self.session.send_message(

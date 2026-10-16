@@ -340,6 +340,15 @@ class ChatSession:
         self.add("user", text)
 
         metadata: dict = {"history": history, "conversation": True}
+        # Las menciones (@archivo, @símbolo) viajan con la tarea para que el runner las
+        # resuelva como contexto de los nodos, igual que el historial.
+        from satellite.context.mentions import parse as parse_mentions
+
+        menciones = parse_mentions(text, self.project_root)
+        if menciones.refs:
+            metadata["context_refs"] = [ref.to_dict() for ref in menciones.refs]
+        if menciones.missing:
+            metadata["context_missing"] = list(menciones.missing)
         if plan_mode:
             metadata["plan_mode"] = True
         if extra_metadata:
