@@ -8,7 +8,7 @@ from satellite.tools.primitives import (
     ListDirTool,
     ReadFileTool,
     RunPythonTool,
-    RunShellTool,
+    RunArgvTool,
     SearchFilesTool,
     WriteFileTool,
 )
@@ -22,7 +22,7 @@ __all__ = [
     "RequestContextTool",
     "DelegateTool",
     "RunPythonTool",
-    "RunShellTool",
+    "RunArgvTool",
     "SearchFilesTool",
     "ReadFileTool",
     "WriteFileTool",

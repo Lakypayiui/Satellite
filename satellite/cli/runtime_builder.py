@@ -55,7 +55,7 @@ from satellite.tools.context_tool import RequestContextTool
 from satellite.tools.delegate import DelegateTool
 from satellite.tools.fs import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from satellite.tools.git import GitStatusTool
-from satellite.tools.primitives import RunPythonTool, RunShellTool, SearchFilesTool
+from satellite.tools.primitives import RunPythonTool, RunArgvTool, SearchFilesTool
 from satellite.tools.registry import DefaultToolRegistry
 from satellite.tools.skills import ProposeSkillTool, SearchSkillsTool
 from satellite.tools.terminal import RunCommandTool
@@ -67,7 +67,7 @@ DEFAULT_ALLOWED_TOOLS: set[str] = {
     "list_dir",
     "request_context",
     "run_python",
-    "run_shell",
+    "run_argv",
     "run_command",
     "search_files",
     "git_status",
@@ -268,7 +268,7 @@ def build_tool_registry(policy: DefaultSecurityPolicy | None = None) -> DefaultT
         EditFileTool(),
         ListDirTool(),
         RunCommandTool(),
-        RunShellTool(),
+        RunArgvTool(),
         RunPythonTool(),
         SearchFilesTool(),
         GitStatusTool(),

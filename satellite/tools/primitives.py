@@ -18,7 +18,7 @@ from satellite.tools.terminal import RunCommandTool, execute_argv
 
 __all__ = [
     "RunPythonTool",
-    "RunShellTool",
+    "RunArgvTool",
     "SearchFilesTool",
     "ReadFileTool",
     "WriteFileTool",
@@ -27,18 +27,23 @@ __all__ = [
 
 
 @dataclass
-class RunShellTool(RunCommandTool):
-    """Primitivo ``run_shell``: alias de ``run_command`` (misma política)."""
+class RunArgvTool(RunCommandTool):
+    """Primitivo ``run_argv``: alias de ``run_command`` (misma política).
+
+    El nombre es honesto: el comando llega como texto y se parte en argv, pero **no**
+    se abre un shell, así que no hay tuberías, redirecciones, ``&&`` ni variables.
+    """
 
     @property
     def id(self) -> str:
-        return "run_shell"
+        return "run_argv"
 
     @property
     def description(self) -> str:
         return (
             "Alias de run_command, con la misma política y el mismo motor: "
-            "NO abre un intérprete de shell."
+            "NO abre un intérprete de shell (ni tuberías, ni redirecciones, "
+            "ni &&, ni variables de shell)."
         )
 
 
@@ -52,8 +57,9 @@ class RunPythonTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Ejecuta código Python en un subproceso con entorno limpio y captura "
-            "stdout/stderr; el código puede leer y escribir lo que permita el sistema."
+            "Ejecuta código Python en un subproceso aislado (sin shell) con entorno "
+            "limpio y captura stdout/stderr; el código puede leer y escribir lo que "
+            "permita el sistema."
         )
 
     @property
@@ -77,11 +83,19 @@ class RunPythonTool(Tool):
             return ToolResult(success=False, error="se requiere el argumento 'code'")
         timeout_s = int(arguments.get("timeout_s", 30))
         argv = [sys.executable, "-c", code]
+        from satellite.tools.base import granted_for_this_call
+
         policy = tool_ctx.policy
-        if policy is not None and not policy.check_command(argv):
+        if (
+            policy is not None
+            and not policy.check_command(argv)
+            and not granted_for_this_call(argv, tool_ctx)
+        ):
             return ToolResult(
                 success=False,
                 error=f"permiso denegado: comando '{argv[0]}' no permitido",
+                error_code="command_not_allowed",
+                output={"command": code, "binary": argv[0], "argv": list(argv)},
             )
         cwd = tool_ctx.workdir or tool_ctx.project_root
         env = sanitize_env(tool_ctx.env)

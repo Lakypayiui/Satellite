@@ -25,7 +25,7 @@ no web console.
   `manifest.json`. No generated Python is ever imported.
 - **Kernel vs data** — the package is immutable; agents, skills, tasks, audit and
   metrics live under the data directory. Reserved ids (`orchestrator`,
-  `agent_creator`, `skill_curator`, `run_python`, `run_shell`, `read_file`,
+  `agent_creator`, `skill_curator`, `run_python`, `run_argv`, `read_file`,
   `write_file`, `list_dir`, `search_files`) can never be created or overwritten,
   in any policy mode.
 - **Approval is a port, not a prompt** — one `ApprovalPort` used by every
@@ -158,7 +158,7 @@ satellite/
 ├── sandbox/          # N0 subprocess, N1 Docker, N2 host
 ├── security/         # deny-by-default capability policy
 ├── skills/           # manifests, registry, runner, result cache
-├── tools/            # primitives (run_python, run_shell, fs…) and agent tools
+├── tools/            # primitives (run_python, run_argv, fs…) and agent tools
 └── tui/              # Textual interface (session, palette, screens, render)
 ```
 

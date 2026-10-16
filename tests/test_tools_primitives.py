@@ -8,7 +8,7 @@ from satellite.kernel.manifest import RESERVED_SKILL_IDS
 from satellite.skills.models import SkillManifest
 from satellite.skills.registry import SkillRegistry
 from satellite.tools.base import ToolContext
-from satellite.tools.primitives import RunPythonTool, RunShellTool, SearchFilesTool
+from satellite.tools.primitives import RunPythonTool, RunArgvTool, SearchFilesTool
 from satellite.tools.skills import ProposeSkillTool, SearchSkillsTool
 
 
@@ -23,9 +23,9 @@ def test_run_python_tool(tmp_path: Path) -> None:
     assert "5" in result.output["stdout"]
 
 
-def test_run_shell_tool_id_is_reserved(tmp_path: Path) -> None:
-    assert RunShellTool().id == "run_shell"
-    assert RunShellTool().id in RESERVED_SKILL_IDS
+def test_run_argv_tool_id_is_reserved(tmp_path: Path) -> None:
+    assert RunArgvTool().id == "run_argv"
+    assert RunArgvTool().id in RESERVED_SKILL_IDS
 
 
 def test_search_files_tool(tmp_path: Path) -> None:

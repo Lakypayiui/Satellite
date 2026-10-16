@@ -67,7 +67,7 @@ def _agents(services) -> str:
         description = spec.description or spec.name
         lines.append(f"- {spec.id}: {description} (capacidades: {capabilities})")
     lines.append(
-        "Las capacidades del kernel (run_python, run_shell, read_file…) son "
+        "Las capacidades del kernel (run_python, run_argv, read_file…) son "
         "herramientas, no agentes ni skills."
     )
     return "\n".join(lines)
@@ -81,7 +81,7 @@ def _skills(services) -> str:
     if not skills:
         return (
             "Ahora mismo no hay skills guardadas. Las primitivas del runtime "
-            "(run_python, run_shell, read_file, write_file, list_dir, search_files) "
+            "(run_python, run_argv, read_file, write_file, list_dir, search_files) "
             "no son skills: son herramientas del kernel."
         )
     lines = [f"Tengo {len(skills)} skills guardadas:"]

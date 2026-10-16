@@ -81,7 +81,7 @@ def test_a_channel_that_explodes_still_rejects() -> None:
 def test_high_risk_proposals_are_never_asked() -> None:
     for details in (
         {"network": True, "capabilities": "http"},
-        {"tools": ["run_shell", "read_file"]},
+        {"tools": ["run_argv", "read_file"]},
         {"write_files": True},
     ):
         port, calls = make_port({"action": "accept", "content": {"approve": True}})

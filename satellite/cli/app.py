@@ -259,7 +259,7 @@ def skills_list() -> None:
     if not skills:
         say("(todavía no hay skills creadas)")
         say(
-            "  Ojo: las primitivas del runtime (run_python, run_shell, read_file, "
+            "  Ojo: las primitivas del runtime (run_python, run_argv, read_file, "
             "write_file, list_dir, search_files)"
         )
         say("  NO son skills, por eso no aparecen aquí. Míralas con 'satellite tools list'.")

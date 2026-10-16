@@ -9,7 +9,7 @@ Recuerda: **un agente es un ROL reutilizable, NO una tarea**. Si la necesidad es
 - No incluyas en el prompt del agente referencias a tareas, archivos, personas o proyectos concretos. El agente debe ser reutilizable.
 - No incluyas código ni credenciales.
 - No uses placeholders distintos a: {task}, {context}, {feedback}, {output_schema}, {tools}.
-- No uses ids reservados: orchestrator, agent_creator, skill_curator, run_python, run_shell, read_file, write_file, list_dir, search_files.
+- No uses ids reservados: orchestrator, agent_creator, skill_curator, run_python, run_argv, read_file, write_file, list_dir, search_files.
 - Si la necesidad es una **transformación determinista** (parsear, convertir, calcular, validar, formatear, extraer), NO propongas un agente: propón una **skill** (`skill_suggestion`).
 - Si la necesidad **encaja en un agente existente**, NO crees otro: propón `extend` con las capacidades que faltan.
 - No propongas un agente con "y además": una sola responsabilidad. Si la descripción necesita dos, divídela.

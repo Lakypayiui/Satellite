@@ -14,12 +14,12 @@ def test_tool_descriptions_are_honest_about_the_shell() -> None:
 
     by_id = {tool.id: tool for tool in build_tool_registry().all()}
     run_command = by_id["run_command"].description
-    run_shell = by_id["run_shell"].description
+    run_argv = by_id["run_argv"].description
     run_python = by_id["run_python"].description
 
-    assert run_command != run_shell
+    assert run_command != run_argv
     assert "no interpreta" in run_command
-    assert "NO abre un intérprete de shell" in run_shell
+    assert "NO abre un intérprete de shell" in run_argv
     assert "subproceso" in run_python
 
 
@@ -65,7 +65,7 @@ def test_tools_list_shows_kernel_tools(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0
     for expected in (
         "run_python",
-        "run_shell",
+        "run_argv",
         "read_file",
         "write_file",
         "edit_file",

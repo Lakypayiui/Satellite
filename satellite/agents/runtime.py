@@ -104,7 +104,7 @@ _ACCESS_KIND = {
     "write_file": "escritura",
     "edit_file": "escritura",
     "run_command": "ejecución",
-    "run_shell": "ejecución",
+    "run_argv": "ejecución",
     "run_python": "ejecución",
 }
 

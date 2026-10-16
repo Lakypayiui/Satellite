@@ -59,7 +59,7 @@ _RISKY_KEYS: tuple[str, ...] = (
     "delegate",
 )
 _RISKY_VALUES: tuple[str, ...] = (
-    "run_shell",
+    "run_argv",
     "run_command",
     "run_python",
     "write_file",
