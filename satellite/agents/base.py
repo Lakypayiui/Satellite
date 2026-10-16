@@ -28,6 +28,9 @@ class AgentContext:
     # Puerto de aprobación de la sesión: el runtime lo usa para pedir permiso cuando
     # una tool pide una ruta fuera del proyecto.
     approval: object | None = None
+    # Token de cancelación de la ejecución en curso: el agente lo mira antes de gastar
+    # una llamada al LLM o de lanzar una herramienta.
+    cancel: object | None = None
 
 
 class Agent(ABC):

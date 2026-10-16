@@ -150,6 +150,10 @@ class LLMAgent(Agent):
         started = time.monotonic()
         tool_records: list[ToolRecord] = []
         usage_total = Usage()
+
+        # Si ya venía cancelado, no se gasta ni una llamada al proveedor.
+        if getattr(ctx, "cancel", None) is not None and getattr(ctx.cancel, "cancelled", False):
+            return self._cancelled(ctx, node_id, started)
         system = build_system_prompt(
             self.system_prompt,
             output_schema=self.spec.output_schema,
@@ -176,14 +180,17 @@ class LLMAgent(Agent):
         # Fase 1: rondas LLM↔tool (máx spec.max_turns)
         remaining = self.spec.max_turns
         while True:
-            response = await self.provider.complete(
+            response = await self._complete(
+                ctx,
                 LLMRequest(
                     messages=tuple(messages),
                     tools=tuple(t.schema() for t in self.tools),
                     temperature=0.0,
                     call=call,
-                )
+                ),
             )
+            if response is None:  # cancelaron mientras esperábamos al proveedor
+                return self._cancelled(ctx, node_id, started, usage_total, tuple(tool_records))
             usage_total = _accumulate(usage_total, response.usage)
             if response.tool_calls:
                 messages.append(
@@ -194,6 +201,13 @@ class LLMAgent(Agent):
                     )
                 )
                 for tool_call in response.tool_calls:
+                    # Antes de cada herramienta: si pidieron cancelar, no se lanza.
+                    if getattr(ctx, "cancel", None) is not None and getattr(
+                        ctx.cancel, "cancelled", False
+                    ):
+                        return self._cancelled(
+                            ctx, node_id, started, usage_total, tuple(tool_records)
+                        )
                     record, tool_result = await self._run_tool(tool_call, ctx)
                     tool_records.append(record)
                     messages.append(
@@ -215,14 +229,19 @@ class LLMAgent(Agent):
                     continue
                 else:
                     # sin turnos restantes: sigue a síntesis con lo acumulado
-                    response = await self.provider.complete(
+                    response = await self._complete(
+                        ctx,
                         LLMRequest(
                             messages=tuple(messages),
                             tools=(),
                             temperature=0.0,
                             call=call,
-                        )
+                        ),
                     )
+                    if response is None:
+                        return self._cancelled(
+                            ctx, node_id, started, usage_total, tuple(tool_records)
+                        )
                     usage_total = _accumulate(usage_total, response.usage)
             # Sin tool_calls → intentar síntesis
             break
@@ -235,9 +254,12 @@ class LLMAgent(Agent):
                 messages.append(
                     Message(role=Role.USER, content=f"Respuesta no cumple el schema: {parsed}. Devuelve JSON válido.")
                 )
-                retry = await self.provider.complete(
-                    LLMRequest(messages=tuple(messages), tools=(), temperature=0.0, call=call)
+                retry = await self._complete(
+                    ctx,
+                    LLMRequest(messages=tuple(messages), tools=(), temperature=0.0, call=call),
                 )
+                if retry is None:
+                    return self._cancelled(ctx, node_id, started, usage_total, tuple(tool_records))
                 usage_total = _accumulate(usage_total, retry.usage)
                 candidate = extract_json_object(retry.content or "")
                 ok, parsed = self._validate_schema(candidate)
@@ -268,6 +290,47 @@ class LLMAgent(Agent):
             error=error,
         )
         self._emit(ctx, EventType.NODE_FINISHED, {"status": status.value, "summary": result.summary})
+        return result
+
+    async def _complete(self, ctx: AgentContext, request: LLMRequest):
+        """Pide respuesta al proveedor; ``None`` si cancelaron mientras esperábamos.
+
+        La llamada en vuelo se aborta al instante en vez de esperarla entera, que es lo
+        que hace que cancelar sirva de algo con un proveedor lento.
+        """
+        from satellite.orchestration.cancel import race_cancel
+
+        valor, cancelado = await race_cancel(getattr(ctx, "cancel", None), self.provider.complete(request))
+        return None if cancelado else valor
+
+    def _cancelled(
+        self,
+        ctx: AgentContext,
+        node_id: str,
+        started: float,
+        usage: Usage | None = None,
+        tools: tuple = (),
+    ) -> AgentResult:
+        """Cierra el nodo como cancelado: ni éxito ni fallo, y diciendo dónde se paró."""
+        reason = str(getattr(getattr(ctx, "cancel", None), "reason", "") or "cancelado")
+        result = AgentResult(
+            node_id=node_id,
+            spec_id=self.spec.id,
+            status=AgentStatus.CANCELLED,
+            summary=f"Nodo cancelado: {reason}",
+            output={"cancelled": True, "reason": reason},
+            tool_calls=tools,
+            metrics=ExecutionMetrics(
+                tokens_in=(usage.prompt_tokens if usage else 0),
+                tokens_out=(usage.completion_tokens if usage else 0),
+                duration_ms=int((time.monotonic() - started) * 1000),
+            ),
+        )
+        self._emit(
+            ctx,
+            EventType.NODE_FINISHED,
+            {"status": result.status.value, "summary": result.summary},
+        )
         return result
 
     async def _ask_for_path(self, call: ToolCall, tool_ctx: ToolContext, result):

@@ -153,9 +153,24 @@ class DefaultGraphRunner(GraphRunner):
                 # El puerto de la sesión: sin esto, una tool que pide una ruta de
                 # fuera del proyecto no tenía a quién preguntar.
                 approval=getattr(services, "approval", None),
+                # Y el token, para que el agente pueda parar entre llamadas.
+                cancel=getattr(services, "cancel", None),
             )
             result = await agent.execute(entrada["task"], agent_ctx)
             results[node_id] = result
+
+            # Un nodo cancelado no es una salida del grafo: la tarea se para aquí, y como
+            # cancelada (si no, las aristas no encontrarían salida y se reportaría fallo).
+            if result.status is AgentStatus.CANCELLED:
+                return self._cancelled(
+                    task,
+                    sink,
+                    node_id,
+                    getattr(services, "cancel", None),
+                    results,
+                    attempts,
+                    started,
+                )
 
             # Observabilidad: registrar la ejecución del nodo
             if self.logger is not None:
@@ -249,12 +264,17 @@ class DefaultGraphRunner(GraphRunner):
         for r in results.values():
             all_findings.extend(r.findings)
 
-        summary = last_result.summary if last_result and last_result.summary else "Tarea completada"
+        cancelados = [r for r in results.values() if r.status is AgentStatus.CANCELLED]
+        summary = (
+            cancelados[-1].summary
+            if cancelados
+            else (last_result.summary if last_result and last_result.summary else "Tarea completada")
+        )
         output = last_result.output if last_result else None
 
         result = TaskResult(
             task_id=task.task_id,
-            status=TaskStatus.OK,
+            status=TaskStatus.CANCELLED if cancelados else TaskStatus.OK,
             summary=summary,
             output=output,
             findings=tuple(all_findings),

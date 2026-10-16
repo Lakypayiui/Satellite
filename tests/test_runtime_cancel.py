@@ -8,14 +8,18 @@ from pathlib import Path
 import pytest
 
 from satellite.agents.base import Agent, AgentContext, AgentFactory
+from satellite.agents.runtime import LLMAgent
 from satellite.core.graph import Edge, ExecutionGraph, Node
 from satellite.core.result import AgentResult, AgentStatus
+from satellite.core.spec import AgentSpec
 from satellite.core.task import Task, TaskStatus
 from satellite.events.base import EventSink
 from satellite.orchestration.base import RuntimeServices
-from satellite.orchestration.cancel import CancelToken, CancelledTask
+from satellite.orchestration.cancel import CancelToken, CancelledTask, race_cancel
 from satellite.orchestration.orchestrator import DefaultOrchestrator
 from satellite.orchestration.runner import DefaultGraphRunner
+from satellite.security.policy import DefaultSecurityPolicy
+from satellite.tools.registry import DefaultToolRegistry
 
 
 def run(coro):
@@ -209,3 +213,131 @@ def test_the_mcp_handler_says_when_there_is_nothing_to_cancel() -> None:
 
     assert respuesta["isError"] is False
     assert "no hay ejecución que cancelar" in respuesta["text"]
+
+
+# --- la carrera con una llamada en vuelo (tanda 2) ---
+
+
+class AgenteQueDevuelve(Agent):
+    """Agente que devuelve el estado que se le diga."""
+
+    def __init__(self, status: AgentStatus) -> None:
+        self.status = status
+        self.nodos: list[str] = []
+
+    async def execute(self, task: dict, ctx: AgentContext) -> AgentResult:
+        self.nodos.append(ctx.node_id)
+        return AgentResult(node_id=ctx.node_id, spec_id="eco", status=self.status, summary="hecho")
+
+
+def test_a_node_that_ends_cancelled_makes_the_task_cancelled(tmp_path: Path) -> None:
+    """El final del runner no puede decir «ok» si un nodo acabó cancelado: sería mentir."""
+    agente = AgenteQueDevuelve(AgentStatus.CANCELLED)
+    factory = Factory(agente)
+
+    resultado = run(
+        DefaultGraphRunner(factory).run(
+            grafo(), Task(goal="x", project_root=tmp_path), RuntimeServices(factory=factory)
+        )
+    )
+
+    assert resultado.status is TaskStatus.CANCELLED
+    assert "cancelado" in resultado.summary.lower()
+
+
+def test_race_cancel_lets_the_value_through_when_nobody_cancels() -> None:
+    async def lento():
+        await asyncio.sleep(0.01)
+        return "listo"
+
+    valor, cancelado = run(race_cancel(CancelToken(), lento()))
+
+    assert (valor, cancelado) == ("listo", False)
+
+
+def test_race_cancel_aborts_the_call_in_flight() -> None:
+    """Si gana la cancelación, la llamada se abandona: no se espera a que acabe."""
+    completadas: list[str] = []
+
+    async def lenta():
+        await asyncio.sleep(30)
+        completadas.append("no debería llegar")
+        return "tarde"
+
+    async def escenario():
+        token = CancelToken()
+        tarea = asyncio.create_task(race_cancel(token, lenta()))
+        await asyncio.sleep(0.05)
+        token.request("cortado")
+        valor, cancelado = await asyncio.wait_for(tarea, timeout=2)
+        return valor, cancelado, completadas
+
+    valor, cancelado, completadas = run(escenario())
+
+    assert valor is None and cancelado is True
+    assert completadas == []  # se abortó, no se esperó a los 30 s
+
+
+class ProveedorLento:
+    """Proveedor que no contesta: sólo lo corta la cancelación."""
+
+    def __init__(self) -> None:
+        self.empezadas = 0
+
+    async def complete(self, request):
+        self.empezadas += 1
+        await asyncio.Event().wait()  # nunca contesta
+        raise AssertionError("no debería contestar")
+
+
+def make_agente(tmp_path: Path, proveedor) -> LLMAgent:
+    policy = DefaultSecurityPolicy(allowed_tools={"request_context"})
+    return LLMAgent(
+        spec=AgentSpec(id="eco", name="Eco", capabilities=("eco",), prompt_ref="eco"),
+        system_prompt="Eres un escritor.\n{tools}\n{output_schema}",
+        user_template="Tarea: {task}\nContexto: {context}\nFeedback: {feedback}",
+        tools=(),
+        provider=proveedor,
+        tool_registry=DefaultToolRegistry(policy=policy),
+        policy=policy,
+        project_root=tmp_path,
+    )
+
+
+def test_cancelling_during_a_llm_call_stops_the_node(tmp_path: Path) -> None:
+    proveedor = ProveedorLento()
+    agente = make_agente(tmp_path, proveedor)
+    token = CancelToken()
+
+    async def escenario():
+        ctx = AgentContext(task_id="t1", node_id="n1", cancel=token)
+        tarea = asyncio.create_task(agente.execute({"node_id": "n1", "goal": "x"}, ctx))
+        for _ in range(100):
+            if proveedor.empezadas:
+                break
+            await asyncio.sleep(0.01)
+        token.request("cortado en la prueba")
+        return await asyncio.wait_for(tarea, timeout=5)
+
+    resultado = run(escenario())
+
+    assert resultado.status is AgentStatus.CANCELLED
+    assert resultado.output["cancelled"] is True
+    assert "cortado en la prueba" in resultado.summary
+
+
+def test_cancelled_before_the_node_costs_nothing(tmp_path: Path) -> None:
+    proveedor = ProveedorLento()
+    agente = make_agente(tmp_path, proveedor)
+    token = CancelToken()
+    token.request("ya venía cancelado")
+
+    resultado = run(
+        agente.execute(
+            {"node_id": "n1", "goal": "x"},
+            AgentContext(task_id="t1", node_id="n1", cancel=token),
+        )
+    )
+
+    assert resultado.status is AgentStatus.CANCELLED
+    assert proveedor.empezadas == 0  # no se gastó ni una llamada

@@ -9,6 +9,7 @@ existiendo, pero como último recurso y diciendo que fue ese el camino.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 
 class CancelledTask(Exception):
@@ -39,6 +40,10 @@ class CancelToken:
             return
         self._cancelled = True
         self._reason = reason or "cancelado"
+        # Quien esté esperando la cancelación (una llamada al proveedor en vuelo) se entera
+        # aquí: sin esto, la carrera se quedaría esperando para siempre.
+        if self._event is not None:
+            self._event.set()
 
     def reset(self) -> None:
         """Deja el token listo para la siguiente ejecución."""
@@ -59,3 +64,32 @@ class CancelToken:
         """Levanta ``CancelledTask`` si ya se pidió la cancelación."""
         if self._cancelled:
             raise CancelledTask(self._reason)
+
+
+async def race_cancel(token, awaitable):
+    """Espera ``awaitable``, pero lo abandona si piden cancelar antes.
+
+    Devuelve ``(valor, cancelado)``. Si gana la cancelación, la llamada en vuelo se
+    **aborta** en vez de esperarse a que acabe, que es lo que hace útil poder cancelar:
+    si no, cancelar una llamada al proveedor de 40 s no ahorraría nada.
+    """
+    if token is None:
+        return await awaitable, False
+    llamada = asyncio.ensure_future(awaitable)
+    aviso = asyncio.ensure_future(token.event().wait())
+    try:
+        listas, _ = await asyncio.wait({llamada, aviso}, return_when=asyncio.FIRST_COMPLETED)
+    except asyncio.CancelledError:
+        llamada.cancel()
+        aviso.cancel()
+        raise
+    if llamada in listas:
+        aviso.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await aviso
+        return llamada.result(), False  # un fallo real del proveedor sigue siendo un fallo
+    aviso.cancel()
+    llamada.cancel()
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await llamada
+    return None, True
