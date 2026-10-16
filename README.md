@@ -191,6 +191,10 @@ satellite/
   `api_key_set` and never printed.
 - Other useful keys: `llm.compaction` (`window`, `compact_at`, `keep`),
   `llm.max_tokens.<role>`, `llm.pricing` (real cost reporting).
+- `terminal.allowed_commands`: binaries answered **without asking**, as a list of names (for
+  example `["git", "python"]`). Empty by default, and there is no way to allow everything:
+  anything not listed is asked (once / for the session / reject). A value that cannot be read is
+  ignored, and that fails closed — the command simply gets asked.
 
 ## Desktop app (development)
 
