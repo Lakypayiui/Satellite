@@ -67,7 +67,12 @@ class DockerSandbox(SandboxRunner):
                 exit_code=-1,
                 error="docker no disponible: instala/habilita Docker (N1) o usa N0",
             )
-        docker_argv = self.build_argv(argv, spec)
+        # Nombre propio para poder **parar el contenedor**, no sólo matar al cliente de
+        # docker: matar el cliente deja el contenedor corriendo, que es el fallo clásico.
+        from uuid import uuid4
+
+        nombre = f"satellite-sandbox-{uuid4().hex[:8]}"
+        docker_argv = self.named_argv(self.build_argv(argv, spec), nombre)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *docker_argv,
@@ -77,11 +82,15 @@ class DockerSandbox(SandboxRunner):
                 stderr=asyncio.subprocess.PIPE,
             )
             payload = spec.stdin.encode("utf-8") if spec.stdin is not None else None
+            from satellite.orchestration.cancel import race_cancel
+
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(input=payload), timeout=spec.timeout_s
+                salida, cancelado = await race_cancel(
+                    spec.cancel,
+                    asyncio.wait_for(proc.communicate(input=payload), timeout=spec.timeout_s),
                 )
             except asyncio.TimeoutError:
+                await self._stop(nombre)
                 proc.kill()
                 await proc.wait()
                 return SandboxResult(
@@ -89,6 +98,18 @@ class DockerSandbox(SandboxRunner):
                     timed_out=True,
                     error=f"timeout de {spec.timeout_s}s alcanzado",
                 )
+            if cancelado:
+                parado = await self._stop(nombre)
+                proc.kill()
+                await proc.wait()
+                motivo = str(getattr(spec.cancel, "reason", "") or "cancelado por el usuario")
+                return SandboxResult(
+                    exit_code=-1,
+                    cancelled=True,
+                    error=f"cancelado: {motivo}"
+                    + ("" if parado else " (no pude confirmar que el contenedor parara)"),
+                )
+            stdout, stderr = salida
         except (OSError, ValueError) as exc:
             return SandboxResult(exit_code=-1, error=f"docker falló: {exc}")
 
@@ -97,3 +118,29 @@ class DockerSandbox(SandboxRunner):
             stdout=truncate(stdout.decode(errors="replace"), self.output_limit),
             stderr=truncate(stderr.decode(errors="replace"), self.output_limit),
         )
+
+    @staticmethod
+    def named_argv(argv: list[str], nombre: str) -> list[str]:
+        """Añade ``--name`` a la invocación de ``docker run``, antes de la imagen."""
+        salida = list(argv)
+        salida.insert(2, "--name")
+        salida.insert(3, nombre)
+        return salida
+
+    async def _stop(self, nombre: str) -> bool:
+        """Para el contenedor por su nombre. ``False`` si no se pudo confirmar."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "docker",
+                "stop",
+                "-t",
+                "1",
+                nombre,
+                env=sanitize_env(),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except (OSError, ValueError, asyncio.TimeoutError):
+            return False
+        return proc.returncode == 0

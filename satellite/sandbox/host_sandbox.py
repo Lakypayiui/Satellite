@@ -36,5 +36,6 @@ class HostSandbox(SandboxRunner):
             timeout_s=spec.timeout_s,
             env=spec.env,
             extra_mounts=spec.extra_mounts,
+            cancel=spec.cancel,
         )
         return await self._delegate.run(argv, wide)

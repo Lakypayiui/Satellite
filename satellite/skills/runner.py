@@ -69,12 +69,15 @@ class SkillRunner:
         timeout_s: int | None = None,
         allow_network: bool = False,
         task_id: str = "",
+        cancel=None,
     ) -> SkillRunResult:
         """Ejecuta la skill y devuelve su salida (con stats actualizadas).
 
         Emite ``SKILL_EXECUTED``/``SKILL_FAILED`` **sólo cuando la skill se ejecuta de
         verdad** (un acierto de caché también es un uso real). Estar en el catálogo, o
         haber sido considerada, no emite nada: el panel no puede confundirlos.
+
+        ``cancel`` va al sandbox, que es quien sabe terminar el script que arrancó.
         """
         manifest = self.registry.get(skill_id)
         skill_dir = self.registry.root / manifest.id
@@ -107,11 +110,24 @@ class SkillRunner:
             timeout_s=timeout_s or self.default_timeout_s,
             env={},
             stdin=json.dumps(payload or {}),
+            cancel=cancel,
         )
 
         started = time.monotonic()
         raw = await self.sandbox.run(argv, spec)
         duration_ms = int((time.monotonic() - started) * 1000)
+
+        if raw.cancelled:
+            # Cancelar no es fallar: se cuenta el uso y se dice, pero no se emite
+            # SKILL_FAILED (sería pintar una cancelación como un error de la skill).
+            self.registry.record_use(skill_id, False, duration_ms)
+            return SkillRunResult(
+                skill_id=skill_id,
+                success=False,
+                error=raw.error or "cancelado",
+                exit_code=raw.exit_code,
+                duration_ms=duration_ms,
+            )
 
         if raw.timed_out or raw.error is not None:
             self.registry.record_use(skill_id, False, duration_ms)

@@ -577,3 +577,125 @@ def test_the_cli_handler_without_cancel_support_does_not_swallow_ctrl_c() -> Non
 
     with pytest.raises(KeyboardInterrupt):
         handler(None, None)
+
+
+# --- el sandbox y las skills ---
+
+
+class SinkDeSkills(EventSink):
+    """Sink que guarda los eventos emitidos."""
+
+    def __init__(self) -> None:
+        self.events = []
+
+    def emit(self, event) -> None:
+        self.events.append(event)
+
+    def subscribe(self, handler) -> None:
+        return None
+
+
+class SandboxQueCancela:
+    """Sandbox que dice que le cancelaron, sin lanzar nada."""
+
+    level = None  # se rellena abajo
+
+    async def run(self, argv, spec):
+        raise AssertionError("no debería ejecutar nada")
+
+
+def test_the_subprocess_sandbox_terminates_the_script(tmp_path: Path) -> None:
+    """El sandbox es quien sabe terminar lo que arrancó: N0 corta el script en marcha."""
+    from satellite.sandbox.base import SandboxSpec
+    from satellite.sandbox.subprocess_sandbox import SubprocessSandbox
+
+    token = CancelToken()
+
+    async def escenario():
+        spec = SandboxSpec(project_root=tmp_path, timeout_s=60, cancel=token)
+        tarea = asyncio.create_task(
+            SubprocessSandbox().run([sys.executable, "-c", "import time; time.sleep(30)"], spec)
+        )
+        await asyncio.sleep(0.4)
+        empezado = time.monotonic()
+        token.request("cortado en el sandbox")
+        resultado = await asyncio.wait_for(tarea, timeout=10)
+        return resultado, time.monotonic() - empezado
+
+    resultado, tardanza = run(escenario())
+
+    assert resultado.cancelled is True
+    assert resultado.success is False
+    assert "cortado en el sandbox" in (resultado.error or "")
+    assert tardanza < 5  # no esperó a los 30 s
+
+
+def test_the_host_sandbox_passes_the_token_along(tmp_path: Path) -> None:
+    """N2 delega en N0: si el token no viaja en el spec, cancelar ahí no cortaría nada."""
+    from satellite.sandbox.base import SandboxSpec
+    from satellite.sandbox.host_sandbox import HostSandbox
+
+    token = CancelToken()
+
+    async def escenario():
+        spec = SandboxSpec(project_root=tmp_path, timeout_s=60, cancel=token)
+        tarea = asyncio.create_task(
+            HostSandbox().run([sys.executable, "-c", "import time; time.sleep(30)"], spec)
+        )
+        await asyncio.sleep(0.4)
+        token.request("cortado en N2")
+        return await asyncio.wait_for(tarea, timeout=10)
+
+    resultado = run(escenario())
+
+    assert resultado.cancelled is True
+    assert "cortado en N2" in (resultado.error or "")
+
+
+def test_the_docker_argv_can_be_named_to_stop_the_container(tmp_path: Path) -> None:
+    """Para parar el contenedor hay que nombrarlo: matar al cliente lo dejaría vivo."""
+    from satellite.sandbox.base import SandboxSpec
+    from satellite.sandbox.docker_sandbox import DockerSandbox
+
+    sandbox = DockerSandbox()
+    base = sandbox.build_argv(["python", "-c", "1"], SandboxSpec(project_root=tmp_path))
+
+    nombrado = sandbox.named_argv(base, "satellite-sandbox-abcd1234")
+
+    assert nombrado[0] == "docker" and nombrado[1] == "run"
+    assert nombrado[nombrado.index("--name") + 1] == "satellite-sandbox-abcd1234"
+    assert nombrado.index("--name") < nombrado.index(sandbox.image)  # antes de la imagen
+    assert "--name" not in base  # el argv original no se toca
+
+
+def test_a_cancelled_skill_is_not_reported_as_a_failure(tmp_path: Path) -> None:
+    """Cancelar no es fallar, ni es ejecutar: no se emite ni SKILL_FAILED ni SKILL_EXECUTED."""
+    from satellite.core.events import EventType
+    from satellite.sandbox.base import SandboxLevel, SandboxResult
+    from satellite.skills.models import SkillManifest
+    from satellite.skills.registry import SkillRegistry
+    from satellite.skills.runner import SkillRunner
+
+    class Sandbox(SandboxQueCancela):
+        level = SandboxLevel.N0
+
+        async def run(self, argv, spec):
+            return SandboxResult(exit_code=-1, cancelled=True, error="cancelado: porque sí")
+
+    bus = SinkDeSkills()
+    registry = SkillRegistry(tmp_path / "skills", sink=bus)
+    registry.register(
+        SkillManifest(id="echo_skill", description="Hace eco", entrypoint="main.py"),
+        "print('{}')",
+    )
+    runner = SkillRunner(registry, Sandbox())
+    token = CancelToken()
+    token.request("porque sí")
+
+    resultado = run(runner.run("echo_skill", {}, project_root=tmp_path, cancel=token))
+
+    assert resultado.success is False
+    assert "cancelado" in (resultado.error or "")
+    emitidos = [evento.event_type for evento in bus.events]
+    assert EventType.SKILL_FAILED not in emitidos
+    assert EventType.SKILL_EXECUTED not in emitidos

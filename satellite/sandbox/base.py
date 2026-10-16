@@ -49,6 +49,9 @@ class SandboxSpec:
     env: dict = field(default_factory=dict)
     extra_mounts: tuple[Path, ...] = ()
     stdin: str | None = None
+    # Token de cancelación de la ejecución: el sandbox es quien sabe cómo terminar lo que
+    # él mismo arrancó, así que la petición viaja con el resto de los parámetros.
+    cancel: object | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,7 @@ class SandboxResult:
     stdout: str = ""
     stderr: str = ""
     timed_out: bool = False
+    cancelled: bool = False
     error: str | None = None
 
     @property

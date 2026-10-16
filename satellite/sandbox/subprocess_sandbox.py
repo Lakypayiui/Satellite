@@ -44,9 +44,12 @@ class SubprocessSandbox(SandboxRunner):
                 stderr=asyncio.subprocess.PIPE,
             )
             payload = spec.stdin.encode("utf-8") if spec.stdin is not None else None
+            from satellite.orchestration.cancel import race_cancel
+
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(input=payload), timeout=spec.timeout_s
+                salida, cancelado = await race_cancel(
+                    spec.cancel,
+                    asyncio.wait_for(proc.communicate(input=payload), timeout=spec.timeout_s),
                 )
             except asyncio.TimeoutError:
                 proc.kill()
@@ -56,6 +59,16 @@ class SubprocessSandbox(SandboxRunner):
                     timed_out=True,
                     error=f"timeout de {spec.timeout_s}s alcanzado",
                 )
+            if cancelado:
+                proc.kill()
+                await proc.wait()
+                motivo = str(getattr(spec.cancel, "reason", "") or "cancelado por el usuario")
+                return SandboxResult(
+                    exit_code=-1,
+                    cancelled=True,
+                    error=f"cancelado: {motivo}",
+                )
+            stdout, stderr = salida
         except (OSError, ValueError) as exc:
             return SandboxResult(exit_code=-1, error=f"no se pudo ejecutar: {exc}")
 

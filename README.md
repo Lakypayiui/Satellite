@@ -89,6 +89,23 @@ says which skills are memoizable and why not.
 | TUI | `python -m satellite.cli tui` — chat, `/plan`, `/provider`, `/compact`, `/stats`… |
 | MCP | `python -m satellite.mcp` — exposes the same runtime to MCP clients |
 
+### Cancelling
+
+A running task can be cancelled, and it is a **cooperative** cancellation: the runtime stops
+between nodes, and inside the agent loop before each provider call and before each tool. The
+provider call in flight is aborted and a running command is terminated, so cancelling a slow
+step does not mean waiting for it to finish. What was already done **stays**: the change ledger
+keeps the previous version of every file, so a cancelled task can still be undone from the TUI
+(`/undo-task`) or from the desktop's Changes panel. Cancelling is not failing — the task ends as
+`cancelled`, with what was done counted, and the reason in the summary.
+
+| Surface | How |
+|---|---|
+| CLI | `Ctrl+C` asks for it; a second `Ctrl+C` forces the exit |
+| TUI | `/cancel [motivo]` (also in the `Ctrl+K` palette) |
+| Desktop | the `cancelar` button by the composer: it asks first and only cuts the task if the runtime does not give in, and the answer says which of the two happened |
+| MCP | `satellite_cancel` |
+
 ### Approvals over MCP
 
 MCP never approves anything by itself. Creating an agent or a skill is asked to the
