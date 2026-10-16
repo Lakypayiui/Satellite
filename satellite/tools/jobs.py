@@ -191,12 +191,14 @@ class JobRegistry:
         proc = self._procs.get(job_id)
         if proc is None:
             return None
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=STOP_TIMEOUT_S)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+        if proc.poll() is not None:
+            # ya había terminado solo: no se «para» nada, y no se dice que sí
+            return self.status(job_id)
+        proc.terminate()
+        try:
+            proc.wait(timeout=STOP_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            proc.kill()
         info = replace(self.status(job_id) or JobInfo(id=job_id, command=""), status="stopped")
         self._write(info)
         return info

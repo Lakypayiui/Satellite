@@ -188,3 +188,52 @@ def test_the_job_tool_stops_a_job(tmp_path: Path) -> None:
 
     assert resultado.success is True
     assert resultado.output["status"] == "stopped"
+
+
+def test_stopping_a_finished_job_does_not_call_it_stopped(tmp_path: Path) -> None:
+    registry = registry_for(tmp_path)
+    info = _start(tmp_path, _echo("ya está"))
+    run(registry.wait(info.id, 30))
+
+    resultado = registry.stop(info.id)
+
+    assert resultado is not None
+    assert resultado.status == "done"  # no se «para» algo que ya había acabado
+
+
+# --- la TUI ---
+
+
+def test_the_tui_lists_shows_waits_and_stops_jobs(tmp_path, monkeypatch) -> None:
+    async def scenario():
+        import json as _json
+
+        from satellite.tui.app import SatelliteTUI
+        from satellite.tui.session import Session
+
+        home = tmp_path / "home"
+        monkeypatch.setenv("SATELLITE_HOME", str(home))
+        monkeypatch.delenv("SATELLITE_SKILLS_DIR", raising=False)
+        cfg = tmp_path / ".satellite" / "config"
+        cfg.mkdir(parents=True, exist_ok=True)
+        (cfg / "config.json").write_text(
+            _json.dumps({"name": "fake", "model": "m"}), encoding="utf-8"
+        )
+        dormido = _start(tmp_path, _dormir(30))
+        app = SatelliteTUI(Session(tmp_path, home=home))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._cmd_jobs("")
+            app._cmd_jobs("output " + dormido.id)
+            app._cmd_jobs("stop " + dormido.id)
+            app._cmd_jobs("wait " + dormido.id + " 5")
+            await pilot.pause()
+            app._cmd_jobs("no-existe")
+            await pilot.pause()
+            salida = "\n".join(app.transcript)
+            assert dormido.id in salida
+            assert f"trabajo {dormido.id} parado" in salida
+            assert "terminó: stopped" in salida
+            assert "uso: /jobs" in salida
+
+    asyncio.run(scenario())

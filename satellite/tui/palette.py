@@ -32,6 +32,7 @@ COMMANDS: tuple[Command, ...] = (
     Command("undo-task", "/undo-task [task_id]", "Restaura los cambios de esa tarea"),
     Command("sessions", "/sessions", "Lista las conversaciones guardadas"),
     Command("session", "/session <new|use|name>", "Crea, reanuda o renombra una conversación"),
+    Command("jobs", "/jobs [list|output|wait|stop]", "Comandos largos en segundo plano"),
     Command("tasks", "/tasks", "Lista las tareas persistidas"),
     Command("status", "/status <task_id>", "Eventos de una tarea"),
     Command("inspect", "/inspect <task_id>", "Grafo serializado de una tarea"),

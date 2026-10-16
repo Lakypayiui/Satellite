@@ -698,6 +698,83 @@ class SatelliteTUI(App):
             plain="uso: /session <new [nombre] | use <id|nombre> | name <nombre>>",
         )
 
+    def _cmd_jobs(self, arg: str) -> None:
+        """``/jobs`` lista; ``output``, ``wait`` y ``stop`` trabajan con un id."""
+        from satellite.tools.jobs import registry_for
+
+        partes = arg.strip().split(" ", 1)
+        accion = partes[0].lower() if partes and partes[0] else ""
+        resto = partes[1].strip() if len(partes) > 1 else ""
+        registry = registry_for(self.session.project_root)
+        if accion in ("", "list"):
+            infos = registry.list()
+            if not infos:
+                texto = "(no hay trabajos en segundo plano)"
+                self._log(Text(texto, style="dim"), plain=texto)
+                return
+            texto = "\n".join(
+                f" {info.id}  {info.status:12}  {info.command}" for info in infos
+            )
+            self._log(Text(texto), plain=texto)
+            return
+        if accion == "output":
+            if not resto:
+                self._log(Text("uso: /jobs output <id>", style="yellow"), plain="uso: /jobs output <id>")
+                return
+            info = registry.status(resto)
+            if info is None:
+                texto = f"no existe el trabajo '{resto}'"
+                self._log(Text(texto, style="yellow"), plain=texto)
+                return
+            self._log(
+                Text(f"trabajo {resto} ({info.status}):\n{registry.output(resto)}"),
+                plain=registry.output(resto),
+            )
+            return
+        if accion == "wait":
+            if not resto:
+                texto = "uso: /jobs wait <id> [segundos]"
+                self._log(Text(texto, style="yellow"), plain=texto)
+                return
+            trozos = resto.split()
+            try:
+                timeout_s = float(trozos[1]) if len(trozos) > 1 else 30.0
+            except ValueError:
+                timeout_s = 30.0
+            self._spawn(self._do_job_wait(trozos[0], timeout_s), name="jobs")
+            return
+        if accion == "stop":
+            if not resto:
+                self._log(Text("uso: /jobs stop <id>", style="yellow"), plain="uso: /jobs stop <id>")
+                return
+            info = registry.stop(resto)
+            if info is None:
+                texto = f"no puedo parar '{resto}': lo lanzó otro proceso"
+            elif info.status == "stopped":
+                texto = f"trabajo {info.id} parado"
+            else:
+                texto = f"trabajo {info.id} ya había terminado ({info.status})"
+            self._log(Text(texto, style="green"), plain=texto)
+            return
+        texto = "uso: /jobs [list | output <id> | wait <id> [s] | stop <id>]"
+        self._log(Text(texto, style="yellow"), plain=texto)
+
+    async def _do_job_wait(self, job_id: str, timeout_s: float) -> None:
+        """Espera a que termine un trabajo sin bloquear la TUI."""
+        from satellite.tools.jobs import registry_for
+
+        registry = registry_for(self.session.project_root)
+        info, estado = await registry.wait(job_id, timeout_s)
+        if info is None:
+            texto = f"no existe el trabajo '{job_id}'"
+        elif estado == "ajeno":
+            texto = f"no puedo esperar '{job_id}': lo lanzó otro proceso"
+        elif estado == "timeout":
+            texto = f"trabajo {job_id} sigue en curso tras {timeout_s:.0f}s"
+        else:
+            texto = f"trabajo {job_id} terminó: {info.status}"
+        self._log(Text(texto, style="green"), plain=texto)
+
     def _cmd_create(self, arg: str) -> None:
         if not arg.strip():
             self._log(Text("uso: /create <necesidad de capacidad>", style="yellow"))
