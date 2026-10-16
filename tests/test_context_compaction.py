@@ -373,9 +373,11 @@ def test_chat_uses_the_window_declared_by_the_provider(tmp_path: Path, monkeypat
 
     def fake_discover(**kwargs):
         calls.append(kwargs)
-        return 65_536
+        return 65_536, True
 
-    monkeypatch.setattr("satellite.context.compaction.discover_window", fake_discover)
+    monkeypatch.setattr(
+        "satellite.context.compaction.discover_window_result", fake_discover
+    )
     session = ChatSession(tmp_path, FakeOrchestrator())
     usage = session.context_usage("hola")
     assert usage.window_tokens == 65_536
@@ -385,7 +387,7 @@ def test_chat_uses_the_window_declared_by_the_provider(tmp_path: Path, monkeypat
 
     # segunda sesión: tira de la cache en disco, sin consultar la red
     monkeypatch.setattr(
-        "satellite.context.compaction.discover_window",
+        "satellite.context.compaction.discover_window_result",
         lambda **kwargs: pytest.fail("no debe volver a consultar la red"),
     )
     other = ChatSession(tmp_path, FakeOrchestrator())

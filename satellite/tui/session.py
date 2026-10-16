@@ -135,6 +135,12 @@ class Session:
             api_key_env=api_key_env,
         )
         report = provider_config.activate(self.project_root, saved.id, previous_id=previous)
+        # La ventana del modelo recién activado puede ser otra: se olvida la entrada para
+        # que se vuelva a detectar en lugar de heredar un divisor obsoleto (que fue lo que
+        # dejó la barra en 40% con el modelo viejo).
+        from satellite.context.compaction import forget_window
+
+        forget_window(self.project_root, str(model))
         self._runtime = None
         self._chat = None
         return saved, report
@@ -309,17 +315,17 @@ class Session:
 
     def context_usage(self):
         """Uso de contexto actual (real de la última llamada + estimado)."""
-        from satellite.context.compaction import measure
+        from satellite.context.compaction import project_usage
 
         if self._chat is not None:
             return self._chat.context_usage()
-        model, base_url = self.window_source()
-        return measure(
+        # Sin conversación todavía (al arrancar) hay que usar el MISMO camino que el chat:
+        # así se lee la ventana ya descubierta y recordada, en vez de caer en la tabla de
+        # modelos — que es lo que hacía que la barra dijera 40% en lugar de 2%.
+        return project_usage(
+            self.project_root,
             turns=(),
-            model=model,
-            project_root=self.project_root,
             config=self.settings().compaction,
-            base_url=base_url,
         )
 
     async def compact_context(self, *, keep: int | None = None):

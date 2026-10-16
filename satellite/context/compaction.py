@@ -176,6 +176,30 @@ def resolve_window(
 # ---------------------------------------------------------------- descubrimiento
 
 
+def discover_window_result(
+    *,
+    base_url: str,
+    model: str = "",
+    family: str = "openai",
+    api_key: str = "",
+    timeout: float = 6.0,
+) -> tuple[int | None, bool]:
+    """``(ventana, respondió el proveedor)``. Nunca lanza.
+
+    Distinguir «respondió y no la publica» de «no pude preguntar» es la clave para no
+    congelar el divisor: lo primero se recuerda como 0 (no se repite la consulta), lo
+    segundo **no se guarda** y se reintenta en la siguiente sesión.
+    """
+    from satellite.config.models import fetch_models
+
+    if not base_url:
+        return None, False
+    result = fetch_models(base_url, family, api_key or None, timeout=timeout)
+    if not result.ok:
+        return None, False
+    return result.context_for(model), True
+
+
 def discover_window(
     *,
     base_url: str,
@@ -190,14 +214,14 @@ def discover_window(
     longitud de contexto de la metadata del modelo (los proveedores la publican
     con nombres distintos: ``context_length``, ``max_model_len``, ``n_ctx``…).
     """
-    from satellite.config.models import fetch_models
-
-    if not base_url:
-        return None
-    result = fetch_models(base_url, family, api_key or None, timeout=timeout)
-    if not result.ok:
-        return None
-    return result.context_for(model)
+    window, _answered = discover_window_result(
+        base_url=base_url,
+        model=model,
+        family=family,
+        api_key=api_key,
+        timeout=timeout,
+    )
+    return window
 
 
 def window_cache_path(project_root) -> Path:
@@ -256,6 +280,43 @@ def window_config(project_root) -> CompactionConfig:
     return load_settings(Path(project_root) / CONFIG_PATH).compaction
 
 
+def forget_window(project_root, model: str) -> None:
+    """Olvida la ventana guardada de un modelo, para volver a detectarla.
+
+    Se usa al cambiar de proveedor o modelo: si no, se hereda el divisor anterior.
+    """
+    path = window_cache_path(project_root)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict) or model not in data:
+        return
+    data.pop(model, None)
+    try:
+        import os
+
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        return
+
+
+# Un proveedor que no responde no debe provocar una consulta de red en cada refresco de
+# la barra: se intenta una vez por sesión (proceso) y modelo.
+_ASKED: set[tuple[str, str]] = set()
+
+
+def _already_asked(model: str, base_url: str) -> bool:
+    """True si ya se intentó en esta sesión; recuerda el intento la primera vez."""
+    key = (str(model), str(base_url))
+    if key in _ASKED:
+        return True
+    _ASKED.add(key)
+    return False
+
+
 def project_usage(
     project_root,
     *,
@@ -280,15 +341,18 @@ def project_usage(
     discovered: int | None = None
     if not config.window:
         cached = cached_window(project_root, model)
-        if cached is None and discover:
-            tokens = discover_window(
+        if cached is None and discover and not _already_asked(model, base_url):
+            window, answered = discover_window_result(
                 base_url=base_url,
                 model=model,
                 family=str(connection.get("name", "") or "openai"),
                 api_key=str(connection.get("api_key", "")),
             )
-            remember_window(project_root, model, tokens or 0)
-            cached = tokens or 0
+            if answered:
+                # Solo se memoriza si el proveedor contestó: 0 = «no la publica».
+                remember_window(project_root, model, window or 0)
+                cached = window or 0
+            # Si no contestó, no se guarda nada y se reintentará en otra sesión.
         discovered = (cached or None) if cached is not None else None
 
     return measure(
