@@ -68,8 +68,14 @@ class SkillRunner:
         project_root: Path,
         timeout_s: int | None = None,
         allow_network: bool = False,
+        task_id: str = "",
     ) -> SkillRunResult:
-        """Ejecuta la skill y devuelve su salida (con stats actualizadas)."""
+        """Ejecuta la skill y devuelve su salida (con stats actualizadas).
+
+        Emite ``SKILL_EXECUTED``/``SKILL_FAILED`` **sólo cuando la skill se ejecuta de
+        verdad** (un acierto de caché también es un uso real). Estar en el catálogo, o
+        haber sido considerada, no emite nada: el panel no puede confundirlos.
+        """
         manifest = self.registry.get(skill_id)
         skill_dir = self.registry.root / manifest.id
         use_cache = self.cache is not None and self.cache.eligible(
@@ -85,6 +91,9 @@ class SkillRunner:
             if hit is not None:
                 # Un acierto es un uso real: cuenta para las métricas con coste ~0.
                 self.registry.record_use(skill_id, True, 0)
+                self._emit(
+                    "executed", skill_id, task_id, cached=True, duration_ms=0
+                )
                 return SkillRunResult(
                     skill_id=skill_id, success=True, output=hit, cached=True
                 )
@@ -106,6 +115,14 @@ class SkillRunner:
 
         if raw.timed_out or raw.error is not None:
             self.registry.record_use(skill_id, False, duration_ms)
+            self._emit(
+                "failed",
+                skill_id,
+                task_id,
+                error=raw.error or "fallo del sandbox",
+                exit_code=raw.exit_code,
+                duration_ms=duration_ms,
+            )
             return SkillRunResult(
                 skill_id=skill_id,
                 success=False,
@@ -116,6 +133,14 @@ class SkillRunner:
 
         if raw.exit_code != 0:
             self.registry.record_use(skill_id, False, duration_ms)
+            self._emit(
+                "failed",
+                skill_id,
+                task_id,
+                error=(raw.stderr.strip() or f"exit code {raw.exit_code}"),
+                exit_code=raw.exit_code,
+                duration_ms=duration_ms,
+            )
             return SkillRunResult(
                 skill_id=skill_id,
                 success=False,
@@ -127,6 +152,14 @@ class SkillRunner:
         parsed, parse_error = self._parse_output(raw.stdout)
         if parse_error is not None:
             self.registry.record_use(skill_id, False, duration_ms)
+            self._emit(
+                "failed",
+                skill_id,
+                task_id,
+                error=parse_error,
+                exit_code=raw.exit_code,
+                duration_ms=duration_ms,
+            )
             return SkillRunResult(
                 skill_id=skill_id,
                 success=False,
@@ -138,6 +171,14 @@ class SkillRunner:
         schema_error = self._validate_output(manifest, parsed)
         if schema_error is not None:
             self.registry.record_use(skill_id, False, duration_ms)
+            self._emit(
+                "failed",
+                skill_id,
+                task_id,
+                error=schema_error,
+                exit_code=raw.exit_code,
+                duration_ms=duration_ms,
+            )
             return SkillRunResult(
                 skill_id=skill_id,
                 success=False,
@@ -150,12 +191,34 @@ class SkillRunner:
         if use_cache:
             # Sólo se memoizan éxitos: un fallo no se guarda nunca.
             self.cache.put(cache_key, parsed, skill_id=skill_id)
+        self._emit(
+            "executed", skill_id, task_id, cached=False, duration_ms=duration_ms
+        )
         return SkillRunResult(
             skill_id=skill_id,
             success=True,
             output=parsed,
             exit_code=raw.exit_code,
             duration_ms=duration_ms,
+        )
+
+    def _emit(self, kind: str, skill_id: str, task_id: str, **payload: Any) -> None:
+        """Emite el evento real de la ejecución; sin sink (o sin permiso) no pasa nada."""
+        from satellite.core.events import EventType, ExecutionEvent
+        from satellite.skills.registry import SYSTEM_TASK_ID
+
+        sink = getattr(self.registry, "sink", None)
+        if sink is None:
+            return
+        event_type = (
+            EventType.SKILL_EXECUTED if kind == "executed" else EventType.SKILL_FAILED
+        )
+        sink.emit(
+            ExecutionEvent(
+                event_type=event_type,
+                task_id=task_id or SYSTEM_TASK_ID,
+                payload={"skill_id": skill_id, **payload},
+            )
         )
 
     @staticmethod
