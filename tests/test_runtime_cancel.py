@@ -480,3 +480,100 @@ def test_the_agent_stops_a_long_command_and_ends_cancelled(tmp_path: Path) -> No
     assert "cortado durante el comando" in resultado.summary
     assert tardanza < 8  # el comando de 30 s no llegó a terminar
     assert resultado.tool_calls and resultado.tool_calls[0].success is False
+
+
+# --- las interfaces (tanda 4) ---
+
+
+class OrchestratorFake:
+    """Orquestador de mentira que apunta lo que le piden."""
+
+    def __init__(self) -> None:
+        self.peticiones: list[str] = []
+
+    def cancel(self, task_id: str = "", reason: str = "") -> dict:
+        self.peticiones.append(reason)
+        return {"cancelled": True, "task_id": task_id, "reason": reason or "cancelado"}
+
+
+def _tui_de_prueba(tmp_path, monkeypatch, runtime=None, roto: bool = False):
+    import json as _json
+
+    from satellite.tui.app import SatelliteTUI
+    from satellite.tui.session import Session
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("SATELLITE_HOME", str(home))
+    monkeypatch.delenv("SATELLITE_SKILLS_DIR", raising=False)
+    cfg = tmp_path / ".satellite" / "config"
+    cfg.mkdir(parents=True, exist_ok=True)
+    (cfg / "config.json").write_text(
+        _json.dumps({"name": "fake", "model": "m"}), encoding="utf-8"
+    )
+    session = Session(tmp_path, home=home)
+    if runtime is not None:
+        session._runtime = runtime  # runtime ya armado, sin proveedor de verdad
+    if roto:
+
+        def sin_runtime(*_args, **_kwargs):
+            raise RuntimeError("no se pudo armar el runtime")
+
+        session.runtime = sin_runtime  # type: ignore[method-assign]
+    return SatelliteTUI(session)
+
+
+def test_the_tui_cancel_command_asks_the_runtime(tmp_path, monkeypatch) -> None:
+    from satellite.events.bus import EventBus
+
+    orquestador = OrchestratorFake()
+    app = _tui_de_prueba(tmp_path, monkeypatch, (orquestador, EventBus(), None, None))
+
+    async def escenario():
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._cmd_cancel("prueba")
+            await pilot.pause()
+        return "\n".join(app.transcript)
+
+    salida = asyncio.run(escenario())
+
+    assert "cancelación pedida" in salida
+    assert orquestador.peticiones == ["prueba"]
+
+
+def test_the_tui_says_when_there_is_no_runtime_to_cancel(tmp_path, monkeypatch) -> None:
+    """Si el runtime no se puede armar, se dice, no se finge que se canceló."""
+    app = _tui_de_prueba(tmp_path, monkeypatch, roto=True)
+
+    async def escenario():
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._cmd_cancel("")
+            await pilot.pause()
+        return "\n".join(app.transcript)
+
+    assert "no se pudo cancelar" in asyncio.run(escenario())
+
+
+def test_the_cli_ctrl_c_asks_then_forces() -> None:
+    """La primera pulsación pide cancelar; la segunda corta, para no dejar a nadie atrapado."""
+    from satellite.cli.app import _cancel_handler
+
+    orquestador = OrchestratorFake()
+    handler = _cancel_handler(orquestador, "desde la prueba")
+
+    handler(None, None)  # primera: pide la cancelación
+
+    assert orquestador.peticiones == ["desde la prueba"]
+    with pytest.raises(KeyboardInterrupt):
+        handler(None, None)  # segunda: corta
+
+
+def test_the_cli_handler_without_cancel_support_does_not_swallow_ctrl_c() -> None:
+    """Sin soporte de cancelación, Ctrl+C no puede quedarse en no hacer nada."""
+    from satellite.cli.app import _cancel_handler
+
+    handler = _cancel_handler(object(), "x")
+
+    with pytest.raises(KeyboardInterrupt):
+        handler(None, None)

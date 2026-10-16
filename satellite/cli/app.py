@@ -36,6 +36,26 @@ def main(
 # ---------------------------------------------------------------- ejecución
 
 
+def _cancel_handler(orchestrator, motivo: str = "cancelado con Ctrl+C"):
+    """Ctrl+C pide la cancelación; un segundo Ctrl+C sí corta el proceso.
+
+    El runtime para con lo hecho contado, así que la primera pulsación no debe tirar el
+    proceso por la borda; la segunda existe para que nadie se quede atrapado.
+    """
+    estado = {"veces": 0}
+
+    def handler(_signum=None, _frame=None) -> None:
+        estado["veces"] += 1
+        cancel = getattr(orchestrator, "cancel", None)
+        if estado["veces"] == 1 and callable(cancel):
+            cancel("", motivo)
+            say("cancelación pedida; Ctrl+C otra vez fuerza la salida")
+            return
+        raise KeyboardInterrupt
+
+    return handler
+
+
 @app.command()
 def run(
     goal: str = typer.Argument(..., help="The user goal to execute."),
@@ -53,7 +73,18 @@ def run(
     services = getattr(orchestrator, "services", None)
     if services is not None and getattr(services, "approval", None) is None:
         services.approval = AutoApprovalPort() if yes else CliApproval()
-    result = asyncio.run(orchestrator.execute(Task(goal=goal, project_root=project.resolve())))
+    # Ctrl+C no se lleva por delante el proceso: pide cancelar y deja que el runtime pare
+    # entre nodos, con lo hecho contado. El segundo Ctrl+C sí corta.
+    import signal
+
+    anterior = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, _cancel_handler(orchestrator))
+    try:
+        result = asyncio.run(
+            orchestrator.execute(Task(goal=goal, project_root=project.resolve()))
+        )
+    finally:
+        signal.signal(signal.SIGINT, anterior)
     _print_result(result, project=project.resolve())
 
 

@@ -759,6 +759,33 @@ class SatelliteTUI(App):
         texto = "uso: /jobs [list | output <id> | wait <id> [s] | stop <id>]"
         self._log(Text(texto, style="yellow"), plain=texto)
 
+    def _cmd_cancel(self, arg: str) -> None:
+        """Pide cancelar el turno en curso (cooperativa: se para entre nodos)."""
+        try:
+            orquestador = self.session.runtime()[0]
+        except Exception as exc:  # noqa: BLE001 — sin runtime no hay a quién pedírselo
+            self._log(
+                Text(f"no se pudo cancelar: {exc}", style="yellow"),
+                plain=f"no se pudo cancelar: {exc}",
+            )
+            return
+        cancel = getattr(orquestador, "cancel", None)
+        if not callable(cancel):
+            self._log(Text("este runtime no sabe cancelar", style="yellow"), plain="sin cancelación")
+            return
+        motivo = arg.strip() or "cancelado desde la TUI"
+        resultado = cancel("", motivo)
+        if not resultado.get("cancelled"):
+            self._log(
+                Text("no se pudo pedir la cancelación", style="yellow"),
+                plain="cancelación no pedida",
+            )
+            return
+        self._log(
+            Text("cancelación pedida: se para entre nodos, lo hecho queda", style="green"),
+            plain="cancelación pedida",
+        )
+
     async def _do_job_wait(self, job_id: str, timeout_s: float) -> None:
         """Espera a que termine un trabajo sin bloquear la TUI."""
         from satellite.tools.jobs import registry_for
