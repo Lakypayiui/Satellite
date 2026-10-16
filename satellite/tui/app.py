@@ -44,7 +44,7 @@ class ApprovalScreen(ModalScreen[ApprovalDecision]):
         self.kind = kind or "agent"
 
     def compose(self) -> ComposeResult:
-        es_ruta = self.kind == "path"
+        pide_permiso = self.kind in ("path", "command")
         with Container(id="approval-box"):
             with VerticalScroll(id="approval-scroll"):
                 yield Static(
@@ -53,11 +53,11 @@ class ApprovalScreen(ModalScreen[ApprovalDecision]):
                 )
             with Horizontal(id="approval-actions"):
                 yield Button(
-                    "Permitir una vez" if es_ruta else "Aprobar",
+                    "Permitir una vez" if pide_permiso else "Aprobar",
                     variant="success",
                     id="approve",
                 )
-                if es_ruta:
+                if pide_permiso:
                     yield Button("Permitir la sesión", variant="primary", id="approve-session")
                 else:
                     yield Button("Cambios", variant="warning", id="changes")

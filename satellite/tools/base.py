@@ -36,6 +36,20 @@ class ToolContext:
     # Puerto de aprobación (por sesión): el runtime lo usa para pedir permiso
     # cuando la política deniega una ruta autorizable.
     approval: object | None = None
+    # Comandos concedidos por una aprobación puntual, solo para esta llamada.
+    allowed_commands: tuple[str, ...] = ()
+
+
+def granted_for_this_call(argv: list[str] | tuple[str, ...], tool_ctx) -> bool:
+    """True si una aprobación puntual concedió ese binario para esta llamada.
+
+    Espejo de ``fs._granted_for_this_call`` para comandos: la concesión «una vez» viaja
+    en el contexto y no toca la política.
+    """
+    if not argv:
+        return False
+    binary = str(argv[0])
+    return binary in tuple(getattr(tool_ctx, "allowed_commands", None) or ())
 
 
 class Tool(ABC):

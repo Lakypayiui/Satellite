@@ -327,6 +327,64 @@ class LLMAgent(Agent):
         current = tuple(getattr(self.policy, "allowed_paths", ()) or ())
         self.policy.allowed_paths = current + (Path(resolved),)
 
+    async def _ask_for_command(self, call: ToolCall, tool_ctx: ToolContext, result):
+        """Pide permiso para ejecutar un comando y reintenta si lo dan.
+
+        Mismo patrón que las rutas: la negativa deja de ser un callejón sin salida y
+        pasa a ser una decisión del usuario (una vez / la sesión / rechazar).
+        """
+        from satellite.approval.base import ApprovalContext
+        from satellite.core.events import EventType, ExecutionEvent
+        from satellite.core.proposal import ApprovalStatus
+
+        datos = dict(result.output) if isinstance(result.output, dict) else {}
+        argumentos = call.arguments or {}
+        comando = str(
+            datos.get("command") or argumentos.get("command") or argumentos.get("code") or ""
+        ).strip()
+        binary = str(datos.get("binary") or (comando.split(" ")[0] if comando else ""))
+        if not binary:
+            return result
+        summary = f"ejecutar: {comando or binary}"
+        decision = await tool_ctx.approval.request(
+            {"kind": "command", "summary": summary},
+            ApprovalContext(
+                kind="command",
+                task_id=tool_ctx.task_id,
+                summary=summary,
+                details={
+                    "tool": call.name,
+                    "command": comando,
+                    "binary": binary,
+                    "consequence": _ACCESS_KIND.get(call.name, "ejecución"),
+                },
+            ),
+        )
+        if decision is None or getattr(decision, "status", None) is not ApprovalStatus.APPROVED:
+            if tool_ctx.sink is not None:
+                tool_ctx.sink.emit(
+                    ExecutionEvent(
+                        event_type=EventType.POLICY_VIOLATION,
+                        task_id=tool_ctx.task_id,
+                        node_id=tool_ctx.node_id or None,
+                        payload={"reason": f"comando denegado: {comando or binary}", "tool": call.name},
+                    )
+                )
+            return result
+        if str(getattr(decision, "feedback", "") or "") == "session":
+            self._grant_command_for_session(binary)
+        tool_ctx.allowed_commands = tuple(getattr(tool_ctx, "allowed_commands", None) or ()) + (
+            binary,
+        )
+        return await self.tool_registry.execute(call, tool_ctx)
+
+    def _grant_command_for_session(self, binary: str) -> None:
+        """Permiso de sesión para ese binario (espejo de las rutas)."""
+        if self.policy is None or not binary:
+            return
+        current = tuple(getattr(self.policy, "allowed_commands", ()) or ())
+        self.policy.allowed_commands = current + (binary,)
+
     async def _run_tool(self, call: ToolCall, ctx: AgentContext):
         started = time.monotonic()
         tool_ctx = ToolContext(
@@ -344,6 +402,8 @@ class LLMAgent(Agent):
         result = await self.tool_registry.execute(call, tool_ctx)
         if result.error_code == "path_outside_project" and tool_ctx.approval is not None:
             result = await self._ask_for_path(call, tool_ctx, result)
+        elif result.error_code == "command_not_allowed" and tool_ctx.approval is not None:
+            result = await self._ask_for_command(call, tool_ctx, result)
         record = ToolRecord(
             tool_name=call.name,
             arguments=call.arguments,

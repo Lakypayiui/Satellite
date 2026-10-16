@@ -31,12 +31,20 @@ class GitStatusTool(Tool):
         return {"type": "object", "properties": {}, "required": []}
 
     async def execute(self, arguments: dict, tool_ctx: ToolContext) -> ToolResult:
+        from satellite.tools.base import granted_for_this_call
+
         policy = tool_ctx.policy
         for argv in (["git", "status", "--short"], ["git", "diff", "--stat"]):
-            if policy is not None and not policy.check_command(argv):
+            if (
+                policy is not None
+                and not policy.check_command(argv)
+                and not granted_for_this_call(argv, tool_ctx)
+            ):
                 return ToolResult(
                     success=False,
                     error=f"permiso denegado: comando '{argv[0]}' no permitido",
+                    error_code="command_not_allowed",
+                    output={"command": " ".join(argv), "binary": argv[0], "argv": list(argv)},
                 )
 
         cwd = tool_ctx.workdir or tool_ctx.project_root

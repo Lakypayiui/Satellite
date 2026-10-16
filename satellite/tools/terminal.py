@@ -100,11 +100,15 @@ class RunCommandTool(Tool):
         if not isinstance(cmd_raw, str) or not cmd_raw.strip():
             return ToolResult(success=False, error="se requiere el argumento 'command'")
         argv = shlex.split(cmd_raw)
+        from satellite.tools.base import granted_for_this_call
+
         policy = tool_ctx.policy
-        if policy is not None and not policy.check_command(argv):
+        if policy is not None and not policy.check_command(argv) and not granted_for_this_call(argv, tool_ctx):
             return ToolResult(
                 success=False,
                 error=f"permiso denegado: comando '{argv[0]}' no permitido",
+                error_code="command_not_allowed",
+                output={"command": cmd_raw, "binary": argv[0], "argv": list(argv)},
             )
         base = tool_ctx.workdir or tool_ctx.project_root
         cwd = base

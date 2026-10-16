@@ -109,8 +109,11 @@ def build_runtime(project_root: Path, *, approval: object | None = None):
 
     settings = load_settings(project_root / CONFIG_PATH)
 
-    # Seguridad + tools (deny-by-default).
-    policy = DefaultSecurityPolicy(allowed_tools=set(DEFAULT_ALLOWED_TOOLS))
+    # Seguridad + tools. El terminal queda activado para que decida el permiso
+    # (una vez / la sesión / rechazar): con allow_terminal=False sería un veto duro.
+    policy = DefaultSecurityPolicy(
+        allowed_tools=set(DEFAULT_ALLOWED_TOOLS), allow_terminal=True
+    )
     tools = build_tool_registry(policy)
 
     bus = EventBus()
