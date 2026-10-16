@@ -75,13 +75,17 @@ class WriteFileTool(Tool):
         content = arguments.get("content", "")
         if not isinstance(content, str):
             content = json.dumps(content, ensure_ascii=False)
+        anterior = _read_previous(path)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             data = content.encode("utf-8")
             path.write_bytes(data)
         except OSError as exc:
             return ToolResult(success=False, error=f"no se pudo escribir '{path}': {exc}")
-        return ToolResult(success=True, output={"path": str(path), "bytes": len(data)})
+        output = {"path": str(path), "bytes": len(data)}
+        if not _record_change(tool_ctx, path, anterior):
+            output["aviso"] = "no se pudo registrar el cambio para poder deshacerlo"
+        return ToolResult(success=True, output=output)
 
 
 class EditFileTool(Tool):
@@ -125,7 +129,10 @@ class EditFileTool(Tool):
             path.write_text(new_content, encoding="utf-8")
         except OSError as exc:
             return ToolResult(success=False, error=f"no se pudo escribir '{path}': {exc}")
-        return ToolResult(success=True, output={"path": str(path), "reemplazos": 1})
+        output = {"path": str(path), "reemplazos": 1}
+        if not _record_change(tool_ctx, path, content):
+            output["aviso"] = "no se pudo registrar el cambio para poder deshacerlo"
+        return ToolResult(success=True, output=output)
 
 
 class ListDirTool(Tool):
@@ -240,3 +247,26 @@ def _assert_not_protected(path: Path, tool_ctx: ToolContext, base: Path) -> None
     zone = protected_zone(path, paths)
     if zone:
         raise ProtectedZoneForbidden(f"zona protegida ({zone}): no se puede tocar {path}")
+
+
+def _read_previous(path: Path) -> str | None:
+    """Contenido previo del archivo (None si no existía o no se pudo leer)."""
+    try:
+        if path.is_file():
+            return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return None
+
+
+def _record_change(tool_ctx: ToolContext, path: Path, previous: str | None) -> bool:
+    """Anota el cambio para poder mostrarlo y deshacerlo después."""
+    from satellite.persistence.changes import ChangeLedger
+
+    task_id = str(getattr(tool_ctx, "task_id", "") or "")
+    if not task_id or tool_ctx.project_root is None:
+        return True  # sin tarea no hay a quién atribuirlo: no es un fallo
+    try:
+        return ChangeLedger(tool_ctx.project_root).record(task_id, path, previous)
+    except OSError:
+        return False

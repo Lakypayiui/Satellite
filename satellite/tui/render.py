@@ -399,3 +399,53 @@ def proposal_panel(summary: str, details: dict, *, kind: str = "agent") -> Panel
         title_align="left",
         border_style="yellow",
     )
+
+
+CHANGES_DIFF_LINES = 400
+CHANGES_TAIL_LINES = 60
+
+
+def changes_panel(
+    task_id: str,
+    files: list[str],
+    diff_text: str,
+    *,
+    limit: int = CHANGES_DIFF_LINES,
+    hint: str = "",
+) -> Panel:
+    """Panel con los archivos que tocó una tarea y su diff (recortado si es enorme)."""
+    body = Text()
+    if files:
+        body.append(f"{len(files)} archivo(s) modificado(s)\n", style="bold")
+        for name in files:
+            body.append(f"  · {name}\n", style="cyan")
+    else:
+        body.append("(sin cambios registrados)\n", style="dim")
+
+    lines = diff_text.splitlines()
+    if lines:
+        visibles = lines[:limit]
+        body.append("\n")
+        for line in visibles:
+            style = ""
+            if line.startswith(("+++", "---")):
+                style = "bold"
+            elif line.startswith("+"):
+                style = "green"
+            elif line.startswith("-"):
+                style = "red"
+            elif line.startswith("@@"):
+                style = "cyan"
+            elif line.startswith("\\"):
+                style = "dim"
+            body.append(f"{line}\n", style=style)
+        restantes = len(lines) - len(visibles)
+        if restantes > 0:
+            aviso = f"… {restantes} líneas más"
+            body.append(f"\n{aviso} ({hint})\n" if hint else f"\n{aviso}\n", style="dim")
+    return Panel(
+        body,
+        title=f"cambios de {task_id or 'la tarea'}",
+        title_align="left",
+        border_style="cyan",
+    )

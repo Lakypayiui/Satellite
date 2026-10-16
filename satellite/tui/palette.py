@@ -28,6 +28,8 @@ COMMANDS: tuple[Command, ...] = (
     Command("skill-edit", "/skill-edit <id> [--description <t>] [--tags a,b]", "Edita una skill"),
     Command("skill-delete", "/skill-delete <id>", "Elimina una skill"),
     Command("curate", "/curate [petición]", "Ejecuta el curador de skills"),
+    Command("changes", "/changes [task_id]", "Archivos y diff que cambió una tarea"),
+    Command("undo-task", "/undo-task [task_id]", "Restaura los cambios de esa tarea"),
     Command("tasks", "/tasks", "Lista las tareas persistidas"),
     Command("status", "/status <task_id>", "Eventos de una tarea"),
     Command("inspect", "/inspect <task_id>", "Grafo serializado de una tarea"),

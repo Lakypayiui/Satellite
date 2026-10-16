@@ -361,6 +361,7 @@ class SatelliteTUI(App):
                 self._sync_cards()
                 if all(state["status"] != "running" for state in self._agents.values()):
                     self._show_agents(False)
+                self._log_changes(getattr(event, "task_id", ""))
         except Exception:  # noqa: BLE001 — el panel nunca debe tumbar la sesión
             return
 
@@ -704,6 +705,71 @@ class SatelliteTUI(App):
         self._log(
             Text("\n".join(snapshots) if snapshots else "(sin snapshots)"),
             plain=f"snapshots={len(snapshots)}",
+        )
+
+    def _cmd_changes(self, arg: str) -> None:
+        """Archivos y diff de lo que cambió una tarea (la última, si no se dice cuál)."""
+        from satellite.persistence.changes import ChangeLedger
+
+        ledger = ChangeLedger(self.session.project_root)
+        task_id = arg.strip() or ledger.latest_task() or ""
+        if not task_id or not ledger.has(task_id):
+            self._log(
+                Text("(no hay cambios registrados de esa tarea)", style="dim"),
+                plain="(no hay cambios registrados de esa tarea)",
+            )
+            return
+        files = ledger.files(task_id)
+        self._log(
+            render.changes_panel(
+                task_id,
+                files,
+                ledger.diff(task_id),
+                limit=render.CHANGES_DIFF_LINES,
+                hint="/changes muestra el diff completo",
+            ),
+            plain=f"changes={task_id} archivos={len(files)}: {', '.join(files)}",
+        )
+
+    def _cmd_undo_task(self, arg: str) -> None:
+        """Devuelve los archivos de una tarea a como estaban antes de esa tarea."""
+        from satellite.persistence.changes import ChangeLedger
+
+        ledger = ChangeLedger(self.session.project_root)
+        task_id = arg.strip() or ledger.latest_task() or ""
+        if not task_id or not ledger.has(task_id):
+            self._log(
+                Text("uso: /undo-task [task_id] (no hay cambios registrados)", style="yellow"),
+                plain="uso: /undo-task [task_id] (no hay cambios registrados)",
+            )
+            return
+        resultado = ledger.restore(task_id)
+        lines = [
+            f"tarea {task_id}: restaurados {len(resultado['restored'])}, "
+            f"eliminados {len(resultado['removed'])}"
+        ]
+        lines += [f"  ↩ {name}" for name in resultado["restored"]]
+        lines += [f"  − {name} (era nuevo)" for name in resultado["removed"]]
+        lines += [f"  · omitido: {name}" for name in resultado["skipped"]]
+        self._log(Text("\n".join(lines)), plain=" ".join(lines))
+
+    def _log_changes(self, task_id: str) -> None:
+        """Al terminar, deja constancia de lo que la tarea cambió."""
+        from satellite.persistence.changes import ChangeLedger
+
+        ledger = ChangeLedger(self.session.project_root)
+        if not task_id or not ledger.has(task_id):
+            return
+        files = ledger.files(task_id)
+        self._log(
+            render.changes_panel(
+                task_id,
+                files,
+                ledger.diff(task_id),
+                limit=render.CHANGES_TAIL_LINES,
+                hint="/changes muestra el diff completo",
+            ),
+            plain=f"cambios de {task_id}: {', '.join(files)}",
         )
 
     def _cmd_stats(self, arg: str) -> None:
