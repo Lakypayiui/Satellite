@@ -224,8 +224,35 @@ isolation (clean env, no network, timeout) — it is **not** operating-system is
 
 ### Interface
 
-The Electron/React interface for this backend is the next step and is **not finished yet**;
-what is ready today is the backend above, which can be driven entirely from `curl`.
+```bash
+cd desktop
+npm install          # React, Vite and Electron (the first install downloads Electron)
+npm run dev          # Vite dev server + Electron, with hot reload
+npm start            # build the renderer and run it without a dev server
+npm run smoke        # end-to-end check of the integration, without opening a window
+```
+
+How it is wired: the Electron main process starts `python -m satellite.desktop`, reads the
+handshake and keeps the token; the interface only talks to the main process over IPC
+(`contextBridge`), so neither the token nor any URL is reachable from the renderer. Closing a
+window asks the backend to shut down (which drains pending writes) before terminating it, and
+if the backend dies the interface shows a banner with a retry that restarts it.
+
+What the interface gives you: open or switch project folder (native dialog), create, rename and
+resume conversations, chat with live activity, permission cards (allow once / for the session /
+reject), the full diff of the changed files together with a restore that asks for confirmation
+**after** showing what would be discarded, background jobs with their output and a stop button,
+and settings for provider, model and security policy — with the N0 caveat written where you
+choose it.
+
+Keyboard: `Ctrl+Enter` send, `Ctrl+N` new conversation, `Ctrl+B` / `Ctrl+J` collapse the side and
+right panels, `Ctrl+,` settings, `Esc` close. The right panel has tabs for activity, agents,
+skills, changes and jobs; agents and skills are built **only** from real runtime events, so a
+skill that was merely available in the catalog is never listed as used.
+
+Packaging (electron-builder, installers per platform) is **not finished**: what works today is
+development, as above. Shipping it would need a bundled Python interpreter and the package
+alongside the app — a separate step, and not claimed here.
 
 ## Tests
 

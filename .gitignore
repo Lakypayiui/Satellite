@@ -20,6 +20,12 @@ venv/
 coverage.xml
 htmlcov/
 
+# --- App de escritorio (Node/Electron) ---
+node_modules/
+desktop/dist/
+desktop/dist-electron/
+desktop/release/
+
 # --- Entorno local / LLM ---
 *.gguf
 third_party/

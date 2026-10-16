@@ -224,4 +224,10 @@ def build_router(backend: DesktopBackend, auth: Callable) -> APIRouter:
     def models(base_url: str, family: str = "openai", api_key: str = "") -> dict:
         return {"result": backend.models(base_url=base_url, family=family, api_key=api_key)}
 
+    @router.post("/shutdown")
+    async def shutdown() -> dict:
+        """Cierre pedido por la app: drena lo pendiente antes de que la maten."""
+        await backend.close()
+        return {"closing": True}
+
     return router
