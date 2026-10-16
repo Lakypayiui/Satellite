@@ -33,6 +33,8 @@ class EventType(Enum):
     SKILL_APPROVED = "skill_approved"
     SKILL_EXECUTED = "skill_executed"
     SKILL_FAILED = "skill_failed"
+    # Buscada y considerada: todavía no dice que se haya usado ni ejecutado.
+    SKILL_SEARCHED = "skill_searched"
     SKILL_QUARANTINED = "skill_quarantined"
     # Delegación entre agentes
     DELEGATION_STARTED = "delegation_started"

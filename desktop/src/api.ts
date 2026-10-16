@@ -245,6 +245,7 @@ export const ETIQUETA_EVENTO: Record<string, string> = {
   agent_extended: "agente ampliado",
   skill_proposed: "skill propuesta",
   skill_approved: "skill aprobada",
+  skill_searched: "skill buscada (considerada)",
   skill_executed: "skill ejecutada",
   skill_failed: "skill fallida",
   skill_quarantined: "skill en cuarentena",

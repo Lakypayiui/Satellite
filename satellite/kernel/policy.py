@@ -88,6 +88,9 @@ class Settings:
     policy_mode: PolicyMode = PolicyMode.ASK
     quotas: Quotas = field(default_factory=Quotas)
     sandbox_level: str = "N0"
+    # Comandos que no se preguntan (``terminal.allowed_commands`` en config.json). Vacío
+    # por defecto: todo comando se pregunta. No hay forma de decir "permitir todo".
+    allowed_commands: tuple[str, ...] = ()
     refine_goal: bool = False
     direct_reply: bool = True
     max_tokens: dict = field(default_factory=dict)
@@ -105,6 +108,7 @@ class Settings:
             "policy_mode": self.policy_mode.value,
             "quotas": self.quotas.to_dict(),
             "sandbox_level": self.sandbox_level,
+            "allowed_commands": list(self.allowed_commands),
             "refine_goal": self.refine_goal,
             "direct_reply": self.direct_reply,
             "max_tokens": dict(self.max_tokens),
@@ -156,6 +160,26 @@ def _max_tokens_from(data: dict) -> dict:
     return by_role
 
 
+def _allowed_commands_from(data: dict) -> tuple[str, ...]:
+    """Lee ``terminal.allowed_commands`` (tolerante).
+
+    Sólo nombres de binario, sin repetidos. Si el valor es basura se ignora, y el efecto de
+    no leerlo es que ese comando **se pregunta**: el lado seguro del fallo.
+    """
+    terminal = data.get("terminal") if isinstance(data.get("terminal"), dict) else {}
+    raw = terminal.get("allowed_commands")
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    vistos: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        nombre = item.strip()
+        if nombre and nombre not in vistos:
+            vistos.append(nombre)
+    return tuple(vistos)
+
+
 def load_settings(path: Path | None = None) -> Settings:
     """Carga la configuración de forma tolerante (nunca lanza por datos corruptos).
 
@@ -181,6 +205,7 @@ def load_settings(path: Path | None = None) -> Settings:
         policy_mode=mode,
         quotas=Quotas.from_dict(data.get("quotas")),
         sandbox_level=str(data.get("sandbox_level", "N0")),
+        allowed_commands=_allowed_commands_from(data),
         refine_goal=bool(data.get("refine_goal", False)),
         direct_reply=bool(data.get("direct_reply", True)),
         max_tokens=_max_tokens_from(data),

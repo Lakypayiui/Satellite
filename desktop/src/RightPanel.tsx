@@ -99,6 +99,23 @@ function leerAgentes(eventos: StreamItem[]): Agente[] {
 function leerSkills(eventos: StreamItem[]): Skill[] {
   const mapa = new Map<string, Skill>();
   for (const { event } of eventos) {
+    // Buscadas y consideradas primero: nunca rebajan una skill ya ejecutada o fallida.
+    if (event.event_type === "skill_searched") {
+      const consideradas = Array.isArray(event.payload?.considered)
+        ? (event.payload.considered as Array<Record<string, unknown>>)
+        : [];
+      for (const item of consideradas) {
+        const id = String(item.skill_id ?? "");
+        if (!id || mapa.has(id)) continue;
+        mapa.set(id, {
+          id,
+          estado: "considerada",
+          clase: "",
+          detalle: item.score === undefined ? "mirada al buscar" : `score ${String(item.score)}`,
+        });
+      }
+      continue;
+    }
     const id = event.payload?.skill_id;
     if (typeof id !== "string" || !id) continue;
     if (event.event_type === "skill_executed") {
@@ -213,16 +230,17 @@ export function RightPanel(props: Props) {
         {props.pestana === "skills" && (
           <>
             <div className="bloque">
-              <p className="etiqueta">Ejecutadas de verdad</p>
+              <p className="etiqueta">Consideradas y ejecutadas</p>
               <div className="sub" style={{ color: "var(--muted)", fontSize: 12 }}>
-                Estar en el catálogo no cuenta como uso. Busca en él con{" "}
+                Estar en el catálogo no cuenta como uso: «considerada» sale de la búsqueda del
+                agente y «ejecutada» de que la skill corriera de verdad. Busca en el catálogo con{" "}
                 <button className="quiet" style={{ padding: 0 }} onClick={props.onPaleta}>
                   ctrl+k · skills
                 </button>
                 .
               </div>
             </div>
-            {skills.length === 0 && <div className="vacio">Ninguna skill se ha ejecutado aún.</div>}
+            {skills.length === 0 && <div className="vacio">Ninguna skill se ha mirado ni ejecutado aún.</div>}
             {skills.map((skill) => (
               <div key={skill.id} className="ficha" style={{ cursor: "default" }}>
                 <h3>{skill.id}</h3>

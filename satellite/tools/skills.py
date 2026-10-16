@@ -8,6 +8,34 @@ from satellite.core.tool_models import ToolResult
 from satellite.tools.base import Tool, ToolContext
 
 
+def _emit_searched(tool_ctx: ToolContext, query: str, hits) -> None:
+    """Deja constancia de qué se **consideró** al buscar skills.
+
+    No dice que se vaya a usar ni que se haya ejecutado: eso lo dirán ``SKILL_EXECUTED`` o
+    ``SKILL_FAILED`` si llega a pasar. Sin esto, el panel no podía distinguir una skill
+    mirada de una usada.
+    """
+    from satellite.core.events import EventType, ExecutionEvent
+
+    sink = getattr(tool_ctx, "sink", None)
+    if sink is None:
+        return
+    sink.emit(
+        ExecutionEvent(
+            event_type=EventType.SKILL_SEARCHED,
+            task_id=tool_ctx.task_id or "system",
+            node_id=tool_ctx.node_id or None,
+            tool_name="search_skills",
+            payload={
+                "query": query,
+                "considered": [
+                    {"skill_id": hit.id, "score": hit.score} for hit in hits
+                ],
+            },
+        )
+    )
+
+
 class SearchSkillsTool(Tool):
     """Busca skills existentes por descripción (sin LLM)."""
 
@@ -43,6 +71,7 @@ class SearchSkillsTool(Tool):
             return ToolResult(success=False, error="se requiere el argumento 'query'")
         top_k = int(arguments.get("top_k", 3))
         hits = registry.find_similar(query, top_k=top_k)
+        _emit_searched(tool_ctx, query, hits)
         return ToolResult(
             success=True,
             output=[

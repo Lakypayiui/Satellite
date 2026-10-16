@@ -113,8 +113,12 @@ def build_runtime(project_root: Path, *, approval: object | None = None):
 
     # Seguridad + tools. El terminal queda activado para que decida el permiso
     # (una vez / la sesión / rechazar): con allow_terminal=False sería un veto duro.
+    # La allowlist sale de `terminal.allowed_commands` y vacía por defecto: sin ella todo
+    # comando se pregunta.
     policy = DefaultSecurityPolicy(
-        allowed_tools=set(DEFAULT_ALLOWED_TOOLS), allow_terminal=True
+        allowed_tools=set(DEFAULT_ALLOWED_TOOLS),
+        allow_terminal=True,
+        allowed_commands=settings.allowed_commands,
     )
     tools = build_tool_registry(policy)
 
@@ -265,7 +269,11 @@ def build_tool_registry(policy: DefaultSecurityPolicy | None = None) -> DefaultT
     completo (y por tanto sin necesitar un proveedor configurado).
     """
     if policy is None:
-        policy = DefaultSecurityPolicy(allowed_tools=set(DEFAULT_ALLOWED_TOOLS))
+        # La misma política que el runtime: si aquí el terminal estuviera vetado, listar
+        # las herramientas y ejecutarlas dirían cosas distintas.
+        policy = DefaultSecurityPolicy(
+            allowed_tools=set(DEFAULT_ALLOWED_TOOLS), allow_terminal=True
+        )
     tools = DefaultToolRegistry(policy=policy)
     for tool in (
         ReadFileTool(),
