@@ -26,6 +26,7 @@ RESERVED_SKILL_IDS: frozenset[str] = frozenset(
         "search_files",
         "run_command",
         "run_argv",
+        "job",
         "run_python",
         "git_status",
         "request_context",

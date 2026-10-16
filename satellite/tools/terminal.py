@@ -90,6 +90,13 @@ class RunCommandTool(Tool):
                     "type": "string",
                     "description": "Directorio de trabajo relativo al proyecto (opcional).",
                 },
+                "background": {
+                    "type": "boolean",
+                    "description": (
+                        "Si true, el comando sigue en segundo plano y devuelve un job_id "
+                        "para consultarlo con la tool 'job' (default false)."
+                    ),
+                },
             },
             "required": ["command"],
         }
@@ -118,4 +125,10 @@ class RunCommandTool(Tool):
             if policy is not None and not policy.check_path(cwd, tool_ctx.project_root):
                 return ToolResult(success=False, error=f"permiso denegado: {cwd}")
         env = sanitize_env(tool_ctx.env)
+        if bool(arguments.get("background", False)):
+            from satellite.tools.jobs import start_background
+
+            return start_background(
+                cmd_raw, argv, cwd=cwd, env=env, project_root=tool_ctx.project_root
+            )
         return await execute_argv(argv, cwd=cwd, env=env, timeout_s=timeout_s)
