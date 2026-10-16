@@ -31,8 +31,14 @@ _ROLE_LABEL = {"user": "usuario", "assistant": "asistente"}
 
 
 def conversation_path(project_root: Path | str) -> Path:
-    """Ruta de la conversación persistida (``.satellite/state/conversation.json``)."""
-    return Path(project_root) / ".satellite" / "state" / CONVERSATION_FILE
+    """Ruta de la conversación **activa** (``state/conversations/<id>.json``).
+
+    Sigue devolviendo el fichero que hay que leer/escribir, así que todo lo que ya usaba
+    esta ruta (CLI, TUI, tests) apunta a la sesión correcta sin cambios.
+    """
+    from satellite.orchestration.sessions import SessionStore
+
+    return SessionStore(project_root).current_path()
 
 
 @dataclass(frozen=True)
@@ -96,22 +102,26 @@ class ChatSession:
 
     # --- persistencia de la conversación ---
 
+    def _store(self):
+        from satellite.orchestration.sessions import SessionStore
+
+        return SessionStore(self.project_root)
+
+    @property
+    def session_id(self) -> str:
+        """Id de la sesión activa (``default`` mientras no se elija otra)."""
+        return self._store().active_id()
+
+    @property
+    def session_name(self) -> str:
+        """Nombre de la sesión activa."""
+        return self._store().read(self.session_id)[0].name
+
     def load(self) -> int:
-        """Carga la conversación guardada; devuelve cuántos turnos había."""
-        path = conversation_path(self.project_root)
-        if not path.exists():
-            return 0
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return 0
-        raw = data.get("turns") if isinstance(data, dict) else data
-        if not isinstance(raw, list):
-            return 0
+        """Carga la conversación de la sesión activa; devuelve cuántos turnos había."""
+        _info, raw = self._store().read(self.session_id)
         loaded: list[Turn] = []
         for item in raw:
-            if not isinstance(item, dict):
-                continue
             try:
                 loaded.append(Turn.from_dict(item))
             except (KeyError, TypeError, ValueError):
@@ -120,32 +130,17 @@ class ChatSession:
         return len(loaded)
 
     def save(self) -> None:
-        """Guarda la conversación (atómico y tolerante)."""
+        """Guarda la conversación de la sesión activa (atómico y tolerante)."""
         if not self.persist:
             return
-        from datetime import datetime, timezone
-
-        path = conversation_path(self.project_root)
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_name(path.name + ".tmp")
-            tmp.write_text(
-                json.dumps(
-                    {
-                        "turns": [turn.to_dict() for turn in self.history],
-                        "updated_at": datetime.now(timezone.utc).isoformat(),
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
-            tmp.replace(path)
-        except OSError:
-            return
+        self._store().save(
+            self.session_id,
+            [turn.to_dict() for turn in self.history],
+            name=self.session_name,
+        )
 
     def reset(self) -> None:
-        """Empieza una conversación nueva (y borra la guardada)."""
+        """Empieza una conversación nueva (y borra la guardada de la sesión activa)."""
         self.history.clear()
         if not self.persist:
             return
@@ -155,6 +150,32 @@ class ChatSession:
                 path.unlink()
             except OSError:
                 return
+
+    # --- sesiones ---
+
+    def sessions(self) -> list:
+        """Sesiones guardadas del proyecto (la activa primero)."""
+        return self._store().list()
+
+    def new_session(self, name: str = "") -> str:
+        """Crea una sesión vacía, la activa y devuelve su id."""
+        session_id = self._store().create(name)
+        self.history = []
+        return session_id
+
+    def use_session(self, target: str) -> str | None:
+        """Reanuda una sesión por id o por nombre y carga sus turnos."""
+        session_id = self._store().switch(target)
+        if session_id is None:
+            return None
+        self.load()
+        return session_id
+
+    def rename_session(self, name: str) -> bool:
+        """Renombra la sesión activa (conserva los turnos)."""
+        if not name.strip():
+            return False
+        return self._store().rename(self.session_id, name)
 
     def add(self, role: str, content: str, *, task_id: str = "", status: str = "") -> Turn:
         """Añade un turno (sanitizado). El historial es **append-only**: nunca se

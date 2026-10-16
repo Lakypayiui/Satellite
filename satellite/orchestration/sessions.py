@@ -1,0 +1,196 @@
+"""Sesiones de conversación: crear, nombrar, listar y reanudar.
+
+Antes había una sola conversación por proyecto (``state/conversation.json``). Ahora cada
+sesión vive en ``state/conversations/<id>.json`` y ``state/current_session.json`` dice cuál
+está activa. La conversación que ya existía se adopta como sesión ``default`` la primera
+vez, así que nadie pierde su historial.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
+
+LEGACY_FILE = "conversation.json"
+SESSION_DIR = "conversations"
+CURRENT_FILE = "current_session.json"
+DEFAULT_SESSION_ID = "default"
+DEFAULT_SESSION_NAME = "conversación principal"
+
+
+@dataclass(frozen=True)
+class SessionInfo:
+    """Lo que se muestra de una sesión en la lista."""
+
+    id: str
+    name: str
+    turns: int = 0
+    updated_at: str = ""
+    active: bool = False
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class SessionStore:
+    """Ficheros de sesiones de conversación de un proyecto."""
+
+    def __init__(self, project_root: Path | str) -> None:
+        self.state = Path(project_root) / ".satellite" / "state"
+
+    # --- rutas ---
+
+    def session_path(self, session_id: str) -> Path:
+        return self.state / SESSION_DIR / f"{session_id}.json"
+
+    def current_path(self) -> Path:
+        """Fichero de la sesión activa (adopta la conversación antigua si hacía falta)."""
+        session_id = self.active_id()
+        path = self.session_path(session_id)
+        legacy = self.state / LEGACY_FILE
+        if session_id == DEFAULT_SESSION_ID and not path.exists() and legacy.is_file():
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                legacy.replace(path)
+            except OSError:
+                return legacy
+        return path
+
+    # --- qué sesión está activa ---
+
+    def active_id(self) -> str:
+        try:
+            data = json.loads((self.state / CURRENT_FILE).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return DEFAULT_SESSION_ID
+        if isinstance(data, dict) and isinstance(data.get("id"), str) and data["id"].strip():
+            return data["id"].strip()
+        return DEFAULT_SESSION_ID
+
+    def set_active(self, session_id: str) -> None:
+        try:
+            self.state.mkdir(parents=True, exist_ok=True)
+            (self.state / CURRENT_FILE).write_text(
+                json.dumps({"id": session_id}, ensure_ascii=False), encoding="utf-8"
+            )
+        except OSError:
+            return
+
+    # --- leer / escribir ---
+
+    def read(self, session_id: str) -> tuple[SessionInfo, list[dict]]:
+        """``(info, turnos)`` de una sesión; vacío y tolerante si no se puede leer."""
+        path = self.session_path(session_id)
+        if not path.is_file() and session_id == DEFAULT_SESSION_ID:
+            # la sesión principal existe aunque todavía no tenga fichero
+            return SessionInfo(id=session_id, name=DEFAULT_SESSION_NAME), []
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return SessionInfo(id=session_id, name=session_id), []
+        if not isinstance(data, dict):
+            return SessionInfo(id=session_id, name=session_id), []
+        raw = data.get("turns") if isinstance(data.get("turns"), list) else []
+        turns = [item for item in raw if isinstance(item, dict)]
+        info = SessionInfo(
+            id=session_id,
+            name=str(data.get("name") or session_id),
+            turns=len(turns),
+            updated_at=str(data.get("updated_at") or ""),
+        )
+        return info, turns
+
+    def save(self, session_id: str, turns: list[dict], *, name: str = "") -> bool:
+        """Escribe la sesión (atómico). Devuelve False si no se pudo guardar."""
+        path = self.session_path(session_id)
+        previous: dict = {}
+        if path.is_file():
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    previous = raw
+            except (OSError, ValueError):
+                previous = {}
+        payload = {
+            "id": session_id,
+            "name": name or str(previous.get("name") or session_id),
+            "created_at": str(previous.get("created_at") or _now()),
+            "updated_at": _now(),
+            "turns": turns,
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            tmp.replace(path)
+        except OSError:
+            return False
+        return True
+
+    # --- crear / listar / cambiar / renombrar ---
+
+    def create(self, name: str = "") -> str:
+        """Crea una sesión vacía, la activa y devuelve su id."""
+        session_id = uuid4().hex[:8]
+        self.save(session_id, [], name=name.strip() or f"sesión {session_id}")
+        self.set_active(session_id)
+        return session_id
+
+    def list(self) -> list[SessionInfo]:
+        """Sesiones conocidas: la activa primero y el resto por fecha."""
+        active = self.active_id()
+        infos: list[SessionInfo] = []
+        directory = self.state / SESSION_DIR
+        if directory.is_dir():
+            for path in sorted(directory.glob("*.json")):
+                info = self._info(path, active=path.stem == active)
+                if info is not None:
+                    infos.append(info)
+        if not any(info.id == active for info in infos):
+            infos.append(SessionInfo(DEFAULT_SESSION_ID, DEFAULT_SESSION_NAME, active=True))
+        infos.sort(key=lambda info: info.updated_at, reverse=True)
+        infos.sort(key=lambda info: not info.active)  # estable: la activa arriba
+        return infos
+
+    def find(self, target: str) -> str | None:
+        """Id de la sesión a partir de su id o de su nombre (sin distinguir mayúsculas)."""
+        wanted = (target or "").strip().lower()
+        if not wanted:
+            return None
+        if wanted == DEFAULT_SESSION_ID or self.session_path(wanted).is_file():
+            return wanted
+        for info in self.list():
+            if info.name.lower() == wanted:
+                return info.id
+        return None
+
+    def switch(self, target: str) -> str | None:
+        """Reanuda una sesión por id o nombre; None si no existe."""
+        session_id = self.find(target)
+        if session_id is None:
+            return None
+        self.set_active(session_id)
+        return session_id
+
+    def rename(self, session_id: str, name: str) -> bool:
+        """Renombra la sesión (conserva sus turnos)."""
+        _info, turns = self.read(session_id)
+        return self.save(session_id, turns, name=name.strip())
+
+    def _info(self, path: Path, *, active: bool) -> SessionInfo | None:
+        _info, turns = self.read(path.stem)
+        if not path.is_file():
+            return None
+        return SessionInfo(
+            id=path.stem,
+            name=_info.name,
+            turns=len(turns),
+            updated_at=_info.updated_at,
+            active=active,
+        )

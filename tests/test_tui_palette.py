@@ -38,5 +38,6 @@ def test_help_covers_the_whole_feature_set() -> None:
         "skill-delete", "curate", "tasks", "status", "inspect", "stats",
         "doctor", "setup", "config", "mode", "safe-mode", "reset", "restore",
         "snapshots", "clear", "quit", "help", "changes", "undo-task",
+        "sessions", "session",
     }
     assert expected <= names

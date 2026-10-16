@@ -299,6 +299,30 @@ class Session:
         if self._chat is not None:
             self._chat.reset()
 
+    def sessions(self):
+        """Sesiones de conversación del proyecto (la activa primero)."""
+        self.chat()
+        return self._chat.sessions() if self._chat is not None else []
+
+    def new_session(self, name: str = "") -> str:
+        """Crea una sesión vacía, la deja activa y devuelve su id."""
+        chat = self.chat()
+        session_id = chat.new_session(name)
+        self._restored = 0
+        return session_id
+
+    def use_session(self, target: str) -> str | None:
+        """Reanuda una sesión por id o por nombre (None si no existe)."""
+        chat = self.chat()
+        session_id = chat.use_session(target)
+        if session_id is not None:
+            self._restored = len(chat.turns())
+        return session_id
+
+    def rename_session(self, name: str) -> bool:
+        """Renombra la sesión activa."""
+        return self.chat().rename_session(name)
+
     def conversation(self) -> tuple[Turn, ...]:
         """Turnos de la conversación actual."""
         return self._chat.recent() if self._chat is not None else ()

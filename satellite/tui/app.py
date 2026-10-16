@@ -640,6 +640,64 @@ class SatelliteTUI(App):
         turns = self.session.conversation()
         self._log(render.conversation_table(turns), plain=f"history={len(turns)}")
 
+    def _cmd_sessions(self, arg: str) -> None:
+        """Lista las conversaciones guardadas (la activa con ●)."""
+        infos = self.session.sessions()
+        if not infos:
+            self._log(Text("(sin sesiones guardadas)", style="dim"), plain="sessions=0")
+            return
+        lines = [
+            f" {'●' if info.active else ' '} {info.id}  {info.name}  ({info.turns} turnos)"
+            for info in infos
+        ]
+        self._log(Text("\n".join(lines)), plain=f"sessions={len(infos)}")
+
+    def _cmd_session(self, arg: str) -> None:
+        """``/session new [nombre]``, ``/session use <id|nombre>``, ``/session name <t>``."""
+        partes = arg.strip().split(" ", 1)
+        accion = partes[0].lower() if partes and partes[0] else ""
+        resto = partes[1].strip() if len(partes) > 1 else ""
+        if accion == "new":
+            session_id = self.session.new_session(resto)
+            self._log(
+                Text(f"sesión nueva: {session_id}", style="green"),
+                plain=f"sesión nueva: {session_id}",
+            )
+            return
+        if accion == "use":
+            encontrada = self.session.use_session(resto) if resto else None
+            if encontrada is None:
+                self._log(
+                    Text("no existe esa sesión (mira /sessions)", style="yellow"),
+                    plain="no existe esa sesión (mira /sessions)",
+                )
+                return
+            self._log(
+                Text(f"sesión activa: {encontrada}", style="green"),
+                plain=f"sesión activa: {encontrada}",
+            )
+            return
+        if accion == "name":
+            if not resto:
+                self._log(
+                    Text("uso: /session name <nombre>", style="yellow"),
+                    plain="uso: /session name <nombre>",
+                )
+                return
+            self.session.rename_session(resto)
+            self._log(
+                Text(f"sesión renombrada: {resto}", style="green"),
+                plain=f"sesión renombrada: {resto}",
+            )
+            return
+        self._log(
+            Text(
+                "uso: /session <new [nombre] | use <id|nombre> | name <nombre>>",
+                style="yellow",
+            ),
+            plain="uso: /session <new [nombre] | use <id|nombre> | name <nombre>>",
+        )
+
     def _cmd_create(self, arg: str) -> None:
         if not arg.strip():
             self._log(Text("uso: /create <necesidad de capacidad>", style="yellow"))
