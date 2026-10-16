@@ -30,6 +30,7 @@ class RuntimeServices:
     provider: LLMProvider | None = None
     sink: EventSink | None = None
     approval: object | None = None
+    cancel: object | None = None
     skills: object | None = None
     sandbox: object | None = None
     delegation: object | None = None

@@ -1,4 +1,4 @@
-"""Cancelación del turno en curso: corta la tarea y no disfraza el resultado."""
+"""Cancelación del turno en la app: cooperativa cuando el runtime cede, y si no, corte."""
 
 from __future__ import annotations
 
@@ -25,51 +25,98 @@ class RecordingStore:
 
 
 class SlowSession:
-    """Un turno que no termina solo: sólo lo corta la cancelación."""
+    """Un turno que no termina solo: sólo lo corta la cancelación dura."""
 
     def __init__(self, root, home=None) -> None:
         self.root = Path(root)
         self.bus = EventBus()
         self.persistence = RecordingStore()
-        self.empezado = asyncio.Event()
 
     def runtime(self, *, force: bool = False):
         return (None, self.bus, self.persistence, None)
 
     async def send_message(self, text, *, approval=None, plan_mode=False, extra_metadata=None):
-        self.empezado.set()
         await asyncio.Event().wait()  # nunca se pone
         raise AssertionError("no debería llegar aquí")
 
 
-def make_backend(tmp_path: Path) -> DesktopBackend:
+class OrchestratorWithCancel:
+    """Orquestador que acepta la cancelación cooperativa."""
+
+    def __init__(self) -> None:
+        self.pedidos: list[str] = []
+
+    def cancel(self, task_id: str = "", reason: str = "") -> dict:
+        self.pedidos.append(reason)
+        return {"cancelled": True, "task_id": task_id, "reason": reason or "cancelado"}
+
+
+class CooperativeSession(SlowSession):
+    """Turno que cede a la petición y termina, como el runtime de verdad entre nodos."""
+
+    def __init__(self, root, home=None) -> None:
+        super().__init__(root, home)
+        self.orchestrator = OrchestratorWithCancel()
+
+    def runtime(self, *, force: bool = False):
+        return (self.orchestrator, self.bus, self.persistence, None)
+
+    async def send_message(self, text, *, approval=None, plan_mode=False, extra_metadata=None):
+        await asyncio.sleep(0.05)
+        return {"text": "", "task_id": "t1", "status": "cancelled", "cancelled": True}
+
+
+def make_backend(tmp_path: Path, factory=SlowSession) -> DesktopBackend:
     return DesktopBackend(
         tmp_path,
         token=TOKEN,
         home=tmp_path / "home",
-        session_factory=SlowSession,
+        session_factory=factory,
         recents_path=tmp_path / "recents.json",
     )
 
 
-def test_cancelling_a_turn_returns_a_honest_answer(tmp_path: Path) -> None:
+async def esperar_turno(backend: DesktopBackend) -> None:
+    for _ in range(100):
+        if backend._turnos:
+            return
+        await asyncio.sleep(0.01)
+
+
+def test_the_cooperative_path_is_preferred_and_said(tmp_path: Path) -> None:
+    backend = make_backend(tmp_path, CooperativeSession)
+
+    async def escenario():
+        turno = asyncio.create_task(backend.send("haz algo largo"))
+        await esperar_turno(backend)
+        pedido = await backend.cancel_turn()
+        await turno
+        return pedido, backend.session().orchestrator.pedidos
+
+    pedido, pedidos = asyncio.run(escenario())
+
+    assert pedido["cancelled"] is True
+    assert pedido["how"] == "cooperative"
+    assert "paró entre nodos" in pedido["note"]
+    assert pedidos and "app" in pedidos[0]
+
+
+def test_without_runtime_support_it_cuts_the_task_and_says_so(tmp_path: Path) -> None:
     backend = make_backend(tmp_path)
 
     async def escenario():
         turno = asyncio.create_task(backend.send("haz algo largo"))
-        for _ in range(100):
-            if backend._turnos:
-                break
-            await asyncio.sleep(0.01)
-        pedido = backend.cancel_turn()
+        await esperar_turno(backend)
+        pedido = await backend.cancel_turn()
         return pedido, await turno
 
     pedido, respuesta = asyncio.run(escenario())
 
     assert pedido["cancelled"] is True
+    assert pedido["how"] == "hard"
+    assert "no cedió" in pedido["note"]
     assert respuesta["cancelled"] is True
     assert respuesta["status"] == "cancelled"
-    assert "queda en el historial" in respuesta["note"]
     assert backend._turnos == {}  # no queda un turno colgando
 
 
@@ -77,7 +124,7 @@ def test_cancelling_without_a_turn_says_so(tmp_path: Path) -> None:
     backend = make_backend(tmp_path)
 
     with pytest.raises(BackendError) as fallo:
-        backend.cancel_turn()
+        asyncio.run(backend.cancel_turn())
 
     assert fallo.value.code == "no_turn"
     assert fallo.value.status == 409
@@ -96,7 +143,7 @@ def test_cancelling_rejects_the_permissions_that_were_waiting(tmp_path: Path) ->
             if backend._turnos and port.pending():
                 break
             await asyncio.sleep(0.01)
-        backend.cancel_turn()
+        await backend.cancel_turn()
         decision = await espera
         await turno
         return decision, backend.pending_approvals()

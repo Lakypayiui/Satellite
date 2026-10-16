@@ -99,6 +99,12 @@ class DefaultGraphRunner(GraphRunner):
             visits[node_id] = visits.get(node_id, 0) + 1
             total_steps += 1
 
+            # Cancelación pedida por el usuario: se para **entre** nodos, contando lo hecho
+            # hasta aquí, en vez de dejar el estado a medias.
+            cancel = getattr(services, "cancel", None)
+            if cancel is not None and getattr(cancel, "cancelled", False):
+                return self._cancelled(task, sink, node_id, cancel, results, attempts, started)
+
             # Límites
             if total_steps > graph.limits.max_total_steps:
                 return self._abort(
@@ -291,6 +297,31 @@ class DefaultGraphRunner(GraphRunner):
             if value is not None:
                 destino["task"][target_field] = value
         return destino
+
+    def _cancelled(self, task, sink, node_id, cancel, results, attempts, started):
+        """Resultado de una cancelación: ni éxito ni fallo, y diciendo dónde se paró."""
+        reason = str(getattr(cancel, "reason", "") or "cancelado")
+        all_findings = []
+        for r in results.values():
+            all_findings.extend(r.findings)
+        result = TaskResult(
+            task_id=task.task_id,
+            status=TaskStatus.CANCELLED,
+            summary=f"Tarea cancelada: {reason} (se paró antes de '{node_id}')",
+            output={"cancelled": True, "reason": reason, "nodes_done": len(results)},
+            findings=tuple(all_findings),
+            metrics=ExecutionMetrics(
+                duration_ms=int((time.monotonic() - started) * 1000),
+                retries=sum(attempts.values()),
+            ),
+        )
+        self._emit(
+            sink,
+            task,
+            EventType.TASK_FINISHED,
+            payload={"status": result.status.value, "reason": reason},
+        )
+        return result
 
     def _abort(self, task, sink, node_id, error, results, attempts, started):
         """Aborta con TaskResult FAILED y emite NODE_STUCK."""

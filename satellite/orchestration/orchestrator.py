@@ -94,6 +94,12 @@ class DefaultOrchestrator(Orchestrator):
                     ),
                 )
 
+        # Ejecución nueva: se limpia el token antes de empezar. Si alguien canceló durante
+        # la planificación, la petición sigue viva y el runner la verá.
+        cancel = getattr(self.services, "cancel", None)
+        if cancel is not None:
+            cancel.reset()
+
         if self.allow_chat_direct and not execute_choice and self.services.provider is not None:
             if await async_is_chat_goal(task, self.services.provider):
                 return await self._finish(task, await self._answer_direct(task))
@@ -428,6 +434,18 @@ class DefaultOrchestrator(Orchestrator):
             ),
             error=result.error,
         )
+
+    def cancel(self, task_id: str = "", reason: str = "") -> dict:
+        """Pide cancelar la ejecución en curso (cooperativa: se para entre nodos).
+
+        El runtime ejecuta una tarea cada vez, así que el id es informativo: se devuelve en
+        la respuesta para que quien lo pidió sepa a qué se refería.
+        """
+        cancel = getattr(self.services, "cancel", None)
+        if cancel is None:
+            return {"cancelled": False, "reason": "este runtime no tiene cancelación"}
+        cancel.request(reason or "cancelado")
+        return {"cancelled": True, "task_id": task_id, "reason": cancel.reason}
 
     async def _finish(self, task: Task, result: TaskResult) -> TaskResult:
         """Persiste el estado final y emite TASK_FINISHED."""

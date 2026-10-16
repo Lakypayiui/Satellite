@@ -92,9 +92,26 @@ def get_handlers(bundle: RuntimeBundle) -> dict[str, callable]:
             return {"isError": True, "text": f"error: {exc}"}
 
     async def satellite_cancel(arguments: dict) -> dict:
+        """Pide cancelar la ejecución en curso del proyecto (cooperativa, entre nodos).
+
+        Antes sólo soltaba el runtime de la caché, que no detenía nada: ahora se pide la
+        cancelación de verdad y se dice si había algo que cancelar.
+        """
         task_id = arguments.get("task_id", "")
-        bundle._active.pop(task_id, None)
-        return {"isError": False, "text": f"cancelación pedida (best-effort) para {task_id}"}
+        root = bundle._active.pop(task_id, None)
+        pedido: dict = {"cancelled": False}
+        if root:
+            orchestrator = bundle.get(root)["orchestrator"]
+            cancel = getattr(orchestrator, "cancel", None)
+            if callable(cancel):
+                pedido = cancel(task_id, "cancelado desde MCP")
+        if not pedido.get("cancelled"):
+            return {"isError": False, "text": f"no hay ejecución que cancelar para {task_id}"}
+        return {
+            "isError": False,
+            "text": f"cancelación pedida para {task_id} ({pedido.get('reason', '')}); "
+            "se para entre nodos, lo ya hecho queda",
+        }
 
     async def satellite_approvals(arguments: dict) -> dict:
         """Propuestas que esperan una decisión humana (tool de solo lectura)."""

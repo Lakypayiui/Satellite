@@ -56,6 +56,7 @@ class TaskStatus(Enum):
     FAILED = "failed"
     NEEDS_USER_INPUT = "needs_user_input"
     PARTIAL = "partial"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)

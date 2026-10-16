@@ -17,6 +17,7 @@ class AgentStatus(Enum):
     FAILED = "failed"
     NEEDS_USER_INPUT = "needs_user_input"
     SKIPPED = "skipped"
+    CANCELLED = "cancelled"
 
 
 class FindingSeverity(Enum):

@@ -310,14 +310,19 @@ class DesktopBackend:
         await bridge.drain()
         return to_jsonable(reply)
 
-    def cancel_turn(self, project_root=None) -> dict:
-        """Cancela el turno en curso. Corta la tarea; no deshace lo ya hecho."""
+    CANCEL_GRACE_S = 2.5
+
+    async def cancel_turn(self, project_root=None) -> dict:
+        """Cancela el turno en curso: primero se le pide al runtime, y si no cede, se corta.
+
+        Se dice siempre cuál de los dos caminos fue, porque no significan lo mismo: la
+        cancelación cooperativa para el runtime entre nodos y deja el estado contable; el
+        corte duro interrumpe lo que esté en vuelo.
+        """
         key = str(self.resolve(project_root))
         tarea = self._turnos.get(key)
         if tarea is None or tarea.done():
             raise BackendError("no_turn", "no hay ningún turno en curso", 409)
-        self._cancelados.add(key)
-        tarea.cancel()
         # Los permisos que estaban esperando decisión se quedan sin quien los espere: se
         # rechazan para que la interfaz no muestre tarjetas fantasma.
         port = self.approval(project_root)
@@ -326,7 +331,39 @@ class DesktopBackend:
                 str(item.get("proposal_id", "")),
                 decision_from("reject", reason="turno cancelado"),
             )
-        return {"cancelled": True, "note": "cancelación pedida al turno en curso"}
+        pedido = self.request_cancel(project_root)
+        if pedido:
+            try:
+                await asyncio.wait_for(asyncio.shield(tarea), timeout=self.CANCEL_GRACE_S)
+                return {
+                    "cancelled": True,
+                    "how": "cooperative",
+                    "note": "el runtime paró entre nodos; lo hecho queda en el historial",
+                }
+            except Exception:  # noqa: BLE001 — no cedió a tiempo (o terminó mal): se corta
+                pass
+        self._cancelados.add(key)
+        tarea.cancel()
+        return {
+            "cancelled": True,
+            "how": "cooperative" if pedido else "hard",
+            "note": (
+                "el runtime no cedió en "
+                f"{self.CANCEL_GRACE_S:.1f}s y corté la tarea; lo que estaba en vuelo "
+                "puede haber seguido un momento"
+            ),
+        }
+
+    def request_cancel(self, project_root=None) -> bool:
+        """Pide la cancelación al runtime. ``False`` si este runtime no la soporta."""
+        try:
+            orchestrator = self.session(project_root).runtime()[0]
+        except Exception:  # noqa: BLE001 — sin runtime no hay nada que cancelar
+            return False
+        cancel = getattr(orchestrator, "cancel", None)
+        if not callable(cancel):
+            return False
+        return bool(cancel("", "cancelado desde la app").get("cancelled"))
 
     # --- tareas, cambios y trabajos ---
 

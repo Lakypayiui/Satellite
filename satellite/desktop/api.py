@@ -167,9 +167,9 @@ def build_router(backend: DesktopBackend, auth: Callable) -> APIRouter:
         return await backend.send(payload.text, plan_mode=payload.plan_mode)
 
     @router.post("/turns/cancel")
-    def cancel_turn() -> dict:
-        """Corta el turno en curso. No deshace lo ya hecho, y lo dice."""
-        return backend.cancel_turn()
+    async def cancel_turn() -> dict:
+        """Corta el turno en curso: cooperativa si el runtime cede, y si no, lo corta."""
+        return await backend.cancel_turn()
 
     # --- aprobaciones ---
 

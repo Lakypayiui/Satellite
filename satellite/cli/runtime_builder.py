@@ -199,6 +199,8 @@ def build_runtime(project_root: Path, *, approval: object | None = None):
     )
 
     store = FileStore(project_root)
+    from satellite.orchestration.cancel import CancelToken
+
     services = RuntimeServices(
         registry=registry,
         factory=factory,
@@ -207,6 +209,7 @@ def build_runtime(project_root: Path, *, approval: object | None = None):
         provider=provider,
         sink=bus,
         approval=approval_port,
+        cancel=CancelToken(),
         skills=skill_registry,
         sandbox=sandbox,
         delegation=delegation,
