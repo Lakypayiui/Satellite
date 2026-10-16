@@ -346,11 +346,16 @@ class DesktopBackend:
         tarea.cancel()
         return {
             "cancelled": True,
-            "how": "cooperative" if pedido else "hard",
+            # Aquí el método fue el corte, aunque antes se pidiera la vía cooperativa: si
+            # se llegó hasta aquí es porque el runtime no cedió. Se dice aparte que se pidió.
+            "how": "hard",
+            "cooperative_requested": pedido,
             "note": (
-                "el runtime no cedió en "
-                f"{self.CANCEL_GRACE_S:.1f}s y corté la tarea; lo que estaba en vuelo "
-                "puede haber seguido un momento"
+                f"el runtime no cedió en {self.CANCEL_GRACE_S:.1f}s y corté la tarea; "
+                "lo que estaba en vuelo puede haber seguido un momento"
+                if pedido
+                else "este runtime no ofrece cancelación cooperativa: corté la tarea "
+                "directamente; lo que estaba en vuelo puede haber seguido un momento"
             ),
         }
 

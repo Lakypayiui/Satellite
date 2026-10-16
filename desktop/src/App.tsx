@@ -184,8 +184,13 @@ export function App() {
   /** Corta el turno en curso. Lo ya hecho queda: no se finge que la tarea no pasó. */
   async function cancelarTurno() {
     try {
-      await api("/turns/cancel", { method: "POST" });
-      setAviso("turno cancelado; lo que ya se hizo queda en el historial");
+      const respuesta = await api<{ how?: string; note?: string }>("/turns/cancel", {
+        method: "POST",
+      });
+      const via = respuesta.how === "cooperative" ? "cooperativa" : "corte forzado";
+      setAviso(
+        `turno cancelado (${via}): ${respuesta.note ?? "lo hecho queda en el historial"}`,
+      );
     } catch (exc) {
       setAviso(mensajeDe(exc));
     } finally {

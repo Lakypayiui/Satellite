@@ -66,6 +66,17 @@ class CooperativeSession(SlowSession):
         return {"text": "", "task_id": "t1", "status": "cancelled", "cancelled": True}
 
 
+class CooperativeButStuckSession(SlowSession):
+    """Acepta la petición de cancelación pero no cede: el turno nunca termina."""
+
+    def __init__(self, root, home=None) -> None:
+        super().__init__(root, home)
+        self.orchestrator = OrchestratorWithCancel()
+
+    def runtime(self, *, force: bool = False):
+        return (self.orchestrator, self.bus, self.persistence, None)
+
+
 def make_backend(tmp_path: Path, factory=SlowSession) -> DesktopBackend:
     return DesktopBackend(
         tmp_path,
@@ -114,10 +125,34 @@ def test_without_runtime_support_it_cuts_the_task_and_says_so(tmp_path: Path) ->
 
     assert pedido["cancelled"] is True
     assert pedido["how"] == "hard"
-    assert "no cedió" in pedido["note"]
+    assert pedido["cooperative_requested"] is False  # no había a quién pedírselo
+    assert "no ofrece cancelación cooperativa" in pedido["note"]
     assert respuesta["cancelled"] is True
     assert respuesta["status"] == "cancelled"
     assert backend._turnos == {}  # no queda un turno colgando
+
+
+def test_when_the_runtime_does_not_give_in_the_method_reported_is_the_cut(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Se pidió la vía cooperativa, pero la que se usó fue el corte: eso es lo que se dice."""
+    monkeypatch.setattr(DesktopBackend, "CANCEL_GRACE_S", 0.2)
+    backend = make_backend(tmp_path, CooperativeButStuckSession)
+
+    async def escenario():
+        turno = asyncio.create_task(backend.send("haz algo largo"))
+        await esperar_turno(backend)
+        pedido = await backend.cancel_turn()
+        await turno
+        return pedido, backend.session().orchestrator.pedidos
+
+    pedido, pedidos = asyncio.run(escenario())
+
+    assert pedido["cancelled"] is True
+    assert pedido["how"] == "hard"  # el método usado, no el intentado
+    assert pedido["cooperative_requested"] is True  # aunque se pidiera antes
+    assert "no cedió" in pedido["note"]
+    assert pedidos and "app" in pedidos[0]  # y consta que se intentó
 
 
 def test_cancelling_without_a_turn_says_so(tmp_path: Path) -> None:
