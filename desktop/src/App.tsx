@@ -1,6 +1,6 @@
-/** Armazón de la app: estado del proyecto abierto, chat, panel derecho y atajos. */
+/** Armazón: cabecera de una línea, chat, panel derecho, paleta de comandos y modales. */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   Approval,
@@ -8,7 +8,7 @@ import {
   ConfigView,
   JobInfo,
   JobOutput,
-  RestorePreview,
+  SavedProviderView,
   SessionInfo,
   Status,
   StreamItem,
@@ -19,6 +19,7 @@ import {
   mensajeDe,
 } from "./api";
 import { Chat } from "./Chat";
+import { CommandPalette } from "./CommandPalette";
 import { RightPanel } from "./RightPanel";
 import { Settings } from "./Settings";
 import { Sidebar } from "./Sidebar";
@@ -27,6 +28,17 @@ export type Pestana = "actividad" | "agentes" | "skills" | "cambios" | "trabajos
 
 const MAX_EVENTOS = 400;
 const CADA_MS = 1500;
+
+interface Confirmacion {
+  titulo: string;
+  detalle: string;
+  accion: () => void;
+}
+
+interface Detalle {
+  titulo: string;
+  texto: string;
+}
 
 export function App() {
   const [status, setStatus] = useState<Status | null>(null);
@@ -44,13 +56,14 @@ export function App() {
   const [config, setConfig] = useState<ConfigView | null>(null);
   const [cambios, setCambios] = useState<ChangeSet | null>(null);
   const [salida, setSalida] = useState<JobOutput | null>(null);
-  const [restauracion, setRestauracion] = useState<RestorePreview | null>(null);
   const [ocupado, setOcupado] = useState(false);
   const [pestana, setPestana] = useState<Pestana>("actividad");
   const [izq, setIzq] = useState(true);
   const [der, setDer] = useState(true);
   const [ajustes, setAjustes] = useState(false);
-  const ocupadoRef = useRef(false);
+  const [paleta, setPaleta] = useState(false);
+  const [confirmacion, setConfirmacion] = useState<Confirmacion | null>(null);
+  const [detalle, setDetalle] = useState<Detalle | null>(null);
 
   const cargarTodo = useCallback(async () => {
     const [estado, listaProyectos, listaSesiones, listaTareas, listaTrabajos, vistaConfig] =
@@ -70,15 +83,16 @@ export function App() {
     setTrabajos(listaTrabajos.jobs);
     setConfig(vistaConfig);
     if (listaSesiones.current) {
-      const detalle = await api<{ turns: Turn[] }>(`/sessions/${listaSesiones.current}/turns`);
-      setTurnos(detalle.turns);
+      const detalleSesion = await api<{ turns: Turn[] }>(
+        `/sessions/${listaSesiones.current}/turns`,
+      );
+      setTurnos(detalleSesion.turns);
     }
   }, []);
 
   const recargarPermisos = useCallback(async () => {
     const respuesta = await api<{ pending: Approval[] }>("/approvals");
     setPermisos(respuesta.pending);
-    return respuesta.pending;
   }, []);
 
   useEffect(() => {
@@ -99,9 +113,6 @@ export function App() {
       if (tipo === "task_finished" || tipo === "task_started") {
         void api<{ tasks: TaskItem[] }>("/tasks").then((r) => setTareas(r.tasks)).catch(() => {});
       }
-      if (tipo === "policy_violation") {
-        setAviso("el agente pidió un permiso que se denegó: mira las aprobaciones pendientes");
-      }
     });
     return () => {
       cortarCaida();
@@ -109,8 +120,8 @@ export function App() {
     };
   }, [cargarTodo, recargarPermisos]);
 
-  // Mientras hay un turno en marcha, el runtime puede estar esperando un permiso: no emite
-  // evento para eso, así que se mira la lista de pendientes a intervalos cortos.
+  // Con un turno en marcha el runtime puede estar esperando un permiso, y eso no emite
+  // evento: se mira la lista de pendientes y los trabajos a intervalos cortos.
   useEffect(() => {
     if (!ocupado) return;
     const timer = setInterval(() => {
@@ -121,14 +132,13 @@ export function App() {
   }, [ocupado, recargarPermisos]);
 
   useEffect(() => {
-    ocupadoRef.current = ocupado;
-  }, [ocupado]);
-
-  useEffect(() => {
     const alPulsar = (evento: KeyboardEvent) => {
       if (!evento.ctrlKey) return;
       const tecla = evento.key.toLowerCase();
-      if (tecla === "b") {
+      if (tecla === "k") {
+        evento.preventDefault();
+        setPaleta((valor) => !valor);
+      } else if (tecla === "b") {
         evento.preventDefault();
         setIzq((valor) => !valor);
       } else if (tecla === "j") {
@@ -141,6 +151,7 @@ export function App() {
         evento.preventDefault();
         void nuevaSesion();
       } else if (evento.key === "Escape") {
+        setPaleta(false);
         setAjustes(false);
       }
     };
@@ -152,13 +163,12 @@ export function App() {
     setAviso(null);
     setOcupado(true);
     try {
-      const respuesta = await api<{ text: string; task_id: string; error?: string | null }>(
-        "/messages",
-        { method: "POST", body: { text: texto, plan_mode: planMode } },
-      );
+      const respuesta = await api<{ error?: string | null }>("/messages", {
+        method: "POST",
+        body: { text: texto, plan_mode: planMode },
+      });
       if (respuesta.error) setAviso(respuesta.error);
       await cargarTodo();
-      setPestana("actividad");
     } catch (exc) {
       setAviso(mensajeDe(exc));
     } finally {
@@ -173,9 +183,9 @@ export function App() {
         method: "POST",
         body: { name: "" },
       });
+      setTurnos([]);
       await cargarTodo();
       setSesionActiva(respuesta.session_id);
-      setTurnos([]);
     } catch (exc) {
       setAviso(mensajeDe(exc));
     }
@@ -236,29 +246,41 @@ export function App() {
     }
   }
 
-  async function pedirRestauracion(taskId: string) {
-    try {
-      setRestauracion(await api<RestorePreview>(`/tasks/${taskId}/restore`, { method: "POST", body: {} }));
-    } catch (exc) {
-      setAviso(mensajeDe(exc));
-    }
+  function pedirRestauracion(taskId: string) {
+    void (async () => {
+      try {
+        const previa = await api<{ preview?: ChangeSet }>(`/tasks/${taskId}/restore`, {
+          method: "POST",
+          body: {},
+        });
+        setDetalle({
+          titulo: `Se descartará lo hecho en la tarea ${taskId}`,
+          texto: previa.preview?.diff ?? "sin diff",
+        });
+        setConfirmacion({
+          titulo: "Restaurar los cambios de la tarea",
+          detalle: `${previa.preview?.files.length ?? 0} archivo(s) volverán a su estado anterior.`,
+          accion: () => void confirmarRestauracion(taskId),
+        });
+      } catch (exc) {
+        setAviso(mensajeDe(exc));
+      }
+    })();
   }
 
   async function confirmarRestauracion(taskId: string) {
     try {
-      const resultado = await api<RestorePreview>(`/tasks/${taskId}/restore`, {
-        method: "POST",
-        body: { confirm: true },
-      });
-      setRestauracion(null);
-      const restaurados = resultado.result?.restored?.length ?? 0;
-      const borrados = resultado.result?.removed?.length ?? 0;
-      setAviso(`restaurados ${restaurados} archivo(s) y eliminados ${borrados}`);
+      const resultado = await api<{
+        result?: { restored?: string[]; removed?: string[] };
+      }>(`/tasks/${taskId}/restore`, { method: "POST", body: { confirm: true } });
+      setDetalle(null);
+      setAviso(
+        `restaurados ${resultado.result?.restored?.length ?? 0}, eliminados ${resultado.result?.removed?.length ?? 0}`,
+      );
       await cargarTodo();
       await cargarCambios(taskId);
     } catch (exc) {
       setAviso(mensajeDe(exc));
-      setRestauracion(null);
     }
   }
 
@@ -281,17 +303,113 @@ export function App() {
     }
   }
 
-  async function reintentar() {
-    setCaido(null);
-    const sobre = await bridge.restart();
-    if (!sobre.ok) {
-      setCaido(sobre.error?.message ?? "no se pudo reiniciar el backend");
-      return;
-    }
+  async function verificar(ruta: string, titulo: string, metodo = "GET", cuerpo?: unknown) {
     try {
+      const datos = await api<Record<string, unknown>>(ruta, {
+        method: metodo,
+        ...(cuerpo === undefined ? {} : { body: cuerpo }),
+      });
+      setDetalle({ titulo, texto: JSON.stringify(datos, null, 2) });
       await cargarTodo();
     } catch (exc) {
-      setAviso(mensajeDe(exc));
+      setDetalle({ titulo, texto: mensajeDe(exc) });
+    }
+  }
+
+  async function ejecutarComando(clave: string, argumento: string) {
+    switch (clave) {
+      case "proyecto":
+        await abrirProyecto();
+        break;
+      case "sesion-nueva":
+        await nuevaSesion();
+        break;
+      case "proveedor":
+      case "roles":
+      case "politica":
+        setAjustes(true);
+        break;
+      case "sandbox":
+        await verificar("/setup", "setup · sandbox", "POST");
+        break;
+      case "doctor":
+        await verificar("/doctor", "doctor");
+        break;
+      case "stats":
+        await verificar("/stats", "stats");
+        break;
+      case "compactar":
+        await verificar("/compact", "compactar contexto", "POST");
+        break;
+      case "snapshots":
+        await verificar("/snapshots", "snapshots");
+        break;
+      case "config":
+        setDetalle({
+          titulo: "configuración (sin secretos)",
+          texto: JSON.stringify(config?.config ?? {}, null, 2),
+        });
+        break;
+      case "reset":
+        setConfirmacion({
+          titulo: "Reset del estado base",
+          detalle: "Borra los agentes y las skills creados en este proyecto.",
+          accion: () => void verificar("/reset", "reset", "POST", { keep_skills: true, confirm: true }),
+        });
+        break;
+      case "agentes":
+        setPestana("agentes");
+        setDer(true);
+        break;
+      case "crear-agente":
+        await verificar("/agents", "crear agente", "POST", { need: argumento });
+        break;
+      case "skills-buscar":
+        await verificar(`/skills/search?q=${encodeURIComponent(argumento)}`, "buscar skills");
+        break;
+      case "skills-borrar":
+        setConfirmacion({
+          titulo: `Borrar la skill ${argumento}`,
+          detalle: "Se elimina del catálogo de skills del proyecto. No se puede deshacer.",
+          accion: () => void verificar(`/skills/${argumento}`, "borrar skill", "DELETE"),
+        });
+        break;
+      case "curar":
+        await verificar("/curate", "curador de skills", "POST", { request: argumento });
+        break;
+      case "cambios":
+        setPestana("cambios");
+        setDer(true);
+        break;
+      case "trabajos":
+        setPestana("trabajos");
+        setDer(true);
+        await verificar("/jobs", "trabajos");
+        break;
+      case "parar-trabajo":
+        await pararTrabajo(argumento);
+        break;
+      case "paneles":
+        setIzq((valor) => !valor);
+        setDer((valor) => !valor);
+        break;
+      case "atajos":
+        setDetalle({
+          titulo: "atajos",
+          texto: [
+            "Ctrl+K   paleta de comandos",
+            "Ctrl+N   nueva conversación",
+            "Ctrl+B   panel izquierdo",
+            "Ctrl+J   panel derecho",
+            "Ctrl+,   ajustes",
+            "Enter    enviar · Shift+Enter salta línea",
+            "Esc      cerrar",
+          ].join("\n"),
+        });
+        break;
+      case "salir":
+        window.close();
+        break;
     }
   }
 
@@ -320,15 +438,36 @@ export function App() {
     }
   }
 
+  async function reintentar() {
+    setCaido(null);
+    const sobre = await bridge.restart();
+    if (!sobre.ok) {
+      setCaido(sobre.error?.message ?? "no se pudo reiniciar el backend");
+      return;
+    }
+    try {
+      await cargarTodo();
+    } catch (exc) {
+      setAviso(mensajeDe(exc));
+    }
+  }
+
+  const contextoAlto = (status?.context_percent ?? 0) >= 85;
+
   return (
     <div className="layout">
       <Sidebar
-        contraido={!izq}
-        proyectos={proyectos}
-        actual={status?.project_root ?? ""}
+        plegado={!izq}
+        ruta={status?.project_root ?? ""}
+        recientes={proyectos}
         sesiones={sesiones}
         activa={sesionActiva}
-        onToggle={() => setIzq((valor) => !valor)}
+        proveedor={
+          (config?.providers as SavedProviderView[] | undefined)?.find(
+            (item) => item.id === config?.active_provider,
+          ) ?? null
+        }
+        onPlegar={() => setIzq((valor) => !valor)}
         onAbrir={abrirProyecto}
         onNueva={() => void nuevaSesion()}
         onUsar={(id) => void usarSesion(id)}
@@ -336,57 +475,54 @@ export function App() {
       />
 
       <div className="centro">
-        <header className="barra">
-          <button className="ghost" onClick={() => setIzq((valor) => !valor)} title="Ctrl+B">
-            ☰
-          </button>
-          <div className="crece">
-            <div className="title">Satellite</div>
-            <div className="path" title={status?.project_root ?? ""}>
-              {status?.project_root ?? "sin proyecto"}
-            </div>
-          </div>
-          <span className={status?.runtime_ready ? "chip ok" : "chip warn"}>
+        <header className="cabecera">
+          <span className="proyecto" title={status?.project_root ?? ""}>
+            {status?.project_root ?? "sin proyecto"}
+          </span>
+          <span className="sep">·</span>
+          <span className={status?.runtime_ready ? "dato" : "dato alerta"}>
             {status?.runtime_ready ? "runtime listo" : "runtime no disponible"}
           </span>
-          <span className="chip">{status?.provider || "sin proveedor"}</span>
-          <span className="chip">{status?.model || "sin modelo"}</span>
-          <span className={status?.policy_mode === "unrestricted" ? "chip warn" : "chip"}>
-            política: {status?.policy_mode ?? "ask"}
+          <span className="sep">·</span>
+          <span className="dato">
+            {status?.provider || "sin proveedor"}/{status?.model || "sin modelo"}
           </span>
-          <span className="chip" title="aislamiento de proceso, no del sistema operativo">
-            sandbox {status?.sandbox ?? "N0"}
+          <span className="sep">·</span>
+          <span className={status?.policy_mode === "unrestricted" ? "dato alerta" : "dato"}>
+            {status?.policy_mode ?? "ask"}
           </span>
-          <span className="chip">contexto {status?.context_percent ?? 0}%</span>
-          <button onClick={() => setAjustes(true)} title="Ctrl+,">
-            Ajustes
-          </button>
-          <button className="ghost" onClick={() => setDer((valor) => !valor)} title="Ctrl+J">
-            ▤
+          <span className="sep">·</span>
+          <span className="dato">sandbox {status?.sandbox ?? "N0"}</span>
+          <span className="sep">·</span>
+          <span className={contextoAlto ? "dato alerta" : "dato"}>contexto {status?.context_percent ?? 0}%</span>
+          <button className="quiet" onClick={() => setPaleta(true)}>
+            ctrl+k
           </button>
         </header>
 
         {caido && (
-          <div className="franja">
-            <span className="chip bad">backend caído</span>
-            <span>{caido}</span>
-            <button className="primary" onClick={() => void reintentar()}>
-              Reintentar
-            </button>
-          </div>
-        )}
-        {aviso && (
-          <div className="franja">
-            <span>{aviso}</span>
-            <button className="ghost" onClick={() => setAviso(null)}>
-              Cerrar
+          <div className="linea-aviso mal">
+            <span>backend caído</span>
+            <span style={{ flex: 1 }}>{caido}</span>
+            <button className="quiet" onClick={() => void reintentar()}>
+              reintentar
             </button>
           </div>
         )}
         {status && !status.runtime_ready && status.runtime_error && (
-          <div className="franja">
-            <span className="chip warn">runtime</span>
-            <span>{status.runtime_error}</span>
+          <div className="linea-aviso">
+            <span style={{ flex: 1 }}>{status.runtime_error}</span>
+            <button className="quiet" onClick={() => setAjustes(true)}>
+              configurar proveedor
+            </button>
+          </div>
+        )}
+        {aviso && (
+          <div className="linea-aviso">
+            <span style={{ flex: 1 }}>{aviso}</span>
+            <button className="quiet" onClick={() => setAviso(null)}>
+              cerrar
+            </button>
           </div>
         )}
 
@@ -398,11 +534,12 @@ export function App() {
           ultimo={eventos.at(-1) ?? null}
           onEnviar={(texto, plan) => void enviar(texto, plan)}
           onPermiso={(id, decision, feedback) => void decidirPermiso(id, decision, feedback)}
+          onPaleta={() => setPaleta(true)}
         />
       </div>
 
       <RightPanel
-        contraido={!der}
+        plegado={!der}
         pestana={pestana}
         onPestana={setPestana}
         eventos={eventos}
@@ -411,43 +548,75 @@ export function App() {
         cambios={cambios}
         salida={salida}
         onVerCambios={(id) => void cargarCambios(id)}
-        onRestaurar={(id) => void pedirRestauracion(id)}
+        onRestaurar={pedirRestauracion}
         onVerSalida={(id) => void verSalida(id)}
         onParar={(id) => void pararTrabajo(id)}
-        onTrabajos={() => {
-          void api<{ jobs: JobInfo[] }>("/jobs").then((r) => setTrabajos(r.jobs)).catch(() => {});
-        }}
+        onTrabajos={() => void verificar("/jobs", "trabajos")}
+        onPaleta={() => setPaleta(true)}
       />
+
+      {paleta && (
+        <CommandPalette
+          onEjecutar={(clave, argumento) => void ejecutarComando(clave, argumento)}
+          onCerrar={() => setPaleta(false)}
+        />
+      )}
 
       {ajustes && config && (
         <Settings
           config={config}
+          safeMode={Boolean(status?.safe_mode)}
           onCerrar={() => setAjustes(false)}
           onPolitica={(modo) => void cambiarAjustes({ policy_mode: modo })}
           onModo={(activo) => void cambiarAjustes({ safe_mode: activo })}
           onProveedor={(datos) => void guardarProveedor(datos)}
+          onConfigCambiada={() => void cargarTodo()}
+          onAviso={setAviso}
+          onConfirmar={(titulo, detalle, accion) => setConfirmacion({ titulo, detalle, accion })}
         />
       )}
 
-      {restauracion && (
-        <div className="modal">
-          <div className="caja">
-            <h2>Descartar los cambios de la tarea</h2>
-            <p className="sub">
-              {restauracion.preview?.files.length ?? 0} archivo(s) volverán a su estado anterior y se
-              perderá lo que se hizo en esta tarea. Nada se ha tocado todavía.
-            </p>
-            <pre className="diff">{restauracion.preview?.diff ?? ""}</pre>
-            <div className="acciones" style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              <button
-                className="primary"
-                onClick={() => void confirmarRestauracion(restauracion.preview?.task_id ?? "")}
-              >
-                Sí, descartar
+      {detalle && (
+        <div className="ajustes" onClick={() => setDetalle(null)}>
+          <div className="hoja" onClick={(evento) => evento.stopPropagation()}>
+            <div className="cabecera-hoja">
+              <h2>{detalle.titulo}</h2>
+              <button className="quiet" onClick={() => setDetalle(null)}>
+                cerrar
               </button>
-              <button className="ghost" onClick={() => setRestauracion(null)}>
-                Cancelar
-              </button>
+            </div>
+            <pre className="salida" style={{ borderTop: 0, maxHeight: "62vh" }}>
+              {detalle.texto}
+            </pre>
+          </div>
+        </div>
+      )}
+
+      {confirmacion && (
+        <div className="ajustes" onClick={() => setConfirmacion(null)}>
+          <div className="hoja" onClick={(evento) => evento.stopPropagation()}>
+            <div className="cabecera-hoja">
+              <h2>{confirmacion.titulo}</h2>
+            </div>
+            <div className="tarjeta">
+              <p className="nota" style={{ marginTop: 0 }}>
+                {confirmacion.detalle}
+              </p>
+              <div className="acciones">
+                <button
+                  className="primary"
+                  onClick={() => {
+                    const accion = confirmacion.accion;
+                    setConfirmacion(null);
+                    accion();
+                  }}
+                >
+                  sí, adelante
+                </button>
+                <button className="quiet" onClick={() => setConfirmacion(null)}>
+                  cancelar
+                </button>
+              </div>
             </div>
           </div>
         </div>

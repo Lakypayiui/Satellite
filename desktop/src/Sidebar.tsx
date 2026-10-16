@@ -1,82 +1,89 @@
-/** Barra lateral: proyecto abierto, recientes y conversaciones del proyecto. */
+/** Barra lateral: proyecto abierto, conversaciones y recientes. Sin adornos. */
 
 import { useState } from "react";
 
-import { SessionInfo } from "./api";
+import { SavedProviderView, SessionInfo } from "./api";
 
 interface Props {
-  contraido: boolean;
-  proyectos: string[];
-  actual: string;
+  plegado: boolean;
+  ruta: string;
+  recientes: string[];
   sesiones: SessionInfo[];
   activa: string;
-  onToggle: () => void;
+  proveedor: SavedProviderView | null;
+  onPlegar: () => void;
   onAbrir: (ruta?: string) => void;
   onNueva: () => void;
   onUsar: (id: string) => void;
   onRenombrar: (id: string, nombre: string) => void;
 }
 
-function nombreCorto(ruta: string): string {
-  const partes = ruta.split(/[\\/]/).filter(Boolean);
-  return partes.at(-1) ?? ruta;
+function corto(ruta: string): string {
+  return ruta.split(/[\\/]/).filter(Boolean).at(-1) ?? ruta;
 }
 
 export function Sidebar(props: Props) {
   const [renombrando, setRenombrando] = useState("");
   const [nombre, setNombre] = useState("");
 
-  return (
-    <aside className={props.contraido ? "sidebar contraido" : "sidebar"}>
-      <div className="seccion">
-        <h2>Proyecto</h2>
-        <div className="title" title={props.actual}>
-          {nombreCorto(props.actual) || "sin proyecto"}
-        </div>
-        <button style={{ marginTop: 8, width: "100%" }} onClick={() => props.onAbrir()}>
-          Abrir carpeta…
+  if (props.plegado) {
+    return (
+      <aside className="panel izq plegado">
+        <button className="plegar" onClick={props.onPlegar} title="Ctrl+B">
+          ›
         </button>
+      </aside>
+    );
+  }
+
+  return (
+    <aside className="panel izq">
+      <button className="plegar" onClick={props.onPlegar} title="Ctrl+B">
+        ‹
+      </button>
+
+      <div className="bloque">
+        <p className="etiqueta">Proyecto</p>
+        <div className="item" style={{ padding: 0, cursor: "default" }}>
+          <span className="nombre" title={props.ruta}>
+            {corto(props.ruta) || "sin proyecto"}
+          </span>
+        </div>
+        <div className="evento" style={{ padding: "2px 0" }}>
+          <span>{props.ruta || "—"}</span>
+        </div>
+        <div className="acciones">
+          <button className="quiet" onClick={() => props.onAbrir()}>
+            cambiar carpeta…
+          </button>
+        </div>
       </div>
 
-      {props.proyectos.length > 1 && (
-        <div className="seccion">
-          <h2>Recientes</h2>
-          {props.proyectos
-            .filter((ruta) => ruta !== props.actual)
-            .slice(0, 5)
-            .map((ruta) => (
-              <div key={ruta} className="fila" onClick={() => props.onAbrir(ruta)}>
-                <span className="nombre" title={ruta}>
-                  {nombreCorto(ruta)}
-                </span>
-                <span className="meta">{ruta.split(/[\\/]/).slice(0, -1).at(-1) ?? ""}</span>
-              </div>
-            ))}
-        </div>
-      )}
-
-      <div className="seccion" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <h2 style={{ margin: 0, flex: 1 }}>Conversaciones</h2>
-        <button className="ghost" onClick={props.onNueva} title="Ctrl+N">
-          + Nueva
+      <div className="bloque" style={{ display: "flex", alignItems: "baseline" }}>
+        <p className="etiqueta" style={{ flex: 1, margin: 0 }}>
+          Conversaciones
+        </p>
+        <button className="quiet" onClick={props.onNueva} title="Ctrl+N">
+          nueva
         </button>
       </div>
 
       <div className="lista">
         {props.sesiones.length === 0 && (
           <div className="vacio">
-            Sin conversaciones todavía.
+            Sin conversaciones.
             <br />
-            Crea una y escribe lo que necesitas.
+            Crea una y escribe el objetivo.
           </div>
         )}
         {props.sesiones.map((sesion) =>
           renombrando === sesion.id ? (
-            <div key={sesion.id} className="fila">
+            <div key={sesion.id} className="item">
               <input
                 autoFocus
                 value={nombre}
                 onChange={(evento) => setNombre(evento.target.value)}
+                onBlur={() => setRenombrando("")}
                 onKeyDown={(evento) => {
                   if (evento.key === "Enter" && nombre.trim()) {
                     props.onRenombrar(sesion.id, nombre.trim());
@@ -89,13 +96,13 @@ export function Sidebar(props: Props) {
           ) : (
             <div
               key={sesion.id}
-              className={sesion.id === props.activa ? "fila activa" : "fila"}
+              className={sesion.id === props.activa ? "item activo" : "item"}
               onClick={() => props.onUsar(sesion.id)}
               onDoubleClick={() => {
                 setRenombrando(sesion.id);
                 setNombre(sesion.name);
               }}
-              title="Doble clic para renombrar"
+              title="doble clic para renombrar"
             >
               <span className="nombre">{sesion.name || sesion.id}</span>
               <span className="meta">{sesion.turns}</span>
@@ -104,11 +111,25 @@ export function Sidebar(props: Props) {
         )}
       </div>
 
-      <div className="pie">
-        <span>doble clic: renombrar</span>
-        <button className="ghost" onClick={props.onToggle} title="Ctrl+B">
-          «
-        </button>
+      {props.recientes.filter((ruta) => ruta !== props.ruta).length > 0 && (
+        <div className="bloque">
+          <p className="etiqueta">Recientes</p>
+          {props.recientes
+            .filter((ruta) => ruta !== props.ruta)
+            .slice(0, 4)
+            .map((ruta) => (
+              <div key={ruta} className="item" onClick={() => props.onAbrir(ruta)} title={ruta}>
+                <span className="nombre">{corto(ruta)}</span>
+              </div>
+            ))}
+        </div>
+      )}
+
+      <div className="bloque" style={{ marginTop: "auto" }}>
+        <div className="evento" style={{ padding: 0 }}>
+          <span>{props.proveedor ? props.proveedor.name : "sin proveedor"}</span>
+          {props.proveedor?.api_key_set === false && <span className="tipo">sin clave</span>}
+        </div>
       </div>
     </aside>
   );

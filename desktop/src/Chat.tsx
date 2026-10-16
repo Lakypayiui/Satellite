@@ -1,8 +1,8 @@
-/** Chat central: historial, estado de lo que hace el agente, permisos y caja de texto. */
+/** Chat: historial, qué hace el agente ahora, permisos y la caja de texto. */
 
 import { useEffect, useRef, useState } from "react";
 
-import { Approval, ETIQUETA_EVENTO, StreamItem, Turn } from "./api";
+import { Approval, StreamItem, Turn, ETIQUETA_EVENTO } from "./api";
 
 interface Props {
   turnos: Turn[];
@@ -12,23 +12,23 @@ interface Props {
   ultimo: StreamItem | null;
   onEnviar: (texto: string, plan: boolean) => void;
   onPermiso: (proposalId: string, decision: string, feedback?: string) => void;
+  onPaleta: () => void;
 }
 
 const OPCIONES: Record<string, string> = {
-  once: "Permitir una vez",
-  session: "Permitir esta sesión",
-  reject: "Rechazar",
-  approve: "Aprobar",
-  needs_changes: "Pedir cambios",
+  once: "permitir una vez",
+  session: "permitir esta sesión",
+  reject: "rechazar",
+  approve: "aprobar",
+  needs_changes: "pedir cambios",
 };
 
-function queHace(ultimo: StreamItem | null): string {
-  if (!ultimo) return "";
+function enCurso(ultimo: StreamItem | null): string {
+  if (!ultimo) return "planificando";
   const { event } = ultimo;
   const etiqueta = ETIQUETA_EVENTO[event.event_type] ?? event.event_type;
-  if (event.tool_name) return `${etiqueta}: ${event.tool_name}`;
-  const spec = event.payload?.spec ?? event.payload?.agent_id;
-  return spec ? `${etiqueta}: ${String(spec)}` : etiqueta;
+  const sujeto = event.tool_name ?? event.payload?.spec ?? event.payload?.agent_id;
+  return sujeto ? `${etiqueta} · ${String(sujeto)}` : etiqueta;
 }
 
 export function Chat(props: Props) {
@@ -37,7 +37,7 @@ export function Chat(props: Props) {
   const fondo = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    fondo.current?.scrollTo({ top: fondo.current.scrollHeight, behavior: "smooth" });
+    fondo.current?.scrollTo({ top: fondo.current.scrollHeight });
   }, [props.turnos.length, props.permisos.length]);
 
   function enviar() {
@@ -51,28 +51,23 @@ export function Chat(props: Props) {
   return (
     <>
       <div className="chat" ref={fondo}>
-        {props.cargando && <div className="vacio">Cargando el proyecto…</div>}
+        {props.cargando && <div className="vacio">cargando proyecto…</div>}
 
         {!props.cargando && props.turnos.length === 0 && (
           <div className="vacio">
-            <p>
-              <strong>¿Qué quieres que haga?</strong>
-            </p>
-            <p>
-              Escribe un objetivo y el agente planificará y lo ejecutará con las herramientas
-              disponibles. Los permisos que necesite te los pedirá aquí, uno a uno.
-            </p>
-            <p className="meta">
-              Ejemplos: «ordena los ficheros de datos y documenta lo que hiciste», «añade pruebas
-              para el módulo de rutas», «explícame qué hace este proyecto».
-            </p>
+            Escribe un objetivo y el agente planifica y lo ejecuta con las herramientas del
+            proyecto. Los permisos que necesite te los pedirá aquí.
+            <br />
+            <br />
+            <span style={{ color: "var(--muted)" }}>Ctrl+K</span> abre todos los comandos (proveedor,
+            roles, diagnóstico, skills, snapshots…).
           </div>
         )}
 
         {props.turnos.map((turno, indice) => (
           <div
             key={`${indice}-${turno.task_id}`}
-            className={turno.role === "user" ? "burbuja user" : "burbuja assistant"}
+            className={turno.role === "user" ? "turno usuario" : "turno agente"}
           >
             {turno.content}
           </div>
@@ -80,21 +75,26 @@ export function Chat(props: Props) {
 
         {props.permisos.map((permiso) => (
           <div key={permiso.proposal_id} className="permiso">
-            <div>
-              <strong>Permiso para {permiso.kind === "command" ? "ejecutar un comando" : permiso.kind}</strong>
-            </div>
-            <div className="sub">{permiso.summary}</div>
-            {permiso.reason && (
-              <div className="sub">
-                Motivo: {permiso.reason}
-                {permiso.details?.command ? ` · ${String(permiso.details.command)}` : ""}
-              </div>
+            <h3>
+              {permiso.kind === "command"
+                ? "Permiso para ejecutar un comando"
+                : permiso.kind === "path"
+                  ? "Permiso para acceder a una ruta"
+                  : `Permiso: ${permiso.kind}`}
+            </h3>
+            <div className="porque">{permiso.summary}</div>
+            {permiso.reason && <div className="porque">motivo: {permiso.reason}</div>}
+            {typeof permiso.details?.command === "string" && (
+              <div className="detalle">{permiso.details.command}</div>
             )}
-            <div className="opciones">
+            {typeof permiso.details?.path === "string" && (
+              <div className="detalle">{permiso.details.path}</div>
+            )}
+            <div className="acciones">
               {permiso.options.map((opcion) => (
                 <button
                   key={opcion}
-                  className={opcion === "reject" ? "ghost" : "primary"}
+                  className={opcion === "reject" ? "quiet" : "primary"}
                   onClick={() =>
                     props.onPermiso(
                       permiso.proposal_id,
@@ -109,42 +109,47 @@ export function Chat(props: Props) {
             </div>
           </div>
         ))}
+
+        {props.ocupado && <div className="latido">{enCurso(props.ultimo)}…</div>}
       </div>
 
-      {props.ocupado && (
-        <div className="franja">
-          <span className="chip ok">trabajando</span>
-          <span>{queHace(props.ultimo) || "planificando"}</span>
-        </div>
-      )}
-
-      <div className="composer">
-        <textarea
-          value={texto}
-          placeholder="Escribe el objetivo… (Enter para enviar, Ctrl+Enter también)"
-          onChange={(evento) => setTexto(evento.target.value)}
-          onKeyDown={(evento) => {
-            if (evento.key === "Escape") setTexto("");
-            if (evento.key === "Enter" && !evento.shiftKey) {
-              evento.preventDefault();
-              enviar();
-            }
-          }}
-        />
-        <div className="acciones">
-          <button className="primary" disabled={props.ocupado || !texto.trim()} onClick={enviar}>
-            {props.ocupado ? "En marcha…" : "Enviar"}
-          </button>
-          <label className="chip" title="Propone alternativas en lugar de ejecutar directamente">
-            <input
-              type="checkbox"
-              checked={plan}
-              onChange={(evento) => setPlan(evento.target.checked)}
-              style={{ width: "auto", marginRight: 6 }}
-            />
-            modo plan
-          </label>
-          {props.ocupado && <span className="chip warn">hay un turno en curso</span>}
+      <div className="caja-texto">
+        <div className="fila">
+          <textarea
+            value={texto}
+            placeholder="escribe el objetivo…"
+            onChange={(evento) => setTexto(evento.target.value)}
+            onKeyDown={(evento) => {
+              if (evento.key === "Escape") setTexto("");
+              if (evento.key === "Enter" && !evento.shiftKey && !evento.ctrlKey) {
+                evento.preventDefault();
+                enviar();
+              }
+              if (evento.key === "Enter" && evento.ctrlKey) {
+                evento.preventDefault();
+                enviar();
+              }
+            }}
+          />
+          <div className="controles">
+            <button className="primary" disabled={props.ocupado || !texto.trim()} onClick={enviar}>
+              enviar
+            </button>
+            <label>
+              <input
+                type="checkbox"
+                checked={plan}
+                onChange={(evento) => setPlan(evento.target.checked)}
+              />
+              modo plan
+            </label>
+            <button className="quiet" onClick={props.onPaleta}>
+              ctrl+k comandos
+            </button>
+            <span style={{ marginLeft: "auto" }}>
+              {props.ocupado ? "turno en curso" : "enter envía · shift+enter salta línea"}
+            </span>
+          </div>
         </div>
       </div>
     </>

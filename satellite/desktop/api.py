@@ -68,6 +68,53 @@ class ProviderIn(BaseModel):
     api_key_env: str = ""
 
 
+class RoleIn(BaseModel):
+    """Asignación de un rol a un proveedor guardado."""
+
+    role: str = Field(min_length=1)
+    provider: str = ""
+    model: str = ""
+
+
+class SnapshotIn(BaseModel):
+    """Snapshot a restaurar (con confirmación explícita)."""
+
+    name: str = Field(min_length=1)
+    confirm: bool = False
+
+
+class ResetIn(BaseModel):
+    """Reset del estado base."""
+
+    keep_skills: bool = True
+    confirm: bool = False
+
+
+class CompactIn(BaseModel):
+    """Compactado manual del contexto."""
+
+    keep: int | None = None
+
+
+class SkillEditIn(BaseModel):
+    """Cambios de una skill existente."""
+
+    description: str | None = None
+    tags: list[str] | None = None
+
+
+class CurateIn(BaseModel):
+    """Petición para el curador de skills."""
+
+    request: str = ""
+
+
+class NeedIn(BaseModel):
+    """Necesidad de capacidad para crear un agente."""
+
+    need: str = Field(min_length=1)
+
+
 def build_router(backend: DesktopBackend, auth: Callable) -> APIRouter:
     """Rutas de la app; ``auth`` se aplica a todas (menos ``/api/health``)."""
     router = APIRouter(prefix="/api", dependencies=[Depends(auth)])
@@ -222,12 +269,87 @@ def build_router(backend: DesktopBackend, auth: Callable) -> APIRouter:
 
     @router.get("/models")
     def models(base_url: str, family: str = "openai", api_key: str = "") -> dict:
-        return {"result": backend.models(base_url=base_url, family=family, api_key=api_key)}
+        """Modelos que ofrece esa URL, con el más usado sugerido (como la TUI)."""
+        return backend.models(base_url=base_url, family=family, api_key=api_key)
 
     @router.post("/shutdown")
     async def shutdown() -> dict:
         """Cierre pedido por la app: drena lo pendiente antes de que la maten."""
         await backend.close()
         return {"closing": True}
+
+    # --- catálogo, roles y mantenimiento: todo lo que ya hace la TUI ---
+
+    @router.get("/providers/catalog")
+    def provider_catalog() -> dict:
+        """Catálogo con la URL ya puesta, como el asistente del CLI."""
+        return {"catalog": backend.provider_catalog()}
+
+    @router.get("/roles")
+    def roles() -> dict:
+        """Qué proveedor usa cada rol (orchestrator, context, agents, creator)."""
+        return backend.roles()
+
+    @router.put("/roles")
+    def apply_role(payload: RoleIn) -> dict:
+        """Fija un rol a un proveedor guardado: sólo ese rol, sin cascada."""
+        return backend.apply_role(payload.role, payload.provider, payload.model)
+
+    @router.get("/doctor")
+    def doctor() -> dict:
+        return {"checks": backend.doctor()}
+
+    @router.post("/setup")
+    def setup_sandbox() -> dict:
+        return backend.setup_sandbox()
+
+    @router.get("/stats")
+    def stats() -> dict:
+        return backend.stats()
+
+    @router.get("/snapshots")
+    def snapshots() -> dict:
+        return backend.snapshots()
+
+    @router.post("/restore")
+    def restore_snapshot(payload: SnapshotIn) -> dict:
+        """Sin confirmación no restaura nada: dice qué se descartaría."""
+        return backend.restore_snapshot(payload.name, confirm=payload.confirm)
+
+    @router.post("/reset")
+    def reset_project(payload: ResetIn | None = None) -> dict:
+        """Sin confirmación no toca nada: borra agentes y skills creados."""
+        return backend.reset_project(
+            keep_skills=bool(payload and payload.keep_skills),
+            confirm=bool(payload and payload.confirm),
+        )
+
+    @router.post("/compact")
+    async def compact(payload: CompactIn | None = None) -> dict:
+        return await backend.compact(keep=payload.keep if payload else None)
+
+    @router.get("/skills/search")
+    def skill_search(q: str = "") -> dict:
+        return {"results": backend.skill_search(q)}
+
+    @router.patch("/skills/{skill_id}")
+    def skill_edit(skill_id: str, payload: SkillEditIn) -> dict:
+        return backend.skill_edit(
+            skill_id, description=payload.description, tags=payload.tags
+        )
+
+    @router.delete("/skills/{skill_id}")
+    def skill_delete(skill_id: str) -> dict:
+        return backend.skill_delete(skill_id)
+
+    @router.post("/curate")
+    async def curate(payload: CurateIn | None = None) -> dict:
+        """Ejecuta el curador de skills (puede pedir aprobaciones, y se muestran)."""
+        return await backend.curate(payload.request if payload else "")
+
+    @router.post("/agents")
+    async def create_agent(payload: NeedIn) -> dict:
+        """Crea un agente para cubrir una necesidad (con aprobación, no a ciegas)."""
+        return await backend.create_agent(payload.need)
 
     return router

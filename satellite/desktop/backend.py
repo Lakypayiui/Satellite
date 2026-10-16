@@ -449,13 +449,20 @@ class DesktopBackend:
         family: str = "openai",
         api_key: str = "",
         project_root=None,
-    ) -> Any:
+    ) -> dict:
+        """Lista los modelos de esa URL y sugiere el más usado, como el asistente del CLI."""
+        from satellite.config.models import default_model
+
         if not base_url.strip():
             raise BackendError("invalid_request", "falta 'base_url'", 422)
         result = self.session(project_root).load_models(
             base_url.strip(), family or "openai", api_key
         )
-        return to_jsonable(result)
+        data = to_jsonable(result)
+        if isinstance(data, dict):
+            modelos = data.get("models") if isinstance(data.get("models"), list) else []
+            data["suggested"] = default_model([str(item) for item in modelos]) if modelos else ""
+        return data
 
     # --- cierre ---
 
@@ -465,3 +472,146 @@ class DesktopBackend:
             self._stop.set()
         for bridge in self._bridges.values():
             await bridge.drain()
+
+    # --- catálogo de proveedores y roles (lo mismo que hace el asistente del CLI) ---
+
+    def provider_catalog(self) -> list[dict]:
+        """Catálogo con la URL ya puesta, para no teclearla (como hace el CLI)."""
+        from satellite.config import catalog
+
+        return [
+            {
+                "key": entry.key,
+                "label": entry.label,
+                "family": entry.family,
+                "base_url": entry.base_url,
+                "group": entry.group,
+                "note": entry.note,
+                "needs_edit": entry.needs_edit,
+            }
+            for entry in catalog.CATALOG
+        ]
+
+    def roles(self, project_root=None) -> dict:
+        """Roles configurados por separado, y a qué proveedor apunta cada uno."""
+        from satellite.config import providers as pconfig
+
+        root = self.resolve(project_root)
+        return {
+            "roles": list(pconfig.ROLES),
+            "configured": to_jsonable(pconfig.role_config(root)),
+            "active": pconfig.active_id(root),
+            "providers": [to_jsonable(item) for item in pconfig.list_providers(root)],
+        }
+
+    def apply_role(
+        self, role: str, provider_id: str, model: str = "", project_root=None
+    ) -> dict:
+        """Fija un rol a un proveedor guardado. Sin cascada: sólo ese rol."""
+        from satellite.config import providers as pconfig
+
+        root = self.resolve(project_root)
+        if role not in pconfig.ROLES:
+            raise BackendError(
+                "invalid_role", f"rol desconocido: {role!r} (roles: {', '.join(pconfig.ROLES)})", 422
+            )
+        if not provider_id:
+            pconfig.clear_roles(root, [role])
+        else:
+            if pconfig.find_provider(root, provider_id) is None:
+                raise BackendError(
+                    "provider_not_found", f"no existe el proveedor {provider_id!r}", 404
+                )
+            section: dict = {"provider": provider_id}
+            if model.strip():
+                section["model"] = model.strip()
+            pconfig.set_roles(root, {role: section})
+        # La configuración de rol tiene que cambiar lo que de verdad se ejecuta, no quedarse
+        # escrita esperando a un reinicio: se reconstruye el runtime en el sitio.
+        try:
+            self.session(project_root).runtime(force=True)
+        except Exception as exc:  # noqa: BLE001 — el rol queda guardado y se dice el resto
+            return {**self.roles(project_root), "runtime_error": str(exc)}
+        return self.roles(project_root)
+
+    # --- mantenimiento: lo que en la TUI son /doctor, /setup, /stats, /context… ---
+
+    def doctor(self, project_root=None) -> list[dict]:
+        return [
+            {"ok": bool(ok), "mensaje": mensaje}
+            for ok, mensaje in self.session(project_root).doctor()
+        ]
+
+    def setup_sandbox(self, project_root=None) -> dict:
+        return to_jsonable(self.session(project_root).setup_sandbox())
+
+    def stats(self, project_root=None) -> dict:
+        session = self.session(project_root)
+        return {
+            "skills": to_jsonable(session.stats()),
+            "cache": to_jsonable(session.cache_report()),
+        }
+
+    def snapshots(self, project_root=None) -> dict:
+        return {"snapshots": self.session(project_root).snapshots()}
+
+    def restore_snapshot(self, name: str, *, confirm: bool = False, project_root=None) -> dict:
+        if not confirm:
+            return {
+                "confirmed": False,
+                "name": name,
+                "note": "no se ha restaurado nada: falta confirmar que se descarta el estado actual",
+            }
+        resultado = self.session(project_root).restore(name)
+        return {"confirmed": True, "name": name, "result": to_jsonable(resultado)}
+
+    def reset_project(
+        self, *, keep_skills: bool = True, confirm: bool = False, project_root=None
+    ) -> dict:
+        if not confirm:
+            return {
+                "confirmed": False,
+                "note": "no se ha tocado nada: esto borra agentes y skills creados",
+            }
+        resultado = self.session(project_root).reset(keep_skills=keep_skills)
+        return {"confirmed": True, "result": to_jsonable(resultado)}
+
+    async def compact(self, *, keep: int | None = None, project_root=None) -> dict:
+        resultado = await self.session(project_root).compact_context(keep=keep)
+        return to_jsonable(resultado)
+
+    # --- skills y agentes (lo que en la TUI son /skill-*, /curate, /create) ---
+
+    def skill_search(self, query: str, project_root=None) -> list[dict]:
+        return [to_jsonable(item) for item in self.session(project_root).skill_search(query)]
+
+    def skill_edit(
+        self,
+        skill_id: str,
+        *,
+        description: str | None = None,
+        tags: list[str] | None = None,
+        project_root=None,
+    ) -> dict:
+        manifest = self.session(project_root).skill_edit(
+            skill_id, description=description, tags=tuple(tags) if tags else None
+        )
+        return to_jsonable(manifest)
+
+    def skill_delete(self, skill_id: str, project_root=None) -> dict:
+        self.session(project_root).skill_delete(skill_id)
+        return {"deleted": skill_id}
+
+    async def curate(self, request: str = "", project_root=None) -> dict:
+        self.require_runtime(project_root)
+        outcome = await self.session(project_root).curate(
+            request, approval=self.approval(project_root)
+        )
+        return to_jsonable(outcome)
+
+    async def create_agent(self, need: str, project_root=None) -> dict:
+        self.require_runtime(project_root)
+        outcome = await self.session(project_root).create_agent(
+            need, approval=self.approval(project_root)
+        )
+        return to_jsonable(outcome)

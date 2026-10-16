@@ -124,6 +124,47 @@ export interface SkillView {
   stats?: Record<string, unknown>;
 }
 
+export interface CatalogEntry {
+  key: string;
+  label: string;
+  family: string;
+  base_url: string;
+  group: string;
+  note: string;
+  needs_edit: boolean;
+}
+
+export interface SavedProviderView {
+  id: string;
+  name: string;
+  model?: string;
+  base_url: string;
+  api_key_set?: boolean;
+  api_key_env?: string;
+}
+
+export interface RolesView {
+  roles: string[];
+  configured: Record<string, { provider?: string; model?: string }>;
+  active: string;
+  providers: SavedProviderView[];
+  runtime_error?: string;
+}
+
+export interface ModelsResult {
+  ok: boolean;
+  url: string;
+  models: string[];
+  error?: string | null;
+  /** El más usado según la tabla curada que ya usa la TUI. */
+  suggested?: string;
+}
+
+export interface DoctorCheck {
+  ok: boolean;
+  mensaje: string;
+}
+
 export interface Envelope<T> {
   ok: boolean;
   data?: T;
