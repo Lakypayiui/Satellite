@@ -137,5 +137,29 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 300));
 }
 
+// --- coherencia: lo que llama la interfaz tiene que estar permitido en el proceso principal ---
+{
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const fuente = readFileSync(path.join(raiz, "desktop", "electron", "main.ts"), "utf8");
+  const bloque = fuente.match(/const RUTAS = \[([\s\S]*?)\];/);
+  const permitidas = [...(bloque?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  const llamadas = new Set();
+  for (const fichero of readdirSync(path.join(raiz, "desktop", "src"))) {
+    if (!/\.tsx?$/.test(fichero)) continue;
+    const texto = readFileSync(path.join(raiz, "desktop", "src", fichero), "utf8");
+    for (const coincidencia of texto.matchAll(/api(?:<[^>]*>)?\(\s*[`"](\/[a-z0-9/_-]*)/g)) {
+      llamadas.add(coincidencia[1]);
+    }
+  }
+  const sinPermiso = [...llamadas].filter(
+    (ruta) => !permitidas.some((permitida) => ruta === permitida || ruta.startsWith(`${permitida}/`)),
+  );
+  comprobar(
+    "la lista de rutas de Electron cubre lo que llama la interfaz",
+    sinPermiso.length === 0,
+    sinPermiso.length ? `faltan: ${sinPermiso.join(", ")}` : `${llamadas.size} rutas`,
+  );
+}
+
 console.log(fallos === 0 ? "\nTODO CORRECTO" : `\n${fallos} comprobación(es) fallidas`);
 process.exit(fallos === 0 ? 0 : 1);

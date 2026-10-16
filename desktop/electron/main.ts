@@ -12,7 +12,8 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const DEV_URL = process.env.VITE_DEV_SERVER_URL ?? "";
 const CERRAR_BACKEND_MS = 2_500;
 
-/** Rutas de la API que la interfaz puede pedir. Nada fuera de esta lista. */
+/** Rutas de la API que la interfaz puede pedir. Nada fuera de esta lista.
+ *  `scripts/smoke.mjs` comprueba que esta lista cubre todo lo que llama `src/`. */
 const RUTAS = [
   "/status",
   "/projects",
@@ -27,6 +28,16 @@ const RUTAS = [
   "/config",
   "/providers",
   "/models",
+  "/roles",
+  "/doctor",
+  "/setup",
+  "/stats",
+  "/snapshots",
+  "/restore",
+  "/reset",
+  "/compact",
+  "/curate",
+  "/turns/cancel",
   "/shutdown",
 ];
 

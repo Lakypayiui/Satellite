@@ -90,6 +90,8 @@ class DesktopBackend:
         self._bridges: dict[str, EventBridge] = {}
         self._runtime_errors: dict[str, str] = {}
         self._stop: asyncio.Event | None = None
+        self._turnos: dict[str, asyncio.Task] = {}
+        self._cancelados: set[str] = set()
         self._recents_path = (
             Path(recents_path)
             if recents_path is not None
@@ -276,13 +278,55 @@ class DesktopBackend:
     # --- conversación ---
 
     async def send(self, text: str, *, plan_mode: bool = False, project_root=None) -> dict:
-        """Un turno de conversación con el runtime real, aprobaciones incluidas."""
+        """Un turno de conversación con el runtime real, aprobaciones incluidas.
+
+        El turno corre como tarea propia para que se pueda cancelar: ``cancel_turn`` la
+        corta y aquí se convierte en una respuesta normal, sin inventar que la tarea salió bien.
+        """
         bridge = self.require_runtime(project_root)
-        reply = await self.session(project_root).send_message(
-            text, approval=self.approval(project_root), plan_mode=plan_mode
+        key = str(self.resolve(project_root))
+        tarea = asyncio.create_task(
+            self.session(project_root).send_message(
+                text, approval=self.approval(project_root), plan_mode=plan_mode
+            )
         )
+        self._turnos[key] = tarea
+        try:
+            reply = await tarea
+        except asyncio.CancelledError:
+            if key not in self._cancelados:
+                raise  # no lo hemos cancelado nosotros: la cancelación sigue su curso
+            self._cancelados.discard(key)
+            await bridge.drain()
+            return {
+                "text": "",
+                "status": "cancelled",
+                "cancelled": True,
+                "note": "turno cancelado; lo que ya se hizo queda en el historial",
+            }
+        finally:
+            if self._turnos.get(key) is tarea:
+                self._turnos.pop(key, None)
         await bridge.drain()
         return to_jsonable(reply)
+
+    def cancel_turn(self, project_root=None) -> dict:
+        """Cancela el turno en curso. Corta la tarea; no deshace lo ya hecho."""
+        key = str(self.resolve(project_root))
+        tarea = self._turnos.get(key)
+        if tarea is None or tarea.done():
+            raise BackendError("no_turn", "no hay ningún turno en curso", 409)
+        self._cancelados.add(key)
+        tarea.cancel()
+        # Los permisos que estaban esperando decisión se quedan sin quien los espere: se
+        # rechazan para que la interfaz no muestre tarjetas fantasma.
+        port = self.approval(project_root)
+        for item in port.pending():
+            port.submit(
+                str(item.get("proposal_id", "")),
+                decision_from("reject", reason="turno cancelado"),
+            )
+        return {"cancelled": True, "note": "cancelación pedida al turno en curso"}
 
     # --- tareas, cambios y trabajos ---
 

@@ -44,14 +44,34 @@ function hora(iso: string): string {
   return Number.isNaN(fecha.getTime()) ? "" : fecha.toLocaleTimeString().slice(0, 8);
 }
 
-/** Agentes y skills se deducen **sólo** de eventos reales: nada de suposiciones. */
+/** Agentes y skills se deducen **sólo** de eventos reales: nada de suposiciones.
+ *
+ * El agente de cada evento sale del payload (`agent_id`, y de paso los nombres antiguos
+ * `spec_id`/`spec`, que el runner ha usado de forma inconsistente) y, cuando el evento no
+ * lo trae —caso de `tool_called`—, del nodo al que pertenece, que sí lo trae siempre.
+ */
 function leerAgentes(eventos: StreamItem[]): Agente[] {
   const mapa = new Map<string, Agente>();
-  for (const { event } of eventos) {
-    const id = event.payload?.agent_id ?? event.payload?.spec;
-    if (typeof id !== "string" || !id) continue;
+  const porNodo = new Map<string, string>();
+
+  function agenteDe(event: StreamItem["event"]): Agente | null {
+    const directo = event.payload?.agent_id ?? event.payload?.spec_id ?? event.payload?.spec;
+    const id =
+      typeof directo === "string" && directo
+        ? directo
+        : (event.node_id ? porNodo.get(event.node_id) : undefined);
+    if (!id) return null;
     const actual =
       mapa.get(id) ?? { id, estado: "en espera", clase: "", detalle: "", eventos: 0 };
+    mapa.set(id, actual);
+    if (event.node_id) porNodo.set(event.node_id, id);
+    return actual;
+  }
+
+  for (const item of eventos) {
+    const { event } = item;
+    const actual = agenteDe(event);
+    if (!actual) continue;
     actual.eventos += 1;
     if (event.event_type === "node_started" || event.event_type === "delegation_started") {
       actual.estado = "trabajando";
@@ -72,7 +92,6 @@ function leerAgentes(eventos: StreamItem[]): Agente[] {
       actual.clase = "fallido";
       actual.detalle = "";
     }
-    mapa.set(id, actual);
   }
   return [...mapa.values()].reverse();
 }

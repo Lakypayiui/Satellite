@@ -166,6 +166,11 @@ def build_router(backend: DesktopBackend, auth: Callable) -> APIRouter:
         """Un turno con el agente; devuelve la respuesta (y la actividad va por SSE)."""
         return await backend.send(payload.text, plan_mode=payload.plan_mode)
 
+    @router.post("/turns/cancel")
+    def cancel_turn() -> dict:
+        """Corta el turno en curso. No deshace lo ya hecho, y lo dice."""
+        return backend.cancel_turn()
+
     # --- aprobaciones ---
 
     @router.get("/approvals")

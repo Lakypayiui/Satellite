@@ -12,6 +12,7 @@ interface Props {
   ultimo: StreamItem | null;
   onEnviar: (texto: string, plan: boolean) => void;
   onPermiso: (proposalId: string, decision: string, feedback?: string) => void;
+  onCancelar: () => void;
   onPaleta: () => void;
 }
 
@@ -146,6 +147,11 @@ export function Chat(props: Props) {
             <button className="quiet" onClick={props.onPaleta}>
               ctrl+k comandos
             </button>
+            {props.ocupado && (
+              <button className="quiet" onClick={props.onCancelar} title="Corta el turno en curso">
+                cancelar
+              </button>
+            )}
             <span style={{ marginLeft: "auto" }}>
               {props.ocupado ? "turno en curso" : "enter envía · shift+enter salta línea"}
             </span>

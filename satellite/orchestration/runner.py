@@ -118,7 +118,7 @@ class DefaultGraphRunner(GraphRunner):
                 task,
                 EventType.NODE_STARTED,
                 node_id=node_id,
-                payload={"spec": node.spec_id},
+                payload={"agent_id": node.spec_id},
             )
 
             # Contexto: lo que pide el nodo + las menciones @del usuario + las reglas
@@ -176,7 +176,7 @@ class DefaultGraphRunner(GraphRunner):
                 task,
                 EventType.NODE_FINISHED,
                 node_id=node_id,
-                payload={"spec_id": node.spec_id, "status": result.status.value, "summary": result.summary},
+                payload={"agent_id": node.spec_id, "status": result.status.value, "summary": result.summary},
             )
 
             tokens_total += result.metrics.tokens_in + result.metrics.tokens_out

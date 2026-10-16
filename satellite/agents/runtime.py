@@ -146,7 +146,7 @@ class LLMAgent(Agent):
     async def execute(self, task: dict, ctx: AgentContext) -> AgentResult:
         """Ejecuta el flujo completo de un nodo."""
         node_id = str(task.get("node_id", ""))
-        self._emit(ctx, EventType.NODE_STARTED, {"spec": self.spec.id, "task": task})
+        self._emit(ctx, EventType.NODE_STARTED, {"agent_id": self.spec.id, "task": task})
         started = time.monotonic()
         tool_records: list[ToolRecord] = []
         usage_total = Usage()

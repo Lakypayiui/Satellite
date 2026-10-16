@@ -96,6 +96,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    setEventos([]);
     void (async () => {
       try {
         await cargarTodo();
@@ -118,7 +119,10 @@ export function App() {
       cortarCaida();
       cortarEventos();
     };
-  }, [cargarTodo, recargarPermisos]);
+    // La raíz del proyecto está en las dependencias a propósito: al cambiar de carpeta se
+    // recarga todo y se vuelve a abrir el flujo, porque el puente de eventos es de cada
+    // proyecto y seguir escuchando el anterior dejaba el panel desactualizado.
+  }, [cargarTodo, recargarPermisos, status?.project_root]);
 
   // Con un turno en marcha el runtime puede estar esperando un permiso, y eso no emite
   // evento: se mira la lista de pendientes y los trabajos a intervalos cortos.
@@ -174,6 +178,19 @@ export function App() {
     } finally {
       setOcupado(false);
       void recargarPermisos().catch(() => {});
+    }
+  }
+
+  /** Corta el turno en curso. Lo ya hecho queda: no se finge que la tarea no pasó. */
+  async function cancelarTurno() {
+    try {
+      await api("/turns/cancel", { method: "POST" });
+      setAviso("turno cancelado; lo que ya se hizo queda en el historial");
+    } catch (exc) {
+      setAviso(mensajeDe(exc));
+    } finally {
+      setOcupado(false);
+      await recargarPermisos().catch(() => {});
     }
   }
 
@@ -534,6 +551,7 @@ export function App() {
           ultimo={eventos.at(-1) ?? null}
           onEnviar={(texto, plan) => void enviar(texto, plan)}
           onPermiso={(id, decision, feedback) => void decidirPermiso(id, decision, feedback)}
+          onCancelar={() => void cancelarTurno()}
           onPaleta={() => setPaleta(true)}
         />
       </div>
