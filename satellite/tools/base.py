@@ -36,6 +36,9 @@ class ToolContext:
     # Puerto de aprobación (por sesión): el runtime lo usa para pedir permiso
     # cuando la política deniega una ruta autorizable.
     approval: object | None = None
+    # Token de cancelación: las tools que lanzan procesos lo miran para terminarlos en
+    # marcha, en vez de esperar a que acaben.
+    cancel: object | None = None
     # Comandos concedidos por una aprobación puntual, solo para esta llamada.
     allowed_commands: tuple[str, ...] = ()
 

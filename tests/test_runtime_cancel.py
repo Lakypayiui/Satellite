@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -18,7 +21,10 @@ from satellite.orchestration.base import RuntimeServices
 from satellite.orchestration.cancel import CancelToken, CancelledTask, race_cancel
 from satellite.orchestration.orchestrator import DefaultOrchestrator
 from satellite.orchestration.runner import DefaultGraphRunner
+from satellite.providers.fake import FakeLLM
 from satellite.security.policy import DefaultSecurityPolicy
+from satellite.tools.base import ToolContext
+from satellite.tools.primitives import RunPythonTool
 from satellite.tools.registry import DefaultToolRegistry
 
 
@@ -341,3 +347,136 @@ def test_cancelled_before_the_node_costs_nothing(tmp_path: Path) -> None:
 
     assert resultado.status is AgentStatus.CANCELLED
     assert proveedor.empezadas == 0  # no se gastó ni una llamada
+
+
+# --- el subproceso en marcha (tanda 3) ---
+
+
+def test_execute_argv_terminates_the_process_when_cancelled(tmp_path: Path) -> None:
+    """Un comando en marcha se termina: no se espera a que acabe por su cuenta."""
+    from satellite.tools.terminal import execute_argv
+
+    token = CancelToken()
+
+    async def escenario():
+        tarea = asyncio.create_task(
+            execute_argv(
+                [sys.executable, "-c", "import time; time.sleep(30)"],
+                cwd=tmp_path,
+                env=os.environ.copy(),
+                timeout_s=60,
+                cancel=token,
+            )
+        )
+        await asyncio.sleep(0.4)  # que le dé tiempo a arrancar
+        empezado = time.monotonic()
+        token.request("cortado en la prueba")
+        resultado = await asyncio.wait_for(tarea, timeout=10)
+        return resultado, time.monotonic() - empezado
+
+    resultado, tardanza = run(escenario())
+
+    assert resultado.success is False
+    assert resultado.error_code == "cancelled"
+    assert "cortado en la prueba" in (resultado.error or "")
+    assert tardanza < 5  # no esperó a los 30 s del comando
+
+
+def test_without_a_token_a_command_is_not_interrupted(tmp_path: Path) -> None:
+    from satellite.tools.terminal import execute_argv
+
+    resultado = run(
+        execute_argv(
+            [sys.executable, "-c", "print('hola')"],
+            cwd=tmp_path,
+            env=os.environ.copy(),
+            timeout_s=30,
+        )
+    )
+
+    assert resultado.success is True
+    assert "hola" in resultado.output["stdout"]
+
+
+def test_run_python_stops_when_the_context_says_cancel(tmp_path: Path) -> None:
+    """La tool real, con el token en su contexto: el proceso se termina."""
+    token = CancelToken()
+    policy = DefaultSecurityPolicy(
+        allowed_tools={"run_python"}, allow_terminal=True, allowed_commands=(sys.executable,)
+    )
+    ctx = ToolContext(project_root=tmp_path, workdir=tmp_path, policy=policy, cancel=token)
+
+    async def escenario():
+        tarea = asyncio.create_task(
+            RunPythonTool().execute(
+                {"code": "import time; time.sleep(30)", "timeout_s": 60}, ctx
+            )
+        )
+        await asyncio.sleep(0.4)
+        token.request("cortado desde el contexto")
+        return await asyncio.wait_for(tarea, timeout=10)
+
+    resultado = run(escenario())
+
+    assert resultado.success is False
+    assert resultado.error_code == "cancelled"
+
+
+def test_the_agent_stops_a_long_command_and_ends_cancelled(tmp_path: Path) -> None:
+    """El recorrido completo: el agente lanza un comando largo y la cancelación lo corta."""
+    policy = DefaultSecurityPolicy(
+        allowed_tools={"run_python", "request_context"},
+        allow_terminal=True,
+        allowed_commands=(sys.executable,),
+    )
+    registry = DefaultToolRegistry(policy=policy)
+    registry.register(RunPythonTool())
+    spec = AgentSpec(
+        id="runner",
+        name="Runner",
+        capabilities=("run",),
+        prompt_ref="runner",
+        tools=("run_python",),
+        max_turns=2,
+    )
+    proveedor = FakeLLM(
+        script=[
+            {
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "name": "run_python",
+                        "arguments": {"code": "import time; time.sleep(30)", "timeout_s": 60},
+                    }
+                ]
+            },
+            {"content": "ya está"},
+        ]
+    )
+    agente = LLMAgent(
+        spec=spec,
+        system_prompt="Eres un ejecutor.\n{tools}\n{output_schema}",
+        user_template="Tarea: {task}\nContexto: {context}\nFeedback: {feedback}",
+        tools=registry.list_for(list(spec.tools)),
+        provider=proveedor,
+        tool_registry=registry,
+        policy=policy,
+        project_root=tmp_path,
+    )
+    token = CancelToken()
+
+    async def escenario():
+        ctx = AgentContext(task_id="t1", node_id="n1", cancel=token)
+        tarea = asyncio.create_task(agente.execute({"node_id": "n1", "goal": "algo largo"}, ctx))
+        await asyncio.sleep(0.6)  # el comando ya está corriendo
+        empezado = time.monotonic()
+        token.request("cortado durante el comando")
+        resultado = await asyncio.wait_for(tarea, timeout=15)
+        return resultado, time.monotonic() - empezado
+
+    resultado, tardanza = run(escenario())
+
+    assert resultado.status is AgentStatus.CANCELLED
+    assert "cortado durante el comando" in resultado.summary
+    assert tardanza < 8  # el comando de 30 s no llegó a terminar
+    assert resultado.tool_calls and resultado.tool_calls[0].success is False

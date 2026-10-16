@@ -28,8 +28,16 @@ async def execute_argv(
     timeout_s: int,
     stdin: str | None = None,
     output_limit: int = OUTPUT_LIMIT_CHARS,
+    cancel=None,
 ) -> ToolResult:
-    """Ejecuta un ``argv`` sin shell y devuelve un ``ToolResult`` normalizado."""
+    """Ejecuta un ``argv`` sin shell y devuelve un ``ToolResult`` normalizado.
+
+    ``cancel`` es el token de la ejecución: si alguien pide cancelar mientras el proceso
+    corre, se le **termina** (no se espera a que acabe, que es lo único que hace útil
+    poder cancelar un comando largo).
+    """
+    from satellite.orchestration.cancel import race_cancel
+
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv,
@@ -44,14 +52,26 @@ async def execute_argv(
 
     payload = stdin.encode("utf-8") if stdin is not None else None
     try:
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(input=payload), timeout=timeout_s
+        salida, cancelado = await race_cancel(
+            cancel, asyncio.wait_for(proc.communicate(input=payload), timeout=timeout_s)
         )
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
         return ToolResult(success=False, error=f"timeout de {timeout_s}s alcanzado")
 
+    if cancelado:
+        proc.kill()
+        await proc.wait()
+        motivo = str(getattr(cancel, "reason", "") or "cancelado por el usuario")
+        return ToolResult(
+            success=False,
+            error=f"cancelado: {motivo}",
+            error_code="cancelled",
+            output={"cancelled": True, "argv": list(argv)},
+        )
+
+    stdout, stderr = salida
     return ToolResult(
         success=proc.returncode == 0,
         output={
@@ -131,4 +151,10 @@ class RunCommandTool(Tool):
             return start_background(
                 cmd_raw, argv, cwd=cwd, env=env, project_root=tool_ctx.project_root
             )
-        return await execute_argv(argv, cwd=cwd, env=env, timeout_s=timeout_s)
+        return await execute_argv(
+            argv,
+            cwd=cwd,
+            env=env,
+            timeout_s=timeout_s,
+            cancel=getattr(tool_ctx, "cancel", None),
+        )

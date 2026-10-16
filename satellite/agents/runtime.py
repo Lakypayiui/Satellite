@@ -180,6 +180,11 @@ class LLMAgent(Agent):
         # Fase 1: rondas LLM↔tool (máx spec.max_turns)
         remaining = self.spec.max_turns
         while True:
+            # Si ya pidieron cancelar, ni se llama: el aborto en vuelo es la red, no la norma.
+            if getattr(ctx, "cancel", None) is not None and getattr(
+                ctx.cancel, "cancelled", False
+            ):
+                return self._cancelled(ctx, node_id, started, usage_total, tuple(tool_records))
             response = await self._complete(
                 ctx,
                 LLMRequest(
@@ -461,6 +466,8 @@ class LLMAgent(Agent):
             delegation_ctx=self.delegation_ctx,
             active_spec=self.spec,
             approval=getattr(ctx, "approval", None),
+            # Y el token, para que una tool que lanza un proceso pueda terminarlo.
+            cancel=getattr(ctx, "cancel", None),
         )
         result = await self.tool_registry.execute(call, tool_ctx)
         if result.error_code == "path_outside_project" and tool_ctx.approval is not None:

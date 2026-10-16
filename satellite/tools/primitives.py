@@ -99,7 +99,13 @@ class RunPythonTool(Tool):
             )
         cwd = tool_ctx.workdir or tool_ctx.project_root
         env = sanitize_env(tool_ctx.env)
-        return await execute_argv(argv, cwd=cwd, env=env, timeout_s=timeout_s)
+        return await execute_argv(
+            argv,
+            cwd=cwd,
+            env=env,
+            timeout_s=timeout_s,
+            cancel=getattr(tool_ctx, "cancel", None),
+        )
 
 
 class SearchFilesTool(Tool):
