@@ -175,6 +175,58 @@ satellite/
 - Other useful keys: `llm.compaction` (`window`, `compact_at`, `keep`),
   `llm.max_tokens.<role>`, `llm.pricing` (real cost reporting).
 
+## Desktop app (development)
+
+The desktop app is an Electron/React front end over a **local backend that reuses the same
+runtime** as the CLI and the TUI (`Session` / `build_runtime`) on the same `.satellite/`
+storage. No agent logic is duplicated outside Python.
+
+### Backend
+
+```bash
+.venv\Scripts\pip install -e .[desktop]              # FastAPI + uvicorn (extra "desktop")
+.venv\Scripts\python -m satellite.desktop --project <carpeta>
+```
+
+It prints **one** JSON line on stdout with the real port and a fresh random token;
+everything else (including logs) goes to stderr:
+
+```json
+{"port": 51789, "token": "..."}
+```
+
+- Listens on `127.0.0.1` only, on an ephemeral port unless `--port` is given.
+- Every route under `/api` requires `Authorization: Bearer <token>`. `/api/health` is the
+  only open door, and it returns nothing.
+- The token lives only in the process that starts the backend and in Electron's main
+  process: never written to disk, never logged, never sent to the interface.
+- The provider API key is never returned: it is redacted as `api_key_set`.
+- `GET /api/status` reports `runtime_ready`, and `runtime_error` with the reason when the
+  runtime cannot be built (for example, no provider configured yet). Nothing is faked.
+
+Routes: `/api/status`, `/api/projects`, `/api/sessions`, `/api/messages`, `/api/approvals`,
+`/api/events` (SSE, resumable with `?after=<index>`), `/api/tasks`, `/api/tasks/{id}`
+(plus `/changes`, `/diff`, `/restore`), `/api/jobs`, `/api/agents`, `/api/skills`,
+`/api/config`, `/api/providers`, `/api/models`.
+
+```bash
+curl -H "Authorization: Bearer <token>" http://127.0.0.1:<puerto>/api/status
+curl -H "Authorization: Bearer <token>" http://127.0.0.1:<puerto>/api/events   # stream
+```
+
+Restoring a task's changes never touches the workspace without `{"confirm": true}`: the
+first call answers with the files and the full diff that would be discarded.
+
+Command permissions are unchanged and stay deny-by-default: with an empty allowlist every
+command is **asked** (once, for the session, or rejected) and nothing is granted silently.
+`allow_terminal=false` remains a hard veto, and the sandbox level `N0` is process
+isolation (clean env, no network, timeout) — it is **not** operating-system isolation.
+
+### Interface
+
+The Electron/React interface for this backend is the next step and is **not finished yet**;
+what is ready today is the backend above, which can be driven entirely from `curl`.
+
 ## Tests
 
 ```bash
