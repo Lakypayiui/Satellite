@@ -103,6 +103,16 @@ def test_model_without_reasoning_has_no_think_channel() -> None:
     assert resolve_think("gpt-4o-mini", None, False) is None
 
 
+def test_gpt_6_luna_effort_levels_are_available_without_a_think_channel() -> None:
+    assert effort_options("gpt-6-luna") == (
+        "auto", "off", "low", "medium", "high", "xhigh", "max"
+    )
+    meta = effort_metadata("gpt-6-luna")
+    assert meta["param"] == "reasoning_effort"
+    assert meta["think_param"] == ""
+    assert resolve_think("gpt-6-luna", None, True) is None
+
+
 def test_explicit_override_declares_think_for_a_custom_model() -> None:
     overrides = {
         "mi-modelo-raro": {

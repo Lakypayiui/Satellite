@@ -79,6 +79,25 @@ function familiaDeNombre(nombre: string): string {
   return nombre.trim().toLowerCase() === "anthropic" ? "anthropic" : "openai";
 }
 
+function variableDeCatalogo(clave: string): string {
+  if (clave === "commandcode" || clave === "commandcode-anthropic") {
+    return "COMMANDCODE_API_KEY";
+  }
+  return clave.toUpperCase().replace(/-/g, "_") + "_API_KEY";
+}
+
+function variableGuardada(proveedor: SavedProviderView | null): string {
+  if (!proveedor) return "";
+  const actual = proveedor.api_key_env ?? "";
+  if (
+    proveedor.name.toLowerCase().startsWith("commandcode") &&
+    (!actual || actual === "COMMANDCODE_ANTHROPIC_API_KEY" || actual === "COMMANDCODE_API_KEY")
+  ) {
+    return "COMMANDCODE_API_KEY";
+  }
+  return actual;
+}
+
 export function ModelEditor(props: Props) {
   const t = useT();
   const edicion = props.proveedor;
@@ -90,7 +109,7 @@ export function ModelEditor(props: Props) {
   const [familia, setFamilia] = useState(familiaDeNombre(edicion?.name ?? ""));
   const [url, setUrl] = useState(edicion?.base_url ?? "");
   const [modelo, setModelo] = useState(edicion?.model ?? "");
-  const [variable, setVariable] = useState(edicion?.api_key_env ?? "");
+  const [variable, setVariable] = useState(variableGuardada(edicion));
   const [clave, setClave] = useState("");
   const [cuenta, setCuenta] = useState(edicion?.account_id ?? "");
   const [esfuerzo, setEsfuerzo] = useState(edicion?.reasoning_effort || "auto");
@@ -170,7 +189,7 @@ export function ModelEditor(props: Props) {
       setNombre(entrada.key);
       setFamilia(entrada.family);
       setUrl(entrada.base_url);
-      setVariable(entrada.key.toUpperCase().replace("-", "_") + "_API_KEY");
+      setVariable(variableDeCatalogo(entrada.key));
       setModelos(null);
       setModelo("");
       setNota("");
@@ -191,8 +210,9 @@ export function ModelEditor(props: Props) {
     }
     if (resultado.auth_error) {
       const codigo = resultado.status || 401;
+      const detalle = resultado.error ? ` ${resultado.error}` : "";
       setNota(
-        t("editor.catalog.authError", { etiqueta, codigo, url: resultado.url }),
+        t("editor.catalog.authError", { etiqueta, codigo, url: resultado.url, detalle }),
       );
       return;
     }
@@ -223,7 +243,7 @@ export function ModelEditor(props: Props) {
       const ruta =
         editando && !clave.trim()
           ? `/models?provider=${encodeURIComponent(edicion!.id)}`
-          : `/models?base_url=${encodeURIComponent(url)}&family=${encodeURIComponent(familia)}&api_key=${encodeURIComponent(clave)}`;
+          : `/models?base_url=${encodeURIComponent(url)}&family=${encodeURIComponent(familia)}&api_key=${encodeURIComponent(clave)}&api_key_env=${encodeURIComponent(variable.trim())}`;
       const resultado = await api<ModelsResult>(ruta);
       aplicarResultado(
         resultado,
@@ -513,6 +533,9 @@ export function ModelEditor(props: Props) {
                   onChange={(evento) => setVariable(evento.target.value)}
                   placeholder="OPENAI_API_KEY"
                 />
+                {nombre.trim().toLowerCase().startsWith("commandcode") && (
+                  <span className="nota">{t("editor.commandcode.keyHint")}</span>
+                )}
               </div>
               <div className="campo">
                 <label>{editando ? t("editor.key.new") : t("editor.key.or")}</label>

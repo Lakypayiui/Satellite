@@ -41,7 +41,7 @@ class CatalogEntry:
         return self.group != "Local"
 
 
-GROUPS: tuple[str, ...] = ("API", "Asia", "Local", "Cloud (editar URL)")
+GROUPS: tuple[str, ...] = ("API", "Asia", "Local", "Cloud (editar URL)", "Pasarelas")
 
 CATALOG: tuple[CatalogEntry, ...] = (
     # --- API internacional ------------------------------------------------
@@ -106,6 +106,22 @@ CATALOG: tuple[CatalogEntry, ...] = (
     CatalogEntry("azure", "Azure OpenAI (necesita tu recurso)", OPENAI, "https://<recurso>.openai.azure.com/openai/v1", group="Cloud (editar URL)", needs_edit=True),
     CatalogEntry("cloudflare", "Cloudflare Workers AI (necesita account_id)", OPENAI, "https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1", group="Cloud (editar URL)", needs_edit=True),
     CatalogEntry("lepton", "Lepton (necesita subdominio)", OPENAI, "https://<modelo>.lepton.run/api/v1", group="Cloud (editar URL)", needs_edit=True),
+
+    # --- Pasarelas (al final de la lista) ---------------------------------
+    CatalogEntry(
+        "commandcode",
+        "CommandCode (OpenAI-compatible)",
+        OPENAI,
+        "https://api.commandcode.ai/provider/v1",
+        group="Pasarelas",
+    ),
+    CatalogEntry(
+        "commandcode-anthropic",
+        "CommandCode (Claude / Anthropic)",
+        ANTHROPIC,
+        "https://api.commandcode.ai/provider",
+        group="Pasarelas",
+    ),
 )
 
 MANUAL_KEY = "manual"

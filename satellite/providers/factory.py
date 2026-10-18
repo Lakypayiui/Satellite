@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 
 from satellite.core.errors import ProviderError
 from satellite.providers.anthropic_provider import AnthropicProvider
+from satellite.providers.chatgpt_plan import ChatGPTPlanProvider
+from satellite.providers.claude_code_plan import ClaudeCodePlanProvider
 from satellite.providers.base import LLMProvider
 from satellite.providers.fake import FakeLLM
 from satellite.providers.openai_compat import OpenAICompatProvider
@@ -40,6 +42,8 @@ class ProviderConfig:
     thinking: bool | None = field(default=None, compare=False)
     # ``llm.cache``: modo (explicit|auto), diagnóstico y pre-calentado.
     cache_options: dict = field(default_factory=dict, compare=False)
+    # Authentication route for account-backed providers (never contains credentials).
+    auth_type: str = field(default="", compare=False)
 
 
 class ProviderFactory:
@@ -51,6 +55,10 @@ class ProviderFactory:
         name = (cfg.name or "").lower()
         if name == "fake":
             return FakeLLM()
+        if getattr(cfg, "auth_type", "") == "chatgpt_account":
+            return ChatGPTPlanProvider(cfg)
+        if getattr(cfg, "auth_type", "") == "claude_code_account":
+            return ClaudeCodePlanProvider(cfg)
         if name == "anthropic":
             return AnthropicProvider(cfg, cache_options=getattr(cfg, "cache_options", None))
         if name in _OPENAI_COMPAT_NAMES or cfg.base_url:

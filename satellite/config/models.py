@@ -283,6 +283,25 @@ def _walk_pages(
         except urllib.error.HTTPError as exc:
             status = int(exc.code)
             error = f"HTTP {exc.code} {exc.reason}"
+            # Preserve only safe, structured provider diagnostics. Never surface an
+            # arbitrary response body (which could contain echoed credentials/data).
+            try:
+                payload = json.loads(exc.read(16_384).decode("utf-8", errors="replace"))
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                payload = None
+            if isinstance(payload, dict):
+                detail = payload.get("error", payload)
+                if isinstance(detail, dict):
+                    code = detail.get("code") or detail.get("type")
+                    message = detail.get("message")
+                    parts = []
+                    if isinstance(code, str) and code.strip():
+                        parts.append(code.strip()[:100])
+                    if isinstance(message, str) and message.strip():
+                        safe_message = " ".join(message.split())[:240]
+                        parts.append(safe_message)
+                    if parts:
+                        error += ": " + " — ".join(parts)
             break
         except Exception as exc:  # noqa: BLE001 — se reporta tal cual al usuario
             error = f"{type(exc).__name__}: {exc}"

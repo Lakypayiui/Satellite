@@ -611,6 +611,29 @@ export const TEXTOS = {
     en: "The model editor is a full page: it does not open as a dialog. The key is never returned; only whether it is set is known.",
   },
   "settings.models.add": { es: "Agregar modelo", en: "Add model" },
+  "settings.models.chatgpt.title": { es: "Cuenta de ChatGPT", en: "ChatGPT account" },
+  "settings.models.chatgpt.note": {
+    es: "Conecta ChatGPT para usar los modelos autorizados por tu plan. Satellite guardará la sesión cifrada en este dispositivo.",
+    en: "Connect ChatGPT to use models authorized by your plan. Satellite stores the session encrypted on this device.",
+  },
+  "settings.models.chatgpt.signIn": { es: "Iniciar sesión con ChatGPT", en: "Sign in with ChatGPT" },
+  "settings.models.chatgpt.connectedAs": { es: "Conectado como {email}", en: "Connected as {email}" },
+  "settings.models.chatgpt.useModel": { es: "Usar este modelo", en: "Use this model" },
+  "settings.models.chatgpt.disconnect": { es: "Desconectar", en: "Disconnect" },
+  "settings.models.chatgpt.connected": { es: "cuenta de ChatGPT conectada", en: "ChatGPT account connected" },
+  "settings.models.chatgpt.disconnected": { es: "cuenta de ChatGPT desconectada", en: "ChatGPT account disconnected" },
+  "settings.models.chatgpt.saved": { es: "proveedor ChatGPT agregado con {model}", en: "ChatGPT provider added with {model}" },
+  "settings.models.claude.title": { es: "Cuenta de Claude", en: "Claude account" },
+  "settings.models.claude.note": {
+    es: "Claude Code usa el inicio de sesión oficial de tu plan Claude. Inicia sesión en la terminal y después agrega un modelo para asignarlo a los roles.",
+    en: "Claude Code uses the official sign-in for your Claude plan. Sign in in the terminal, then add a model and assign it to roles.",
+  },
+  "settings.models.claude.signIn": { es: "Iniciar sesión con Claude", en: "Sign in with Claude" },
+  "settings.models.claude.useModel": { es: "Agregar este modelo", en: "Add this model" },
+  "settings.models.claude.installRequired": { es: "Instala Claude Code para habilitar modelos de tu cuenta.", en: "Install Claude Code to enable models from your account." },
+  "settings.models.claude.terminalMissing": { es: "No se encontró una terminal disponible.", en: "No terminal was found." },
+  "settings.models.claude.loginOpened": { es: "Claude Code se abrió en una terminal. Completa el inicio de sesión allí.", en: "Claude Code opened in a terminal. Complete sign-in there." },
+  "settings.models.claude.saved": { es: "proveedor Claude agregado con {model}", en: "Claude provider added with {model}" },
   "settings.models.saved": { es: "Guardados", en: "Saved" },
   "settings.models.empty": {
     es: "Todavía no hay ningún proveedor guardado.",
@@ -1219,6 +1242,10 @@ export const TEXTOS = {
     es: "variable de entorno (recomendado)",
     en: "environment variable (recommended)",
   },
+  "editor.commandcode.keyHint": {
+    es: "Hermes usa COMMANDCODE_API_KEY en ~/.hermes/.env; Satellite no lee ese archivo. Pega la clave en el campo de clave o configura esa variable para Satellite.",
+    en: "Hermes uses COMMANDCODE_API_KEY in ~/.hermes/.env; Satellite does not read that file. Paste the key in the key field or configure that variable for Satellite.",
+  },
   "editor.key.new": {
     es: "clave nueva (vacío = mantener la guardada)",
     en: "new key (empty = keep the saved one)",
@@ -1242,8 +1269,8 @@ export const TEXTOS = {
     en: "{n} models from {etiqueta} ({url})",
   },
   "editor.catalog.authError": {
-    es: "{etiqueta} rechazó la credencial (HTTP {codigo}) en {url}. Revisa la API key o usa la variable de entorno. Los modelos ya listados se conservan.",
-    en: "{etiqueta} rejected the credential (HTTP {codigo}) at {url}. Check the API key or use the environment variable. The models already listed are kept.",
+    es: "{etiqueta} rechazó la credencial (HTTP {codigo}) en {url}.{detalle} Revisa la API key o los permisos de la cuenta. Los modelos ya listados se conservan.",
+    en: "{etiqueta} rejected the credential (HTTP {codigo}) at {url}.{detalle} Check the API key or account permissions. The models already listed are kept.",
   },
   "editor.catalog.empty": {
     es: "{etiqueta} respondió sin modelos ({url})",

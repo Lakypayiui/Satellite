@@ -631,6 +631,7 @@ def _provider_config_from(data: dict, role: str | None = None) -> ProviderConfig
                 reasoning_effort=_effort_from(role_cfg, saved_match),
                 thinking=_think_from(role_cfg, saved_match),
                 cache_options=cache_options,
+                auth_type=str(saved_match.get("auth_type") or ""),
             )
         if role_cfg.get("base_url") or role_cfg.get("model") or role_cfg.get("provider"):
             model = role_cfg.get("model", "gpt-4o-mini")
@@ -660,5 +661,6 @@ def _provider_config_from(data: dict, role: str | None = None) -> ProviderConfig
             reasoning_effort=_effort_from(llm, data),
             thinking=_think_from(llm, entry or data, data),
             cache_options=cache_options,
+            auth_type=str(entry.get("auth_type") or ""),
         )
     return None

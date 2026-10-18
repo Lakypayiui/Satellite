@@ -584,6 +584,12 @@ interface Bridge {
   restart: () => Promise<Envelope<unknown>>;
   pickFolder: () => Promise<string>;
   info: () => Promise<{ ready: boolean; repoRoot: string; dev: boolean }>;
+  chatgpt: {
+    status: () => Promise<{ connected: boolean; email: string }>;
+    login: () => Promise<{ email: string }>;
+    disconnect: () => Promise<{ connected: boolean; email: string }>;
+  };
+  claude: { login: () => Promise<{ launched: boolean; message?: string }> };
   platform: string;
   windowControls: {
     minimize: () => void;
@@ -634,6 +640,12 @@ export const bridge = {
   restart: () => puente().restart(),
   pickFolder: () => puente().pickFolder(),
   info: () => puente().info(),
+  chatgpt: {
+    status: () => puente().chatgpt.status(),
+    login: () => puente().chatgpt.login(),
+    disconnect: () => puente().chatgpt.disconnect(),
+  },
+  claude: { login: () => puente().claude.login() },
   plataforma: () => puente().platform,
   estadoVentana: () => puente().windowControls.state(),
   alCambiarVentana: (onEstado: (estado: EstadoVentana) => void) =>

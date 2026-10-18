@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -102,6 +103,8 @@ class SavedProvider:
     account_id: str = ""
     # Tope de tokens de salida pedido (0 = sin límite explícito: lo decide el proveedor).
     max_tokens: int = 0
+    # Authentication type; only a label such as ``chatgpt_account``, never a credential.
+    auth_type: str = ""
 
     def to_dict(self) -> dict:
         """Forma pública (la que consumen el CLI y la TUI)."""
@@ -116,6 +119,7 @@ class SavedProvider:
             "think": self.think,
             "account_id": self.account_id,
             "max_tokens": self.max_tokens,
+            "auth_type": self.auth_type,
         }
 
     def label(self) -> str:
@@ -141,6 +145,12 @@ def _entries(data: dict) -> list[dict]:
 
 
 def _api_key_set(entry: dict) -> bool:
+    if str(entry.get("auth_type") or "") == "chatgpt_account":
+        # The account token itself lives in Electron's OS-encrypted vault; Python receives it
+        # only on demand through the loopback broker.
+        return bool(os.getenv("SATELLITE_ACCOUNT_BROKER_URL") and os.getenv("SATELLITE_ACCOUNT_BROKER_SECRET"))
+    if str(entry.get("auth_type") or "") == "claude_code_account":
+        return bool(shutil.which("claude"))
     if entry.get("api_key"):
         return True
     env = str(entry.get("api_key_env") or "")
@@ -180,6 +190,7 @@ def _to_saved(entry: dict, index: int) -> SavedProvider:
         think=entry.get("think") if isinstance(entry.get("think"), bool) else None,
         account_id=str(entry.get("account_id") or ""),
         max_tokens=_as_int(entry.get("max_tokens")),
+        auth_type=str(entry.get("auth_type") or ""),
     )
 
 
@@ -536,6 +547,7 @@ def provider_connection(project_root: Path | str, provider_id: str) -> dict | No
         # elegir la estrategia de listado de modelos sin depender del host.
         "provider": provider_catalog.key_for_base_url(str(entry.get("base_url", ""))),
         "account_id": str(entry.get("account_id") or ""),
+        "auth_type": str(entry.get("auth_type") or ""),
     }
 
 
@@ -584,6 +596,7 @@ def save_provider(
     api_key: str = "",
     api_key_env: str = "",
     account_id: str = "",
+    auth_type: str = "",
     reasoning_effort: str | None = None,
     think: bool | None = None,
     max_tokens: int | None = None,
@@ -603,6 +616,7 @@ def save_provider(
     name, model = str(name), str(model)
     base_url, api_key, api_key_env = str(base_url), str(api_key or ""), str(api_key_env or "")
     account_id = str(account_id or "")
+    auth_type = str(auth_type or "")
 
     exact = next(
         (
@@ -622,6 +636,8 @@ def save_provider(
             entry["api_key_env"] = api_key_env
         if account_id:
             entry["account_id"] = account_id
+        if auth_type:
+            entry["auth_type"] = auth_type
         _apply_entry_settings(entry, reasoning_effort, max_tokens, model_overrides, think)
         providers = [
             p
@@ -658,6 +674,8 @@ def save_provider(
                 account_id = str(previous["account_id"])
         if account_id:
             entry["account_id"] = account_id
+        if auth_type:
+            entry["auth_type"] = auth_type
         _apply_entry_settings(entry, reasoning_effort, max_tokens, model_overrides, think)
         providers.append(entry)
 
@@ -704,6 +722,7 @@ def update_provider(
     reasoning_effort: str | None = None,
     think: bool | None = None,
     account_id: str | None = None,
+    auth_type: str | None = None,
     max_tokens: int | None = None,
     model_overrides: dict | None = None,
 ) -> SavedProvider:
@@ -745,6 +764,11 @@ def update_provider(
             entry["account_id"] = str(account_id).strip()
         else:
             entry.pop("account_id", None)
+    if auth_type is not None:
+        if str(auth_type).strip():
+            entry["auth_type"] = str(auth_type).strip()
+        else:
+            entry.pop("auth_type", None)
     _apply_entry_settings(entry, reasoning_effort, max_tokens, model_overrides, think)
     providers[index] = entry
     store["providers"] = providers

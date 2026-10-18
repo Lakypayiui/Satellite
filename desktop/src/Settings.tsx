@@ -40,6 +40,7 @@ import {
   SavedProviderView,
   ToolView,
   api,
+  bridge,
   mensajeDe,
 } from "./api";
 import { useT, type Clave } from "./i18n";
@@ -227,6 +228,16 @@ export function Settings(props: Props) {
   const [proxyPort, setProxyPort] = useState("");
   const [proxyForm, setProxyForm] = useState<SafeProxyForm>(() => formularioProxy(null));
 
+  // ChatGPT plan account (tokens remain inside Electron's main process).
+  const [chatgptAccount, setChatgptAccount] = useState({ connected: false, email: "" });
+  const [chatgptModels, setChatgptModels] = useState<{ id: string; display_name: string }[]>([]);
+  const [chatgptModel, setChatgptModel] = useState("");
+  const [chatgptBusy, setChatgptBusy] = useState(false);
+  const [claudeModels, setClaudeModels] = useState<{ id: string; display_name: string }[]>([]);
+  const [claudeModel, setClaudeModel] = useState("sonnet");
+  const [claudeAvailable, setClaudeAvailable] = useState(false);
+  const [claudeBusy, setClaudeBusy] = useState(false);
+
   // --- mantenimiento ---
   const [salida, setSalida] = useState("");
   const [salidaSandbox, setSalidaSandbox] = useState("");
@@ -243,6 +254,125 @@ export function Settings(props: Props) {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    let vigente = true;
+    void api<{ available: boolean; models: { id: string; display_name: string }[] }>(
+      "/providers/claude-models",
+    ).then((result) => {
+      if (!vigente) return;
+      setClaudeAvailable(result.available);
+      setClaudeModels(result.models ?? []);
+      setClaudeModel(result.models?.[0]?.id ?? "sonnet");
+    }).catch((exc) => {
+      if (vigente) props.onAviso(mensajeDe(exc));
+    });
+    return () => { vigente = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function iniciarSesionClaude(): Promise<void> {
+    setClaudeBusy(true);
+    try {
+      const result = await bridge.claude.login();
+      if (!result.launched) throw new Error(result.message || t("settings.models.claude.terminalMissing"));
+      props.onAviso(t("settings.models.claude.loginOpened"));
+    } catch (exc) {
+      props.onAviso(mensajeDe(exc));
+    } finally {
+      setClaudeBusy(false);
+    }
+  }
+
+  async function guardarClaude(): Promise<void> {
+    if (!claudeModel) return;
+    setClaudeBusy(true);
+    try {
+      await api<ConfigView>("/providers/claude-account", {
+        method: "POST",
+        body: { model: claudeModel },
+      });
+      props.onConfigCambiada();
+      props.onAviso(t("settings.models.claude.saved", { model: claudeModel }));
+    } catch (exc) {
+      props.onAviso(mensajeDe(exc));
+    } finally {
+      setClaudeBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    let vigente = true;
+    void bridge.chatgpt.status().then(async (status) => {
+      if (!vigente) return;
+      setChatgptAccount(status);
+      if (!status.connected) return;
+      try {
+        const result = await api<{ ok: boolean; models: { id: string; display_name: string }[] }>(
+          "/providers/chatgpt-models",
+        );
+        if (vigente) {
+          setChatgptModels(result.models ?? []);
+          setChatgptModel(result.models?.[0]?.id ?? "");
+        }
+      } catch (exc) {
+        if (vigente) props.onAviso(mensajeDe(exc));
+      }
+    }).catch((exc) => {
+      if (vigente) props.onAviso(mensajeDe(exc));
+    });
+    return () => { vigente = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function conectarChatGPT(): Promise<void> {
+    setChatgptBusy(true);
+    try {
+      const account = await bridge.chatgpt.login();
+      setChatgptAccount({ connected: true, email: account.email });
+      const result = await api<{ ok: boolean; models: { id: string; display_name: string }[] }>(
+        "/providers/chatgpt-models",
+      );
+      setChatgptModels(result.models ?? []);
+      setChatgptModel(result.models?.[0]?.id ?? "");
+      props.onAviso(t("settings.models.chatgpt.connected"));
+    } catch (exc) {
+      props.onAviso(mensajeDe(exc));
+    } finally {
+      setChatgptBusy(false);
+    }
+  }
+
+  async function desconectarChatGPT(): Promise<void> {
+    setChatgptBusy(true);
+    try {
+      setChatgptAccount(await bridge.chatgpt.disconnect());
+      setChatgptModels([]);
+      setChatgptModel("");
+      props.onAviso(t("settings.models.chatgpt.disconnected"));
+    } catch (exc) {
+      props.onAviso(mensajeDe(exc));
+    } finally {
+      setChatgptBusy(false);
+    }
+  }
+
+  async function guardarChatGPT(): Promise<void> {
+    if (!chatgptModel) return;
+    setChatgptBusy(true);
+    try {
+      await api<ConfigView>("/providers/chatgpt-account", {
+        method: "POST",
+        body: { model: chatgptModel },
+      });
+      props.onConfigCambiada();
+      props.onAviso(t("settings.models.chatgpt.saved", { model: chatgptModel }));
+    } catch (exc) {
+      props.onAviso(mensajeDe(exc));
+    } finally {
+      setChatgptBusy(false);
+    }
+  }
 
   // Los roles se apoyan en la lista de proveedores guardados. Cuando /config cambia (tras
   // guardar/activar/quitar un proveedor) se vuelve a pedir /roles: así el desplegable no se
@@ -668,6 +798,52 @@ export function Settings(props: Props) {
     return (
       <section className="tarjeta">
         <p className="nota">{t("settings.models.note")}</p>
+
+        <div className="subbloque">
+          <p className="etiqueta">{t("settings.models.chatgpt.title")}</p>
+          <p className="nota">{t("settings.models.chatgpt.note")}</p>
+          {chatgptAccount.connected ? (
+            <>
+              <p className="meta">{t("settings.models.chatgpt.connectedAs", { email: chatgptAccount.email || "ChatGPT" })}</p>
+              <div className="acciones">
+                <select value={chatgptModel} onChange={(event) => setChatgptModel(event.target.value)}>
+                  {chatgptModels.map((model) => (
+                    <option key={model.id} value={model.id}>{model.display_name}</option>
+                  ))}
+                </select>
+                <button className="primary" disabled={chatgptBusy || !chatgptModel} onClick={() => void guardarChatGPT()}>
+                  {t("settings.models.chatgpt.useModel")}
+                </button>
+                <button className="quiet" disabled={chatgptBusy} onClick={() => void desconectarChatGPT()}>
+                  {t("settings.models.chatgpt.disconnect")}
+                </button>
+              </div>
+            </>
+          ) : (
+            <button className="primary" disabled={chatgptBusy} onClick={() => void conectarChatGPT()}>
+              {t("settings.models.chatgpt.signIn")}
+            </button>
+          )}
+        </div>
+
+        <div className="subbloque">
+          <p className="etiqueta">{t("settings.models.claude.title")}</p>
+          <p className="nota">{t("settings.models.claude.note")}</p>
+          <div className="acciones">
+            <button className="primary" disabled={claudeBusy || !claudeAvailable} onClick={() => void iniciarSesionClaude()}>
+              {t("settings.models.claude.signIn")}
+            </button>
+            <select value={claudeModel} onChange={(event) => setClaudeModel(event.target.value)}>
+              {claudeModels.map((model) => (
+                <option key={model.id} value={model.id}>{model.display_name}</option>
+              ))}
+            </select>
+            <button className="primary" disabled={claudeBusy || !claudeModel || !claudeAvailable} onClick={() => void guardarClaude()}>
+              {t("settings.models.claude.useModel")}
+            </button>
+          </div>
+          {!claudeAvailable && <p className="meta">{t("settings.models.claude.installRequired")}</p>}
+        </div>
 
         <div className="acciones" style={{ marginTop: 0 }}>
           <button className="primary" onClick={() => props.onEditarModelo(null)}>

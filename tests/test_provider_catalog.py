@@ -51,6 +51,25 @@ def test_common_providers_are_present() -> None:
         assert catalog.get(key) is not None, key
 
 
+def test_commandcode_entries_use_documented_openai_and_anthropic_roots() -> None:
+    openai = catalog.get("commandcode")
+    anthropic = catalog.get("commandcode-anthropic")
+    assert openai is not None
+    assert openai.family == catalog.OPENAI
+    assert openai.base_url == "https://api.commandcode.ai/provider/v1"
+    assert anthropic is not None
+    assert anthropic.family == catalog.ANTHROPIC
+    assert anthropic.base_url == "https://api.commandcode.ai/provider"
+
+
+def test_commandcode_entries_are_in_the_last_catalogue_group() -> None:
+    grouped = catalog.by_group()
+    assert catalog.GROUPS[-1] == "Pasarelas"
+    assert [entry.key for entry in grouped["Pasarelas"]] == [
+        "commandcode", "commandcode-anthropic"
+    ]
+
+
 def test_find_matches_key_label_and_group() -> None:
     assert [e.key for e in catalog.find("groq")] == ["groq"]
     assert any(e.key == "moonshot" for e in catalog.find("kimi"))

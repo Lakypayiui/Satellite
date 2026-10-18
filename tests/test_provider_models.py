@@ -6,7 +6,7 @@ import urllib.error
 
 import pytest
 
-from satellite.config import models
+from satellite.config import model_sources, models
 
 
 class FakeResponse:
@@ -45,6 +45,84 @@ def test_models_url_anthropic_does_not_duplicate_v1() -> None:
     assert models.models_url("https://api.anthropic.com", "anthropic") == "https://api.anthropic.com/v1/models"
     assert models.models_url("https://api.anthropic.com/v1", "anthropic") == "https://api.anthropic.com/v1/models"
     assert models.models_url("", "anthropic") == "https://api.anthropic.com/v1/models"
+
+
+COMMANDCODE_MODELS_URL = "https://api.commandcode.ai/provider/v1/models?view=client"
+
+
+def test_commandcode_model_catalog_uses_shared_public_models_endpoint(monkeypatch) -> None:
+    captured: list = []
+    patch_urlopen(monkeypatch, payload='{"data": []}', capture=captured)
+    openai_url = models.models_url(
+        "https://api.commandcode.ai/provider/v1", "openai", "commandcode"
+    )
+    anthropic_url = models.models_url(
+        "https://api.commandcode.ai/provider", "anthropic", "commandcode-anthropic"
+    )
+    # Un solo endpoint (la vista de cliente) sirve a las dos familias.
+    assert openai_url == COMMANDCODE_MODELS_URL
+    assert anthropic_url == openai_url
+    models.fetch_models(
+        "https://api.commandcode.ai/provider/v1",
+        "openai",
+        "cmd-key",
+        provider="commandcode",
+    )
+    request = captured[0]
+    assert request.full_url == COMMANDCODE_MODELS_URL
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    # El edge rechaza con 403 el User-Agent por defecto de urllib: hay que identificarse.
+    assert headers.get("user-agent") == model_sources.COMMANDCODE_USER_AGENT
+    assert "authorization" not in headers
+
+
+def test_commandcode_public_catalog_omits_auth_header_without_a_key(monkeypatch) -> None:
+    captured: list = []
+    patch_urlopen(monkeypatch, payload='{"data": []}', capture=captured)
+    models.fetch_models(
+        "https://api.commandcode.ai/provider/v1",
+        "openai",
+        provider="commandcode",
+    )
+    headers = {k.lower(): v for k, v in captured[0].headers.items()}
+    assert "authorization" not in headers
+    assert headers.get("user-agent") == model_sources.COMMANDCODE_USER_AGENT
+
+
+def test_commandcode_anthropic_catalog_also_omits_auth_header(monkeypatch) -> None:
+    captured: list = []
+    patch_urlopen(monkeypatch, payload='{"data": []}', capture=captured)
+    models.fetch_models(
+        "https://api.commandcode.ai/provider",
+        "anthropic",
+        "cmd-key",
+        provider="commandcode-anthropic",
+    )
+    request = captured[0]
+    assert request.full_url == COMMANDCODE_MODELS_URL
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    assert "authorization" not in headers
+    assert "x-api-key" not in headers
+    assert headers.get("user-agent") == model_sources.COMMANDCODE_USER_AGENT
+
+
+def test_commandcode_client_catalog_parses_both_families(monkeypatch) -> None:
+    payload = json.dumps(
+        {
+            "object": "list",
+            "catalogVersion": "abc",
+            "data": [{"id": "claude-sonnet-5-5"}, {"id": "gpt-5"}],
+        }
+    )
+    patch_urlopen(monkeypatch, payload=payload)
+    for base_url, family, key in (
+        ("https://api.commandcode.ai/provider/v1", "openai", "commandcode"),
+        ("https://api.commandcode.ai/provider", "anthropic", "commandcode-anthropic"),
+    ):
+        result = models.fetch_models(base_url, family, "cmd-key", provider=key)
+        assert result.ok is True
+        assert result.models == ("claude-sonnet-5-5", "gpt-5")
+        assert result.url == COMMANDCODE_MODELS_URL
 
 
 def test_fetch_models_parses_data_field(monkeypatch) -> None:
@@ -92,6 +170,16 @@ def test_fetch_models_reports_http_error(monkeypatch) -> None:
     assert result.ok is False
     assert "401" in result.error
     assert result.url.endswith("/models")
+
+
+def test_fetch_models_preserves_structured_http_error_detail(monkeypatch) -> None:
+    body = json.dumps({"error": {"code": "upgrade_required", "message": "Plan does not allow this endpoint"}}).encode()
+    error = urllib.error.HTTPError("u", 403, "Forbidden", {}, io.BytesIO(body))
+    patch_urlopen(monkeypatch, error=error)
+    result = models.fetch_models("https://x/v1", "openai", "bad")
+    assert result.auth_error is True
+    assert "upgrade_required" in result.error
+    assert "Plan does not allow this endpoint" in result.error
 
 
 def test_fetch_models_reports_connection_error(monkeypatch) -> None:

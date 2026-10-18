@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
+import shutil
 import re
 from dataclasses import asdict, is_dataclass
 from enum import Enum
@@ -320,6 +322,89 @@ class DesktopBackend:
         if error:
             data["runtime_error"] = error
         return data
+
+    def chatgpt_account_models(self) -> dict:
+        """Model catalog for the connected ChatGPT plan account."""
+        broker = os.getenv("SATELLITE_ACCOUNT_BROKER_URL", "").rstrip("/")
+        secret = os.getenv("SATELLITE_ACCOUNT_BROKER_SECRET", "")
+        if not broker or not secret:
+            raise BackendError("account_not_connected", "Conecta tu cuenta de ChatGPT desde Ajustes.", 409)
+        try:
+            import httpx
+
+            token = httpx.get(
+                f"{broker}/chatgpt/token",
+                headers={"Authorization": f"Bearer {secret}"},
+                timeout=15,
+            )
+            token.raise_for_status()
+            access_token = str(token.json().get("access_token") or "")
+            response = httpx.get(
+                "https://api.openai.com/v1/models",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=20,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            models = payload.get("models", []) if isinstance(payload, dict) else []
+            catalog = [
+                {
+                    "id": str(item.get("slug") or ""),
+                    "display_name": str(item.get("display_name") or item.get("slug") or ""),
+                }
+                for item in models
+                if isinstance(item, dict) and item.get("visibility") == "list" and item.get("slug")
+            ]
+            return {"ok": True, "models": catalog}
+        except Exception as exc:  # noqa: BLE001 — translate network errors for the UI
+            raise BackendError("account_models_failed", f"No se pudo cargar el catálogo de ChatGPT: {exc}", 502) from exc
+
+    def save_chatgpt_account_provider(self, model: str, project_root=None) -> dict:
+        """Add ChatGPT-plan authentication as a normal selectable Satellite provider."""
+        value = str(model or "").strip()
+        if not value:
+            raise BackendError("invalid_model", "Elige un modelo de ChatGPT.", 422)
+        from satellite.config import providers as pconfig
+
+        root = self.resolve(project_root)
+        pconfig.save_provider(
+            root,
+            name="chatgpt",
+            model=value,
+            base_url="https://api.openai.com/v1",
+            auth_type="chatgpt_account",
+        )
+        error = self._rebuild_runtime(project_root)
+        payload = self.config(project_root)
+        return {**payload, "runtime_error": error} if error else payload
+
+    def claude_account_models(self) -> dict:
+        """List model aliases supported through the signed-in Claude Code CLI."""
+        models = [
+            {"id": "sonnet", "display_name": "Claude Sonnet"},
+            {"id": "opus", "display_name": "Claude Opus"},
+            {"id": "haiku", "display_name": "Claude Haiku"},
+        ]
+        return {"ok": True, "available": bool(shutil.which("claude")), "models": models}
+
+    def save_claude_account_provider(self, model: str, project_root=None) -> dict:
+        """Add Claude Code account authentication as a normal selectable provider."""
+        value = str(model or "").strip().lower()
+        if value not in {"sonnet", "opus", "haiku"}:
+            raise BackendError("invalid_model", "Elige un modelo de Claude válido.", 422)
+        from satellite.config import providers as pconfig
+
+        root = self.resolve(project_root)
+        pconfig.save_provider(
+            root,
+            name="anthropic",
+            model=value,
+            base_url="claude-code://account",
+            auth_type="claude_code_account",
+        )
+        error = self._rebuild_runtime(project_root)
+        payload = self.config(project_root)
+        return {**payload, "runtime_error": error} if error else payload
 
     # --- aprobaciones ---
 
@@ -1446,6 +1531,7 @@ class DesktopBackend:
         api_key: str = "",
         api_key_env: str | None = None,
         account_id: str | None = None,
+        auth_type: str | None = None,
         reasoning_effort: str | None = None,
         think: bool | None = None,
         max_tokens: int | None = None,
@@ -1483,6 +1569,7 @@ class DesktopBackend:
             api_key=api_key,
             api_key_env=api_key_env,
             account_id=account_id,
+            auth_type=auth_type,
             reasoning_effort=effort,
             think=self._validate_think(modelo, root, provider.id, think, announced),
             max_tokens=max_tokens,
@@ -1525,6 +1612,7 @@ class DesktopBackend:
         api_key: str = "",
         api_key_env: str = "",
         account_id: str = "",
+        auth_type: str = "",
         reasoning_effort: str = "",
         think: bool | None = None,
         max_tokens: int = 0,
@@ -1549,6 +1637,7 @@ class DesktopBackend:
             api_key=api_key,
             api_key_env=api_key_env,
             account_id=account_id.strip(),
+            auth_type=auth_type.strip(),
             reasoning_effort=effort,
             think=self._validate_think(model.strip(), root, "", think, announced),
             max_tokens=max_tokens,
@@ -1564,6 +1653,7 @@ class DesktopBackend:
         base_url: str = "",
         family: str = "openai",
         api_key: str = "",
+        api_key_env: str = "",
         provider: str = "",
         project_root=None,
     ) -> dict:
@@ -1590,12 +1680,45 @@ class DesktopBackend:
             base_url = str(conn.get("base_url") or "")
             family = str(conn.get("family") or "openai")
             api_key = str(conn.get("api_key") or "")
+            auth_type = str(conn.get("auth_type") or "")
             provider_key = str(conn.get("provider") or "")
             account_id = str(conn.get("account_id") or "")
             if not base_url.strip():
                 raise BackendError(
                     "invalid_request", f"el proveedor {provider!r} no tiene URL base", 422
                 )
+            if auth_type == "chatgpt_account":
+                # ChatGPT plan providers use their OAuth token and account-specific catalog,
+                # never the generic API-key model probe below.
+                from satellite.config.models import ModelsResult
+
+                catalog = self.chatgpt_account_models()
+                ids = tuple(
+                    str(item.get("id") or "")
+                    for item in catalog.get("models", [])
+                    if isinstance(item, dict) and item.get("id")
+                )
+                result = ModelsResult(
+                    ok=True,
+                    models=ids,
+                    url=f"{base_url.rstrip('/')}/models",
+                    provider="openai",
+                )
+                data = to_jsonable(result)
+                if isinstance(data, dict):
+                    modelos = data.get("models") if isinstance(data.get("models"), list) else []
+                    data["suggested"] = default_model([str(item) for item in modelos]) if modelos else ""
+                    data["effort_options"] = self._models_effort_options(
+                        modelos, {}, root, provider, family
+                    )
+                    data["effort_meta"] = self._models_effort_meta(
+                        modelos, {}, root, provider
+                    )
+                return data
+        elif not api_key and api_key_env.strip():
+            # When adding a provider, resolve the environment variable server-side.
+            # The value itself never travels through the UI or the request URL.
+            api_key = os.getenv(api_key_env.strip(), "")
         if not base_url.strip():
             raise BackendError("invalid_request", "falta 'base_url' o 'provider'", 422)
         # Sin id guardado, se reconoce el proveedor por su URL (catálogo) para usar su

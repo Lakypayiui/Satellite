@@ -51,6 +51,7 @@ export class Backend {
     private readonly repoRoot: string,
     private readonly python: string,
     private readonly home?: string,
+    private readonly accountBroker?: { url: string; secret: string },
   ) {}
 
   get url(): string {
@@ -69,7 +70,16 @@ export class Backend {
     if (this.home) args.push("--home", this.home);
     const child = spawn(this.python, args, {
       cwd: this.repoRoot,
-      env: { ...process.env, PYTHONUNBUFFERED: "1" },
+      env: {
+        ...process.env,
+        PYTHONUNBUFFERED: "1",
+        ...(this.accountBroker
+          ? {
+              SATELLITE_ACCOUNT_BROKER_URL: this.accountBroker.url,
+              SATELLITE_ACCOUNT_BROKER_SECRET: this.accountBroker.secret,
+            }
+          : {}),
+      },
       stdio: ["ignore", "pipe", "pipe"],
     }) as Hijo;
     this.child = child;

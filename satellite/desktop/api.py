@@ -118,6 +118,7 @@ class ProviderIn(BaseModel):
     api_key: str = ""
     api_key_env: str = ""
     account_id: str = ""
+    auth_type: str = ""
     reasoning_effort: str = ""
     think: bool | None = None
     max_tokens: int = 0
@@ -145,6 +146,12 @@ class ActiveProviderIn(BaseModel):
     provider: str = Field(min_length=1)
 
 
+class AccountProviderIn(BaseModel):
+    """Modelo seleccionado para una cuenta conectada de un proveedor."""
+
+    model: str = Field(min_length=1)
+
+
 class ProviderPatchIn(BaseModel):
     """Cambios sobre un proveedor guardado; sólo se aplica lo que llega (``None`` = igual)."""
 
@@ -154,6 +161,7 @@ class ProviderPatchIn(BaseModel):
     api_key: str = ""
     api_key_env: str | None = None
     account_id: str | None = None
+    auth_type: str | None = None
     reasoning_effort: str | None = None
     think: bool | None = None
     max_tokens: int | None = None
@@ -603,6 +611,22 @@ def build_router(backend: DesktopBackend, auth: Callable) -> APIRouter:
     def providers() -> dict:
         return {"providers": backend.config()["providers"]}
 
+    @router.get("/providers/chatgpt-models")
+    def chatgpt_models() -> dict:
+        return backend.chatgpt_account_models()
+
+    @router.post("/providers/chatgpt-account")
+    def save_chatgpt_account_provider(payload: AccountProviderIn) -> dict:
+        return backend.save_chatgpt_account_provider(payload.model)
+
+    @router.get("/providers/claude-models")
+    def claude_models() -> dict:
+        return backend.claude_account_models()
+
+    @router.post("/providers/claude-account")
+    def save_claude_account_provider(payload: AccountProviderIn) -> dict:
+        return backend.save_claude_account_provider(payload.model)
+
     @router.post("/providers")
     def save_provider(payload: ProviderIn) -> dict:
         """Guarda y activa un proveedor; la clave nunca vuelve en la respuesta."""
@@ -613,6 +637,7 @@ def build_router(backend: DesktopBackend, auth: Callable) -> APIRouter:
             api_key=payload.api_key,
             api_key_env=payload.api_key_env,
             account_id=payload.account_id,
+            auth_type=payload.auth_type,
             reasoning_effort=payload.reasoning_effort,
             think=payload.think,
             max_tokens=payload.max_tokens,
@@ -642,6 +667,7 @@ def build_router(backend: DesktopBackend, auth: Callable) -> APIRouter:
             api_key=payload.api_key,
             api_key_env=payload.api_key_env,
             account_id=payload.account_id,
+            auth_type=payload.auth_type,
             reasoning_effort=payload.reasoning_effort,
             think=payload.think,
             max_tokens=payload.max_tokens,
@@ -652,14 +678,22 @@ def build_router(backend: DesktopBackend, auth: Callable) -> APIRouter:
 
     @router.get("/models")
     def models(
-        base_url: str = "", family: str = "openai", api_key: str = "", provider: str = ""
+        base_url: str = "",
+        family: str = "openai",
+        api_key: str = "",
+        api_key_env: str = "",
+        provider: str = "",
     ) -> dict:
         """Modelos de esa URL, con el más usado sugerido (como la TUI).
 
         Con `provider` (id guardado) usa sus credenciales del servidor: la clave no sale.
         """
         return backend.models(
-            base_url=base_url, family=family, api_key=api_key, provider=provider
+            base_url=base_url,
+            family=family,
+            api_key=api_key,
+            api_key_env=api_key_env,
+            provider=provider,
         )
 
     @router.post("/shutdown")

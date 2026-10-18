@@ -19,6 +19,10 @@ No todos los proveedores exponen ``GET <base>/models`` con la misma forma. Aquí
 - ``fireworks``   → ``GET {base}/models`` o, si hay ``account_id``, el endpoint por
   cuenta (``/v1/accounts/{account_id}/models``). Sin ``account_id`` queda la vía normal.
 - ``mistral``     → ``GET {base}/models`` → ``{"data": [...]}``.
+- ``commandcode`` → ``GET {base}/models?view=client`` (el catálogo que sirve al cliente).
+  Es el mismo endpoint para las dos entradas (OpenAI y Anthropic): su **edge rechaza con
+  403** a quien no manda un ``User-Agent`` propio (``urllib`` manda ``Python-urllib/x.y``),
+  así que hay que identificarse; no usa clave.
 
 El resto del sistema (:mod:`satellite.config.models`) sólo **consume** la estrategia: así
 no se asume que todos usan ``/models`` y una ruta nueva se añade en un único sitio, sin
@@ -47,6 +51,8 @@ SHAPE_DATA = "data"
 
 # Cabeceras de autenticación.
 HEADERS_BEARER = "bearer"
+HEADERS_OPTIONAL_BEARER = "optional_bearer"
+HEADERS_NONE = "none"
 HEADERS_ANTHROPIC = "anthropic"
 HEADERS_GOOGLE = "google"
 
@@ -57,6 +63,12 @@ CAPS_GEMINI = "gemini"
 CAPS_COHERE = "cohere"
 
 ANTHROPIC_VERSION = "2023-06-01"
+
+# El catálogo de CommandCode responde 403 a los clientes con el User-Agent por defecto de
+# urllib; el cliente oficial se identifica como ``command-code/<versión>`` y pide la vista
+# de cliente con ``view=client``. Mismo endpoint para las dos familias (OpenAI y Anthropic).
+COMMANDCODE_USER_AGENT = "command-code/satellite"
+COMMANDCODE_MODELS_QUERY = "view=client"
 
 DEFAULT_BASES: dict[str, str] = {
     OPENAI: "https://api.openai.com/v1",
@@ -79,6 +91,10 @@ class ModelSource:
     family: str = OPENAI
     # Ruta a añadir a la base ("" = ``/models``, o ``/v1/models`` en anthropic).
     models_path: str = ""
+    # Consulta que el endpoint exige para su vista de cliente ("" = sin query).
+    models_query: str = ""
+    # ``User-Agent`` a enviar ("" = el de urllib). Hay catálogos que lo exigen.
+    user_agent: str = ""
     # Sufijo que hay que garantizar en la base antes de añadir ``models_path``.
     ensure_suffix: str = ""
     # Sufijo a quitar de la base (p. ej. Gemini: la base es la compatible ``…/openai``).
@@ -93,6 +109,16 @@ class ModelSource:
 # Orden = prioridad al resolver por host (coincidencia exacta de host o subdominio).
 SOURCES: tuple[ModelSource, ...] = (
     ModelSource("openai", hosts=("api.openai.com",)),
+    # CommandCode serves its catalog at GET /provider/v1/models?view=client without a key:
+    # the API key is used on generation endpoints, not on this catalog request. The edge
+    # rejects a missing/urllib User-Agent with 403, so the client identifies itself.
+    ModelSource(
+        "commandcode",
+        hosts=("api.commandcode.ai",),
+        models_query=COMMANDCODE_MODELS_QUERY,
+        headers=HEADERS_NONE,
+        user_agent=COMMANDCODE_USER_AGENT,
+    ),
     ModelSource(
         "anthropic", hosts=("api.anthropic.com",), family=ANTHROPIC,
         pagination=PAGINATION_ANTHROPIC, headers=HEADERS_ANTHROPIC,
@@ -175,7 +201,23 @@ def _ensure(base: str, suffix: str) -> str:
 def models_endpoint(
     source: ModelSource, base_url: str = "", family: str = OPENAI, account_id: str = ""
 ) -> str:
-    """URL del listado de modelos para esa estrategia."""
+    """URL del listado de modelos para esa estrategia (con su ``view``, si lo pide)."""
+    return _add_query(
+        _models_path(source, base_url, family, account_id), source.models_query
+    )
+
+
+def _add_query(url: str, query: str) -> str:
+    """Añade la consulta del endpoint sin pisar una que ya trajera la URL."""
+    if not query:
+        return url
+    return f"{url}{'&' if '?' in url else '?'}{query}"
+
+
+def _models_path(
+    source: ModelSource, base_url: str = "", family: str = OPENAI, account_id: str = ""
+) -> str:
+    """URL del listado de modelos, sin la consulta de vista del proveedor."""
     fam = _norm_family(family)
     base = str(base_url or "").rstrip("/") or DEFAULT_BASES[fam]
     if source.key == FIREWORKS_KEY and str(account_id or "").strip():
@@ -232,17 +274,26 @@ def candidate_endpoints(
 
 
 def headers_for(source: ModelSource, api_key: str | None, family: str = OPENAI) -> dict[str, str]:
-    """Cabeceras de la petición según la autenticación documentada del proveedor."""
+    """Cabeceras de la petición: autenticación del proveedor + su ``User-Agent`` si lo exige."""
+    headers = _auth_headers(source, api_key)
+    if source.user_agent:
+        headers["User-Agent"] = source.user_agent
+    return headers
+
+
+def _auth_headers(source: ModelSource, api_key: str | None) -> dict[str, str]:
+    """Cabeceras de autenticación según lo documentado para el proveedor."""
+    if source.headers == HEADERS_NONE:
+        return {}
     if source.headers == HEADERS_GOOGLE:
-        headers: dict[str, str] = {}
-        if api_key:
-            headers["x-goog-api-key"] = api_key
-        return headers
+        return {"x-goog-api-key": api_key} if api_key else {}
     if source.headers == HEADERS_ANTHROPIC:
         headers = {"anthropic-version": ANTHROPIC_VERSION}
         if api_key:
             headers["x-api-key"] = api_key
         return headers
+    if source.headers == HEADERS_OPTIONAL_BEARER:
+        return {"Authorization": f"Bearer {api_key}"} if api_key else {}
     return {"Authorization": f"Bearer {api_key}" if api_key else "Bearer not-needed"}
 
 

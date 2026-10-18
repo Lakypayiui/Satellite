@@ -48,11 +48,13 @@ EFFORT_LEVELS_DEFAULT: tuple[str, ...] = ("low", "medium", "high")
 OFF_LEVELS: tuple[str, ...] = ("none", "off")
 
 # Token/temperatura: sólo las familias de razonamiento de OpenAI cambian de parámetro.
-_REASONING_PREFIXES: tuple[str, ...] = ("o1", "o3", "o4", "gpt-5")
+_REASONING_PREFIXES: tuple[str, ...] = ("o1", "o3", "o4", "gpt-5", "gpt-6-luna")
 
 # Esfuerzo por familia: (prefijos, niveles, valor de «off», parámetro). El valor de «off»
 # vacío = esa familia no permite apagar el razonamiento, así que no se ofrece la opción.
 _EFFORT_FAMILIES: tuple[tuple[tuple[str, ...], tuple[str, ...], str, str], ...] = (
+    # GPT-6 Luna's published model reference lists these exact Responses API values.
+    (("gpt-6-luna",), ("low", "medium", "high", "xhigh", "max"), "none", EFFORT_PARAM),
     (
         ("deepseek-flash", "deepseek-v4-pro", "deepseek-v4", "deepseek-reasoner"),
         ("low", "high", "max"),
@@ -63,7 +65,7 @@ _EFFORT_FAMILIES: tuple[tuple[tuple[str, ...], tuple[str, ...], str, str], ...] 
 )
 
 # Orden canónico para presentar los niveles (los desconocidos van al final, alfabéticos).
-_LEVEL_RANK: dict[str, int] = {"minimal": 0, "low": 1, "medium": 2, "high": 3, "max": 4, "xhigh": 5}
+_LEVEL_RANK: dict[str, int] = {"minimal": 0, "low": 1, "medium": 2, "high": 3, "xhigh": 4, "max": 5}
 
 # Interruptor «Think» explícito: canal, valor que enciende, valor que apaga. Se declara por
 # proveedor/modelo (tabla o config explícita) y **nunca** se envía si el modelo no lo declara.

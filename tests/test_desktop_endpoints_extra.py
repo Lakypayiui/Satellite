@@ -100,6 +100,39 @@ def test_models_needs_a_url(tmp_path: Path) -> None:
     assert respuesta.json()["error"]["code"] == "invalid_request"
 
 
+def test_model_refresh_resolves_catalog_environment_variable_server_side(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from types import SimpleNamespace
+
+    from satellite.config.models import ModelsResult
+
+    backend = DesktopBackend(tmp_path, token=TOKEN, home=tmp_path / "home")
+    monkeypatch.setenv("COMMANDCODE_ANTHROPIC_API_KEY", "cmd-test-key")
+    captured: dict = {}
+
+    def load_models(base_url, family, api_key, provider, account_id):
+        captured.update(
+            base_url=base_url,
+            family=family,
+            api_key=api_key,
+            provider=provider,
+            account_id=account_id,
+        )
+        return ModelsResult(ok=True, models=("example/model",))
+
+    monkeypatch.setattr(backend, "session", lambda _project_root=None: SimpleNamespace(load_models=load_models))
+    result = backend.models(
+        base_url="https://api.commandcode.ai/provider",
+        family="anthropic",
+        api_key_env="COMMANDCODE_ANTHROPIC_API_KEY",
+    )
+
+    assert result["ok"] is True
+    assert captured["api_key"] == "cmd-test-key"
+    assert captured["provider"] == "commandcode-anthropic"
+
+
 # --- roles ---
 
 

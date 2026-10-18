@@ -78,6 +78,17 @@ const api = {
       dev: boolean;
     }>,
 
+  /** Conexión OpenAI guardada con cifrado del sistema operativo. */
+  chatgpt: {
+    status: () => ipcRenderer.invoke("satellite:chatgpt-status") as Promise<{ connected: boolean; email: string }>,
+    login: () => ipcRenderer.invoke("satellite:chatgpt-login") as Promise<{ email: string }>,
+    disconnect: () => ipcRenderer.invoke("satellite:chatgpt-disconnect") as Promise<{ connected: boolean; email: string }>,
+  },
+  /** Abre el login oficial de Claude Code en una terminal del sistema. */
+  claude: {
+    login: () => ipcRenderer.invoke("satellite:claude-login") as Promise<{ launched: boolean; message?: string }>,
+  },
+
   /** Plataforma del proceso (`win32`, `darwin`, `linux`). */
   platform: plataforma,
 

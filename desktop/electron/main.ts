@@ -13,10 +13,12 @@ import {
   type IpcMainEvent,
   type IpcMainInvokeEvent,
 } from "electron";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 
 import { ApiError, Backend, StreamItem } from "./backend";
+import { ChatGPTAccount } from "./chatgpt";
 import {
   DEFAULT_CHAT_WATERMARK,
   DEFAULT_CHAT_WATERMARK_OPACITY,
@@ -77,6 +79,8 @@ const RUTAS = [
   "/desktop-control",
   "/safe-proxy",
   "/providers",
+  "/providers/claude-models",
+  "/providers/claude-account",
   "/models",
   "/roles",
   "/doctor",
@@ -97,6 +101,7 @@ const RUTAS = [
 
 let ventana: BrowserWindow | null = null;
 let backend: Backend | null = null;
+const chatgptAccount = new ChatGPTAccount();
 let cortarFlujo: (() => void) | null = null;
 // Arranque único: una petición que llegue antes del handshake espera a este intento en vez
 // de fallar con "el backend no está en marcha" (era lo que dejaba la ventana bloqueada).
@@ -206,7 +211,8 @@ function iniciarBackend(): Promise<Backend> {
   if (backend?.ready) return Promise.resolve(backend);
   if (!arranque) {
     arranque = (async () => {
-      const instancia = new Backend(REPO_ROOT, pythonPath(), process.env.SATELLITE_HOME);
+      const broker = await chatgptAccount.startBroker();
+      const instancia = new Backend(REPO_ROOT, pythonPath(), process.env.SATELLITE_HOME, broker);
       await instancia.start(process.env.SATELLITE_PROJECT || undefined);
       backend = instancia;
       errorArranque = "";
@@ -341,6 +347,54 @@ ipcMain.handle("satellite:info", () => ({
   repoRoot: REPO_ROOT,
   dev: Boolean(DEV_URL),
 }));
+
+ipcMain.handle("satellite:chatgpt-status", (evento) => {
+  if (!remitenteValido(evento)) throw new Error("remitente no autorizado");
+  return chatgptAccount.status();
+});
+
+ipcMain.handle("satellite:chatgpt-login", async (evento) => {
+  if (!remitenteValido(evento)) throw new Error("remitente no autorizado");
+  return chatgptAccount.signIn();
+});
+
+ipcMain.handle("satellite:chatgpt-disconnect", (evento) => {
+  if (!remitenteValido(evento)) throw new Error("remitente no autorizado");
+  chatgptAccount.disconnect();
+  return chatgptAccount.status();
+});
+
+ipcMain.handle("satellite:claude-login", (evento) => {
+  if (!remitenteValido(evento)) throw new Error("remitente no autorizado");
+  // Claude Code is Anthropic's supported account-authenticated route for plan users.
+  // Run its normal interactive login in a visible terminal; credentials stay in Claude Code.
+  let child: ChildProcess;
+  if (process.platform === "win32") {
+    child = spawn("cmd.exe", ["/d", "/c", "start", "", "cmd.exe", "/k", "claude"], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+  } else if (process.platform === "darwin") {
+    child = spawn("osascript", ["-e", 'tell application "Terminal" to do script "claude"'], {
+      detached: true,
+      stdio: "ignore",
+    });
+  } else {
+    const terminal = ["x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal"]
+      .find((command) => Boolean(process.env.PATH?.split(path.delimiter).some((dir) =>
+        existsSync(path.join(dir, command)),
+      )));
+    if (!terminal) return { launched: false, message: "No se encontró una terminal disponible." };
+    const args = terminal === "gnome-terminal" ? ["--", "claude"] : ["-e", "claude"];
+    child = spawn(terminal, args, { detached: true, stdio: "ignore" });
+  }
+  child.once("error", (error) => {
+    console.error("No se pudo abrir Claude Code:", error.message);
+  });
+  child.unref();
+  return { launched: true };
+});
 
 ipcMain.handle("satellite:pick-folder", async () => {
   const resultado = await dialog.showOpenDialog({
