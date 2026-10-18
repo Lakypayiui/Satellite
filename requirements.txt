@@ -1,12 +1,39 @@
+# Dependencias Python del proyecto. Este es el archivo que instala CI
+# (`.github/workflows/ci.yml` hace `pip install -r requirements.txt`), así que tiene que
+# incluir **todo** lo que el flujo necesita para ejecutar la suite, no sólo el runtime.
+#
+# pyproject.toml es la **fuente única** de versiones; este archivo lo refleja:
+#   [project].dependencies  -> "Runtime"
+#   extra "dev"             -> "Pruebas / CI"
+#   extra "desktop"         -> "App de escritorio y Safe Proxy"
+# `tests/test_requirements_consistency.py` compara ambos y falla si se separan.
+#
+# Los extras "desktop-control*" (pywinauto / pyobjc-framework-* / PyGObject) NO van aquí:
+# son opcionales, con import perezoso, marcados por plataforma y con smoke opt-in.
+
+# --- Runtime: núcleo (CLI, TUI, agentes y proveedores) ---
 jsonschema>=4.0
 openai>=1.0
 anthropic>=0.25
 typer>=0.9
 httpx>=0.27
+
 # Interfaz interactiva (TUI) y su renderizado: el código las importa de verdad.
 textual>=8.0
 rich>=13.7
+
 # Consolas legacy de Windows: el click vendorizado de typer importa colorama
 # para envolver el ANSI (si falta, cualquier comando del CLI revienta).
 colorama>=0.4; platform_system == "Windows"
+
+# --- App de escritorio y Safe Proxy embebido (extra "desktop") ---
+# Backend local de la app (`satellite/desktop`) y API de control del proxy embebido.
+# Sin esto, los tests que los ejercitan se **saltan en silencio** (importorskip) en CI.
+fastapi>=0.110
+uvicorn>=0.27
+# `satellite/desktop/api.py` importa pydantic directamente (BaseModel/Field); llega con
+# fastapi (que exige >=2.7.0), declarado con el mismo suelo.
+pydantic>=2.7.0
+
+# --- Pruebas / CI (extra "dev") ---
 pytest>=7.0

@@ -21,7 +21,9 @@ dev = ["pytest>=7.0"]
 # La app de escritorio y el Safe Proxy embebido (satellite/safe_proxy) corren sobre
 # FastAPI + uvicorn. httpx (cliente del upstream y del control local) ya es dependencia
 # base; el servicio embebido NO necesita PyYAML (su config es JSON).
-desktop = ["fastapi>=0.110", "uvicorn>=0.27"]
+# pydantic lo importa directamente `satellite/desktop/api.py` (BaseModel/Field): llega con
+# fastapi (que exige >=2.7.0), pero se declara con el mismo suelo en vez de depender de rebote.
+desktop = ["fastapi>=0.110", "uvicorn>=0.27", "pydantic>=2.7.0"]
 # Backend UIA de sólo lectura para Windows (control de escritorio). Dependencia
 # OPCIONAL con import perezoso: nunca se instala en la base. Rango estable:
 # 0.6.9 es el último estable; 1.0.0b1 es beta (excluida por <1.0 y por no admitir

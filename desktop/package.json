@@ -12,7 +12,8 @@
     "build": "npm run typecheck && npm run build:renderer && npm run build:electron",
     "start": "npm run build && electron .",
     "smoke": "node scripts/smoke.mjs",
-    "icons": "electron scripts/icons.mjs"
+    "icons": "node scripts/icons.mjs",
+    "dist": "npm run icons && npm run build && electron-builder"
   },
   "build": {
     "appId": "ai.satellite.desktop",

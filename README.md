@@ -544,6 +544,25 @@ Packaging (electron-builder, installers per platform) is **not finished**: what 
 development, as above. Shipping it would need a bundled Python interpreter and the package
 alongside the app — a separate step, and not claimed here.
 
+### Packaging icons (generated, headless)
+
+`desktop/build/icon.{png,ico,icns}` (plus the `-light` variants) are **generated artifacts** and
+are gitignored, so a clean checkout does not have them. They are derived from the original art in
+`Icono/` (`Ico_white` for dark themes, `Ico_Black` for light ones): centred square crop, area
+resize, and the ICO/ICNS containers with one embedded PNG per size.
+
+- The generator is **Node only** (`desktop/scripts/icons.mjs`, `npm run icons`): it decodes and
+  encodes PNG with `node:zlib` and does not use Electron, so it runs **headless** everywhere —
+  including the Linux CI runner, with no `node_modules` and no X server. (The previous version
+  needed Electron + `app.whenReady()`, which on Linux means `xvfb-run`: a system dependency that
+  made a clean checkout unable to reproduce them.)
+- Nobody has to remember a manual command: the icon test generates them when they are missing or
+  older than the sources, CI runs `npm run icons` before the suite, and `npm run dist` generates
+  them before packaging (`npm run icons && npm run build && electron-builder`; electron-builder is
+  not a dependency yet — that is the unfinished packaging step above).
+- The test then validates the **real** files (PNG size, ICO entries and the size of every embedded
+  PNG, ICNS container and types), not just their existence.
+
 ## Tests
 
 ```bash

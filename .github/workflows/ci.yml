@@ -23,6 +23,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      # Los iconos del empaquetado (desktop/build/) están ignorados por git y el script los
+      # genera con Node puro (sin Electron ni display, así que no hace falta xvfb).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Instalar dependencias
         run: |
           python -m pip install --upgrade pip
@@ -31,6 +37,10 @@ jobs:
       # El CLI revienta si falta colorama en consolas de Windows: que falle aquí.
       - name: Humo del CLI
         run: python -m satellite.cli --help
+
+      - name: Iconos del empaquetado (headless)
+        working-directory: desktop
+        run: npm run icons
 
       - name: Suite
         run: python -m pytest tests/ -q
