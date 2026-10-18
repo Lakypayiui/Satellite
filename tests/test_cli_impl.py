@@ -32,7 +32,7 @@ def test_agents_command(tmp_path: Path, monkeypatch) -> None:
                 AgentSpec(id="test_runner", name="T", capabilities=("run_tests",), prompt_ref="p"),
             ]
 
-    def fake_build(project):
+    def fake_build(project, **kwargs):
         return None, None, None, FakeRegistry()
 
     monkeypatch.setattr("satellite.cli.app.build_runtime", fake_build)
@@ -50,7 +50,7 @@ def test_run_command_with_fake_orchestrator(tmp_path: Path, monkeypatch) -> None
         async def execute(self, task):
             return TaskResult(task_id="x", status=TaskStatus.OK, summary="tarea ok", output={})
 
-    def fake_build(project):
+    def fake_build(project, **kwargs):
         return FakeOrch(), None, None, None
 
     monkeypatch.setattr("satellite.cli.app.build_runtime", fake_build)

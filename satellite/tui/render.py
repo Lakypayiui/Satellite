@@ -2,12 +2,28 @@
 
 from __future__ import annotations
 
+import difflib
+from pathlib import Path
+
+from rich.console import Group
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
 from satellite.core.events import ExecutionEvent
 from satellite.core.task import TaskResult
+
+# Paleta Obsidian/Dark Slate compartida por tarjetas y barra superior.
+ACCENT = "#38bdf8"
+SUCCESS = "#22c55e"
+DANGER = "#ef4444"
+MUTED = "#94a3b8"
+CARD_BG = "#1e293b"
+
+ASSISTANT_BADGE = "🤖 Satellite"
+USER_BADGE = "👤 Tú"
+PREVIEW_LINES = 10
 
 _EVENT_STYLE: dict[str, str] = {
     "task_started": "bold cyan",
@@ -40,7 +56,7 @@ _EVENT_ICON: dict[str, str] = {
     "graph_built": "◇",
     "node_started": "→",
     "node_finished": "✓",
-    "tool_called": "⚙",
+    "tool_called": "›",
     "retry": "↻",
     "node_stuck": "✗",
     "validation_failed": "✗",
@@ -74,25 +90,75 @@ def welcome() -> Panel:
     return Panel(body, border_style="cyan", title="satellite", title_align="left")
 
 
-def reply_panel(reply) -> Panel:
-    """Panel con la respuesta del agente."""
-    style = {
-        "ok": "green",
-        "failed": "red",
-        "needs_user_input": "yellow",
-        "partial": "cyan",
-    }.get(getattr(reply, "status", ""), "cyan")
-    body = Text()
-    body.append("⏺ ", style=f"bold {style}")
-    body.append(getattr(reply, "text", "") or "(sin respuesta)")
+def _fmt_ms(ms: float) -> str:
+    """Duración legible (ms o segundos con un decimal)."""
+    value = float(ms or 0)
+    if value <= 0:
+        return ""
+    return f"{value:.0f} ms" if value < 1000 else f"{value / 1000:.1f} s"
+
+
+def _reply_footer(reply, *, elapsed_ms: float = 0, metrics: dict | None = None) -> Text:
+    """Pie de la respuesta: tiempo, tokens y estado."""
+    metrics = metrics or getattr(reply, "metrics", None) or {}
+    footer = Text()
+    resumen: list[str] = []
+    if elapsed_ms:
+        resumen.append(_fmt_ms(elapsed_ms))
+    tokens_in = int(metrics.get("tokens_in", 0) or 0)
+    tokens_out = int(metrics.get("tokens_out", 0) or 0)
+    if tokens_in or tokens_out:
+        resumen.append(f"tokens {tokens_in}/{tokens_out}")
+    trozos: list[tuple[str, str]] = []
+    if resumen:
+        trozos.append((" · ".join(resumen), "dim"))
     error = getattr(reply, "error", None)
     if error and error not in (getattr(reply, "text", "") or ""):
-        body.append(f"\n\nerror: {error}", style="red")
-    task_id = getattr(reply, "task_id", "")
+        trozos.append((f"error: {error}", DANGER))
+    meta = [value for value in (getattr(reply, "task_id", ""), getattr(reply, "status", "")) if value]
+    if meta:
+        trozos.append((" · ".join(meta), "dim"))
+    for index, (chunk, style) in enumerate(trozos):
+        if index:
+            footer.append("   ")
+        footer.append(chunk, style=style)
+    return footer
+
+
+def user_card(text: str) -> Panel:
+    """Tarjeta compacta del mensaje del usuario."""
+    contenido = str(text or "").strip() or "(mensaje vacío)"
+    return Panel(
+        Text(contenido),
+        title=USER_BADGE,
+        title_align="left",
+        border_style=SUCCESS,
+        padding=(0, 1),
+    )
+
+
+def reply_panel(reply, *, elapsed_ms: float = 0, metrics: dict | None = None) -> Panel:
+    """Panel con la respuesta del agente (markdown, código resaltado y pie con métricas)."""
     status = getattr(reply, "status", "")
-    if task_id or status:
-        body.append(f"\n\n{task_id} · {status}", style="dim")
-    return Panel(body, title="agente", title_align="left", border_style=style)
+    accent = {
+        "ok": SUCCESS,
+        "failed": DANGER,
+        "needs_user_input": "yellow",
+        "partial": ACCENT,
+    }.get(status, ACCENT)
+    text = getattr(reply, "text", "") or "(sin respuesta)"
+    body = Group(
+        Markdown(text),
+        Text(""),
+        _reply_footer(reply, elapsed_ms=elapsed_ms, metrics=metrics),
+    )
+    return Panel(
+        body,
+        title=ASSISTANT_BADGE,
+        title_align="left",
+        border_style=accent,
+        padding=(0, 1),
+    )
 
 
 def plan_options_panel(options) -> Panel:
@@ -137,21 +203,90 @@ def conversation_table(turns) -> Table:
     table.add_column("mensaje")
     for turn in turns:
         role = getattr(turn, "role", "")
-        label = "usuario" if role == "user" else "asistente"
+        label = USER_BADGE if role == "user" else ASSISTANT_BADGE
         style = "bold green" if role == "user" else "cyan"
         table.add_row(Text(label, style=style), getattr(turn, "content", ""))
     return table
 
 
+def _short_path(path: object, *, parts: int = 2) -> str:
+    """Últimos tramos de una ruta (para la píldora del workspace)."""
+    if not path:
+        return ""
+    chunks = [c for c in str(path).replace("\\", "/").rstrip("/").split("/") if c]
+    return "/".join(chunks[-parts:]) if chunks else str(path)
+
+
+def git_branch(project_root) -> str:
+    """Rama git del proyecto (o el sha corto); ``""`` si no aplica."""
+    try:
+        root = Path(project_root)
+    except TypeError:
+        return ""
+    head = root / ".git" / "HEAD"
+    try:
+        if not head.exists():
+            gitfile = root / ".git"
+            if gitfile.is_file():
+                content = gitfile.read_text(encoding="utf-8", errors="replace").strip()
+                if content.startswith("gitdir:"):
+                    target = Path(content.split(":", 1)[1].strip())
+                    if not target.is_absolute():
+                        target = (root / target).resolve()
+                    head = target / "HEAD"
+            if not head.exists():
+                return ""
+        raw = head.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+    if not raw:
+        return ""
+    if raw.startswith("ref:"):
+        ref = raw.split(":", 1)[1].strip()
+        prefijo = "refs/heads/"
+        # Las ramas pueden llevar "/" (feature/x): sólo se retira el prefijo de refs.
+        return ref[len(prefijo):] if ref.startswith(prefijo) else ref.rsplit("/", 1)[-1]
+    return raw[:7]
+
+
+def _pill(text: Text, label: str, style: str) -> None:
+    """Añade una píldora (etiqueta con fondo) a la barra superior."""
+    text.append(" ")
+    text.append(f" {label} ", style=style)
+
+
 def status_bar(status) -> Text:
-    """Barra de estado de una línea."""
+    """Barra superior con píldoras: workspace, modelo, rama, sandbox y política."""
     text = Text()
-    text.append(" ", style="")
-    text.append(str(status.project_root), style="bold")
-    text.append("  ·  ", style="dim")
-    text.append(f"agentes {status.agents}", style="cyan")
-    text.append("  ·  ", style="dim")
-    text.append(f"skills {status.skills}", style="magenta")
+    text.append(" ")
+    workspace = _short_path(getattr(status, "project_root", ""))
+    if workspace:
+        _pill(text, f"📁 {workspace}", f"#e2e8f0 on {CARD_BG}")
+    provider = getattr(status, "provider", "") or ""
+    model = getattr(status, "model", "") or ""
+    if provider or model:
+        etiqueta = f"🤖 {provider}" + (f"/{model}" if model else "")
+        _pill(text, etiqueta, f"bold #7dd3fc on {CARD_BG}")
+    branch = git_branch(getattr(status, "project_root", ""))
+    if branch:
+        _pill(text, f"⎇ {branch}", f"#a7f3d0 on {CARD_BG}")
+    sandbox = getattr(status, "sandbox", "")
+    if sandbox:
+        _pill(text, f"🧱 sandbox {sandbox}", f"#bae6fd on {CARD_BG}")
+    policy = getattr(status, "policy_mode", "") or ""
+    if policy:
+        policy_style = {"ask": "yellow", "auto": "green", "unrestricted": "bold red"}.get(
+            policy, "yellow"
+        )
+        _pill(text, f"🛡 {policy}", f"{policy_style} on {CARD_BG}")
+    if getattr(status, "safe_mode", False):
+        _pill(text, "SAFE-MODE", "bold #0f172a on #facc15")
+
+    detalle = Text()
+    detalle.append("  ")
+    detalle.append(f"agentes {getattr(status, 'agents', 0)}", style="dim")
+    detalle.append("  ·  ", style="dim")
+    detalle.append(f"skills {getattr(status, 'skills', 0)}", style="dim")
     percent = int(getattr(status, "context_percent", 0) or 0)
     if percent:
         from satellite.context.compaction import render_bar, usage_style
@@ -159,22 +294,9 @@ def status_bar(status) -> Text:
         style = {"ok": "dim", "aviso": "yellow", "peligro": "bold red"}[
             usage_style(percent / 100)
         ]
-        text.append("  ·  ", style="dim")
-        text.append(f"ctx {render_bar(percent / 100, 6, unicode_ok=True)} {percent}%", style=style)
-    text.append("  ·  ", style="dim")
-    provider = status.provider or "sin proveedor"
-    model = f"/{status.model}" if status.model else ""
-    text.append(f"{provider}{model}", style="green")
-    text.append("  ·  ", style="dim")
-    style = {"ask": "yellow", "auto": "green", "unrestricted": "bold red"}.get(
-        status.policy_mode, "yellow"
-    )
-    text.append(f"política {status.policy_mode}", style=style)
-    text.append("  ·  ", style="dim")
-    text.append(f"sandbox {status.sandbox}", style="blue")
-    if status.safe_mode:
-        text.append("  ·  ", style="dim")
-        text.append("SAFE-MODE", style="bold yellow")
+        detalle.append("  ·  ", style="dim")
+        detalle.append(f"ctx {render_bar(percent / 100, 6, unicode_ok=True)} {percent}%", style=style)
+    text.append_text(detalle)
     return text
 
 
@@ -357,8 +479,222 @@ def result_panel(result: TaskResult) -> Panel:
     return Panel(body, title=f"tarea {result.task_id}", title_align="left", border_style=style)
 
 
-def event_text(event: ExecutionEvent) -> Text:
-    """Línea compacta y coloreada para un evento de ejecución."""
+_READ_TOOLS = ("read_file",)
+_WRITE_TOOLS = ("write_file", "edit_file")
+_TERMINAL_TOOLS = ("run_command", "run_shell", "run_argv", "run_python")
+_LISTING_TOOLS = ("search_files", "list_dir")
+
+
+def _basename(value: object, fallback: str) -> str:
+    """Último tramo de una ruta (o el valor entero si no es una ruta)."""
+    if not value:
+        return fallback
+    chunks = [c for c in str(value).replace("\\", "/").rstrip("/").split("/") if c]
+    return chunks[-1] if chunks else fallback
+
+
+def tool_action(tool: str, arguments: dict | None = None) -> str:
+    """Acción en presente y semántica para la tarjeta del agente (sin engranes)."""
+    args = arguments or {}
+    name = str(tool or "")
+    if name == "read_file":
+        return f"Leyendo {_basename(args.get('path'), 'un archivo')}"
+    if name == "write_file":
+        return f"Escribiendo {_basename(args.get('path'), 'un archivo')}"
+    if name == "edit_file":
+        return f"Editando {_basename(args.get('path'), 'un archivo')}"
+    if name in ("run_command", "run_shell", "run_argv"):
+        command = str(args.get("command") or "").strip()
+        cabeza = command.split()[0] if command else ""
+        return f"Ejecutando {cabeza}" if cabeza else "Ejecutando un comando"
+    if name == "run_python":
+        return "Ejecutando Python"
+    if name == "search_files":
+        return f"Buscando {args.get('pattern') or 'archivos'}"
+    if name == "list_dir":
+        return f"Listando {_basename(args.get('path'), 'carpeta')}"
+    return f"Usando {name}" if name else "trabajando"
+
+
+def _visible_lines(lines: list[str], limit: int = PREVIEW_LINES) -> tuple[list[str], int]:
+    """Recorta una lista de líneas y dice cuántas quedaron fuera."""
+    if len(lines) <= limit:
+        return lines, 0
+    return lines[:limit], len(lines) - limit
+
+
+def _diff_body(old: str, new: str) -> Text:
+    """Diff unificado de un fragmento, con color real (+ verde, - rojo)."""
+    body = Text()
+    lines = list(
+        difflib.unified_diff(
+            (old or "").splitlines(), (new or "").splitlines(), "antes", "después", lineterm=""
+        )
+    )
+    if not lines:
+        body.append("(sin cambios)", style="dim")
+        return body
+    visibles, restantes = _visible_lines(lines)
+    for line in visibles:
+        if line.startswith(("+++", "---")):
+            body.append(line + "\n", style="bold")
+        elif line.startswith("@@"):
+            body.append(line + "\n", style="cyan")
+        elif line.startswith("+"):
+            body.append(line + "\n", style=SUCCESS)
+        elif line.startswith("-"):
+            body.append(line + "\n", style=DANGER)
+        else:
+            body.append(line + "\n", style="dim")
+    if restantes:
+        body.append(f"… {restantes} líneas más\n", style="dim")
+    return body
+
+
+def _added_body(content: str) -> Text:
+    """Contenido nuevo de un ``write_file`` como líneas añadidas (verde)."""
+    body = Text()
+    lines = (content or "").splitlines() or [""]
+    visibles, restantes = _visible_lines(lines)
+    for line in visibles:
+        body.append(f"+ {line}\n", style=SUCCESS)
+    if restantes:
+        body.append(f"… {restantes} líneas más\n", style="dim")
+    return body
+
+
+def _terminal_body(output: object, *, success: bool, error: str) -> Text:
+    """Caja de terminal: salida truncada con stderr en rojo."""
+    body = Text()
+    if isinstance(output, dict):
+        exit_code = output.get("exit_code")
+        if exit_code is not None:
+            body.append(f"exit {exit_code}\n", style=SUCCESS if success else DANGER)
+        for stream, style in (("stdout", ""), ("stderr", DANGER)):
+            text = output.get(stream)
+            if not isinstance(text, str) or not text.strip():
+                continue
+            visibles, restantes = _visible_lines(text.rstrip("\n").splitlines())
+            body.append(f"$ {stream}\n", style="bold dim")
+            for line in visibles:
+                body.append(f"  {line}\n", style=style)
+            if restantes:
+                body.append(f"  … {restantes} líneas más\n", style="dim")
+    elif isinstance(output, str) and output.strip():
+        visibles, restantes = _visible_lines(output.rstrip("\n").splitlines())
+        for line in visibles:
+            body.append(f"  {line}\n")
+        if restantes:
+            body.append(f"  … {restantes} líneas más\n", style="dim")
+    if not success and error:
+        body.append(error + "\n", style=DANGER)
+    if not body.plain:
+        body.append("(sin salida)", style="dim")
+    return body
+
+
+def _listing_body(output: object, *, error: str) -> Text:
+    """Resultado de una búsqueda/listado: cuántos y una muestra."""
+    items = output if isinstance(output, list) else []
+    body = Text()
+    body.append(f"{len(items)} resultado(s)\n", style="bold")
+    for item in items[:6]:
+        if isinstance(item, dict):
+            label = item.get("path") or item.get("name") or ""
+        else:
+            label = str(item)
+        body.append(f"  · {_clip(label, 80)}\n", style=ACCENT)
+    if len(items) > 6:
+        body.append(f"  … {len(items) - 6} más\n", style="dim")
+    if error:
+        body.append(error + "\n", style=DANGER)
+    return body
+
+
+def action_card(
+    tool: str,
+    arguments: dict | None = None,
+    *,
+    success: bool = True,
+    error: str = "",
+    output: object = None,
+) -> Panel:
+    """Tarjeta semántica de una llamada a herramienta (Read/Update/Terminal/Search)."""
+    args = arguments or {}
+    name = str(tool or "")
+    ok_border = DANGER if not success else ACCENT
+    padding = (0, 1)
+
+    if name in _READ_TOOLS:
+        path = str(args.get("path") or "")
+        body = Text()
+        content = output if isinstance(output, str) else ""
+        if content:
+            total = len(content.splitlines())
+            body.append(f"{total} líneas", style="bold")
+            muestra, _ = _visible_lines([line for line in content.splitlines()], 4)
+            resumen = " ".join(line.strip() for line in muestra if line.strip())
+            if resumen:
+                body.append("\n" + _clip(resumen, 120), style="dim")
+        else:
+            body.append("contenido leído", style="dim")
+        if not success and error:
+            body.append("\n" + error, style=DANGER)
+        return Panel(
+            body, title=f"📖 Read {path or 'archivo'}", title_align="left",
+            border_style=ok_border, padding=padding,
+        )
+
+    if name in _WRITE_TOOLS:
+        path = str(args.get("path") or "")
+        if name == "edit_file":
+            body = _diff_body(str(args.get("old_string") or ""), str(args.get("new_string") or ""))
+        else:
+            body = _added_body(str(args.get("content") or ""))
+        if not success and error:
+            body.append(error + "\n", style=DANGER)
+        return Panel(
+            body, title=f"📝 Update {path or 'archivo'}", title_align="left",
+            border_style=DANGER if not success else SUCCESS, padding=padding,
+        )
+
+    if name in _TERMINAL_TOOLS:
+        command = str(args.get("command") or args.get("code") or "").strip()
+        return Panel(
+            _terminal_body(output, success=success, error=error),
+            title=f"❯ Terminal {_clip(command, 60) or 'comando'}",
+            title_align="left", border_style=ok_border, padding=padding,
+        )
+
+    if name in _LISTING_TOOLS:
+        target = str(args.get("pattern") or args.get("path") or "")
+        return Panel(
+            _listing_body(output, error=error),
+            title=f"🔍 Search {_clip(target, 60) or 'proyecto'}",
+            title_align="left", border_style=ok_border, padding=padding,
+        )
+
+    body = Text(_clip(args, 120), style="dim") if args else Text("ejecutado", style="dim")
+    if not success and error:
+        body.append("\n" + error, style=DANGER)
+    return Panel(
+        body, title=f"🔧 {name or 'tool'}", title_align="left",
+        border_style=ok_border, padding=padding,
+    )
+
+
+def event_text(event: ExecutionEvent):
+    """Render de un evento: tarjeta semántica para tool_called, línea compacta si no."""
+    payload = event.payload or {}
+    if event.event_type.value == "tool_called":
+        tool = str(getattr(event, "tool_name", "") or payload.get("tool", ""))
+        return action_card(
+            tool,
+            payload.get("arguments"),
+            success=bool(payload.get("success", True)),
+            error=str(payload.get("error") or ""),
+            output=payload.get("output"),
+        )
     name = event.event_type.value
     style = _EVENT_STYLE.get(name, "white")
     icon = _EVENT_ICON.get(name, "•")
@@ -369,7 +705,6 @@ def event_text(event: ExecutionEvent) -> Text:
         details.append(f"nodo={event.node_id}")
     if event.tool_name:
         details.append(f"tool={event.tool_name}")
-    payload = event.payload or {}
     for key in ("status", "summary", "agent_id", "proposal_id", "reason", "missing", "error", "attempt"):
         value = payload.get(key)
         if value:

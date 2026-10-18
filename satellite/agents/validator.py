@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from satellite.agents.base import AgentRegistry
 from satellite.agents.prompts import USER_PLACEHOLDERS, find_placeholders
 from satellite.core.proposal import ProposedAgent
-from satellite.kernel.manifest import is_reserved
+from satellite.tool_manifest import TOOL_IDS, is_reserved_id
 
 ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{2,40}$")
 _ABSOLUTE_PATH = re.compile(r"([A-Za-z]:[\\/]|/etc/|/home/|/Users/|~/)")
@@ -23,6 +23,34 @@ MAX_CAPABILITIES = 6
 MAX_TOOLS = 8
 MIN_EXAMPLE_TASKS = 3
 _SPLIT_MARKERS = ("y además", " y tambien ", " y también ", "ademas de")
+
+# Regla de conjunto conservadora (F4): control de escritorio no se combina con
+# shell ni con capacidades de red en un mismo agente. Es deliberadamente amplia:
+# ante la duda, se rechaza la propuesta.
+DESKTOP_TOOL_IDS: frozenset[str] = frozenset(TOOL_IDS)
+SHELL_TOOL_IDS: frozenset[str] = frozenset(
+    {"run_command", "run_argv", "run_python", "job"}
+)
+_NETWORK_TOKENS: tuple[str, ...] = (
+    "network",
+    "networking",
+    "http",
+    "https",
+    "web",
+    "internet",
+    "socket",
+    "fetch",
+    "download",
+    "upload",
+    "browser",
+)
+_SHELL_TOKENS: tuple[str, ...] = (
+    "shell",
+    "terminal",
+    "command",
+    "subprocess",
+    "exec",
+)
 
 
 @dataclass(frozen=True)
@@ -72,8 +100,8 @@ class AgentProposalValidator:
 
         if not ID_PATTERN.match(proposal.id):
             errors.append(f"{owner}: id debe cumplir ^[a-z][a-z0-9_]{{2,40}}$")
-        if is_reserved(proposal.id):
-            errors.append(f"{owner}: id reservado por el kernel")
+        if is_reserved_id(proposal.id):
+            errors.append(f"{owner}: id reservado (kernel o manifiesto de tools)")
 
         existing = {spec.id for spec in self.registry.all()}
         if proposal.id in existing:
@@ -86,6 +114,25 @@ class AgentProposalValidator:
             errors.append(
                 f"{owner}: demasiadas tools ({len(proposal.tools)}); máximo {MAX_TOOLS}"
             )
+
+        # Control de escritorio + shell/red en el mismo agente: rechazo conservador.
+        tools = set(proposal.tools)
+        if tools & DESKTOP_TOOL_IDS:
+            capability_text = " ".join(
+                [str(item) for item in proposal.capabilities] + [proposal.description]
+            ).lower()
+            shell_hit = bool(tools & SHELL_TOOL_IDS) or any(
+                token in capability_text for token in _SHELL_TOKENS
+            )
+            net_hit = any(token in capability_text for token in _NETWORK_TOKENS)
+            if shell_hit or net_hit:
+                motivo = "shell" if shell_hit else ""
+                if net_hit:
+                    motivo = f"{motivo}+red" if motivo else "red"
+                errors.append(
+                    f"{owner}: control de escritorio no combinable con {motivo} "
+                    "(regla de conjunto conservadora)"
+                )
 
         count = len(proposal.capabilities)
         if count < MIN_CAPABILITIES or count > MAX_CAPABILITIES:

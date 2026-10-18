@@ -37,15 +37,44 @@ def test_event_types_extended() -> None:
 def test_reserved_ids_cover_every_runtime_tool() -> None:
     """Guardia: si el runtime suma una tool, tiene que estar reservada.
 
-    Evita que un agente o una skill puedan suplantar un id del kernel (hoy
-    faltaban siete: `edit_file`, `run_command`, `git_status`, `request_context`,
-    `delegate`, `search_skills` y `propose_skill`).
+    La fuente central es **agregada**: los ids del kernel (`RESERVED_SKILL_IDS`) más
+    los del manifiesto de tools (`satellite/tool_manifest.py`), que existe para no
+    meter ids nuevos en el kernel. Los ids nuevos NO tienen que vivir en el kernel.
     """
     from satellite.cli.runtime_builder import build_tool_registry
+    from satellite.tool_manifest import TOOL_IDS, reserved_ids
 
     tool_ids = {tool.id for tool in build_tool_registry().all()}
     assert tool_ids, "el registro de tools no debería estar vacío"
-    assert tool_ids <= RESERVED_SKILL_IDS, sorted(tool_ids - RESERVED_SKILL_IDS)
+    agregado = reserved_ids()
+    assert tool_ids <= agregado, sorted(tool_ids - agregado)
+    # El manifiesto de tools aporta ids que el kernel no conoce.
+    assert TOOL_IDS <= agregado
+    assert TOOL_IDS - RESERVED_SKILL_IDS
+
+
+def test_tool_manifest_ids_live_outside_kernel() -> None:
+    """Los ids de tools no-kernel viven fuera del kernel y son reservados ahí."""
+    from satellite.tool_manifest import TOOL_IDS, is_reserved_id, is_tool_id
+
+    assert TOOL_IDS == {"desktop_list_windows", "desktop_observe", "desktop_act"}
+    assert not (TOOL_IDS & RESERVED_SKILL_IDS)
+    assert is_tool_id("desktop_observe")
+    assert is_reserved_id("desktop_observe")
+    assert is_reserved_id("read_file")  # sigue cubriendo el kernel
+    assert not is_reserved_id("docs_writer")
+
+
+def test_desktop_tools_registered_only_when_allowed() -> None:
+    """Gate de superficies: default/MCP no registra; CLI/TUI sí (tras los gates)."""
+    from satellite.cli.runtime_builder import build_tool_registry
+    from satellite.tool_manifest import TOOL_IDS, reserved_ids
+
+    default_ids = {tool.id for tool in build_tool_registry().all()}
+    assert default_ids.isdisjoint(TOOL_IDS)
+    runtime_ids = {tool.id for tool in build_tool_registry(allow_desktop=True).all()}
+    assert TOOL_IDS <= runtime_ids
+    assert runtime_ids <= reserved_ids()
 
 
 def test_reserved_ids() -> None:

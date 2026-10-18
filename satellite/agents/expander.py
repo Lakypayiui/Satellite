@@ -9,6 +9,7 @@ from satellite.agents.base import AgentRegistry
 from satellite.agents.creator import AgentProposalGenerator
 from satellite.agents.prompts import DefaultPromptRegistry
 from satellite.agents.store import AgentCatalogStore
+from satellite.agents.templates import get_template
 from satellite.agents.validator import MAX_CAPABILITIES
 from satellite.approval.base import ApprovalContext, ApprovalPort
 from satellite.approval.policy import ApprovalPolicy
@@ -60,7 +61,7 @@ class AgentExpander:
 
     def __init__(
         self,
-        creator: AgentProposalGenerator,
+        creator: AgentProposalGenerator | None,
         registry: AgentRegistry,
         prompts: DefaultPromptRegistry,
         *,
@@ -68,6 +69,7 @@ class AgentExpander:
         policy: ApprovalPolicy | None = None,
         sink: EventSink | None = None,
         skills=None,
+        validator: object | None = None,
     ) -> None:
         self.creator = creator
         self.registry = registry
@@ -76,6 +78,10 @@ class AgentExpander:
         self.policy = policy or ApprovalPolicy()
         self.sink = sink
         self.skills = skills
+        # Validador determinista para plantillas (o el del creador LLM).
+        self.validator = (
+            validator if validator is not None else getattr(creator, "validator", None)
+        )
 
     async def expand(
         self,
@@ -86,6 +92,10 @@ class AgentExpander:
         extra_context: str = "",
     ) -> ExpansionOutcome:
         """Propone, valida, aprueba y registra un agente para cubrir ``need``."""
+        if self.creator is None:
+            return ExpansionOutcome(
+                kind="error", reason="sin creador LLM: usa una plantilla"
+            )
         outcome = await self.creator.propose(need, extra_context=extra_context)
         if outcome.kind == "reuse":
             return ExpansionOutcome(kind="reuse", reuse_candidate=outcome.reuse_candidate)
@@ -103,6 +113,18 @@ class AgentExpander:
             return ExpansionOutcome(kind="error", reason=outcome.error or "sin propuesta")
 
         proposal = outcome.proposal
+        return await self._materialize(
+            proposal, task_id=task_id, approval_port=approval_port
+        )
+
+    async def _materialize(
+        self,
+        proposal: ProposedAgent,
+        *,
+        task_id: str,
+        approval_port: ApprovalPort | None,
+    ) -> ExpansionOutcome:
+        """Aprueba, registra y persiste una propuesta ya validada."""
         record = AgentProposal(
             proposal_id=uuid.uuid4().hex[:12],
             task_id=task_id or "system",
@@ -162,6 +184,32 @@ class AgentExpander:
         )
         self._emit(EventType.AGENT_CREATED, task_id, {"agent_id": spec.id})
         return ExpansionOutcome(kind="created", spec=spec)
+
+    async def create_template(
+        self,
+        template_id: str,
+        *,
+        task_id: str = "",
+        approval_port: ApprovalPort | None = None,
+    ) -> ExpansionOutcome:
+        """Crea un agente desde una plantilla estática (sin LLM), con aprobación.
+
+        La plantilla pasa por el mismo validador determinista y por el mismo
+        camino de aprobación/registro/persistencia que una propuesta del creador.
+        """
+        proposal = get_template(template_id)
+        if proposal is None:
+            return ExpansionOutcome(
+                kind="error", reason=f"plantilla desconocida: {template_id!r}"
+            )
+        validator = self.validator
+        if validator is not None:
+            report = validator.validate(proposal)
+            if not report.ok:
+                return ExpansionOutcome(kind="error", reason="; ".join(report.errors))
+        return await self._materialize(
+            proposal, task_id=task_id, approval_port=approval_port
+        )
 
     async def _extend(self, extension: AgentExtension, *, task_id: str, approval_port) -> ExpansionOutcome:
         """Añade capacidades a un agente existente (en vez de crear otro)."""

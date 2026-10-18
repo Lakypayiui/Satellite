@@ -8,13 +8,38 @@ from satellite.core.tool_models import ToolCall, ToolResult, ToolSchema
 from satellite.security.base import SecurityPolicy
 from satellite.tools.base import Tool, ToolContext, ToolRegistry
 
+# Tope de la vista previa que viaja en el evento: la UI sólo necesita una muestra,
+# no el stdout entero (evita engordar el payload persistido sin motivo).
+OUTPUT_PREVIEW_CHARS = 8000
+
+
+def _preview(output: object) -> object:
+    """Copia acotada del output de la tool para la capa de presentación."""
+    if isinstance(output, str):
+        if len(output) <= OUTPUT_PREVIEW_CHARS:
+            return output
+        return output[:OUTPUT_PREVIEW_CHARS] + "\n[vista previa truncada]"
+    if isinstance(output, dict):
+        return {key: _preview(value) for key, value in output.items()}
+    if isinstance(output, (list, tuple)):
+        return [_preview(item) for item in output]
+    return output
+
 
 class DefaultToolRegistry(ToolRegistry):
     """Registro de tools con política de seguridad como red final."""
 
-    def __init__(self, policy: SecurityPolicy | None = None) -> None:
+    def __init__(
+        self,
+        policy: SecurityPolicy | None = None,
+        *,
+        desktop_policy: object | None = None,
+    ) -> None:
         self._tools: dict[str, Tool] = {}
         self.policy = policy
+        # Handle de control de escritorio (grants/topes/emergencia) cuando la
+        # superficie lo habilita. `None` en el resto (p. ej. MCP).
+        self.desktop_policy = desktop_policy
 
     def register(self, tool: Tool) -> None:
         """Registra una tool; ToolError si el id ya existe."""
@@ -89,6 +114,7 @@ class DefaultToolRegistry(ToolRegistry):
                     "arguments": call.arguments,
                     "success": result.success,
                     "error": result.error,
+                    "output": _preview(result.output),
                 },
             )
         )

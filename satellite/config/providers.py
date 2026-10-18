@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
+from satellite.config.catalog import ANTHROPIC, OPENAI
+
 CONFIG_PATH = Path(".satellite") / "config" / "config.json"
 
 # Roles que el runtime sabe resolver (``llm.<rol>``) y el orden de la UI.
@@ -64,6 +66,14 @@ class SavedProvider:
     base_url: str
     api_key_env: str = ""
     api_key_set: bool = False
+    # Nivel de esfuerzo de razonamiento pedido ("" / "auto" = lo decide el proveedor).
+    reasoning_effort: str = ""
+    # Interruptor «Think» (None = no tocar; True/False = encender/apagar el razonamiento).
+    think: bool | None = None
+    # Cuenta del proveedor cuando su endpoint de modelos es por cuenta (p. ej. Fireworks).
+    account_id: str = ""
+    # Tope de tokens de salida pedido (0 = sin límite explícito: lo decide el proveedor).
+    max_tokens: int = 0
 
     def to_dict(self) -> dict:
         """Forma pública (la que consumen el CLI y la TUI)."""
@@ -74,6 +84,10 @@ class SavedProvider:
             "base_url": self.base_url,
             "api_key_env": self.api_key_env,
             "api_key_set": self.api_key_set,
+            "reasoning_effort": self.reasoning_effort,
+            "think": self.think,
+            "account_id": self.account_id,
+            "max_tokens": self.max_tokens,
         }
 
     def label(self) -> str:
@@ -105,6 +119,27 @@ def _api_key_set(entry: dict) -> bool:
     return bool(env and os.getenv(env, ""))
 
 
+def _as_int(value: object) -> int:
+    """Entero tolerante (``0`` si no se puede leer)."""
+    if isinstance(value, bool):
+        return 0
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
+def _clean_overrides(value: object) -> dict:
+    """Capacidades por modelo válidas (``{modelo: {...}}``), sin entradas vacías."""
+    out: dict = {}
+    if isinstance(value, dict):
+        for key, entry in value.items():
+            model = str(key).strip()
+            if model and isinstance(entry, dict) and entry:
+                out[model] = dict(entry)
+    return out
+
+
 def _to_saved(entry: dict, index: int) -> SavedProvider:
     return SavedProvider(
         id=str(entry.get("id") or f"p{index}"),
@@ -113,6 +148,10 @@ def _to_saved(entry: dict, index: int) -> SavedProvider:
         base_url=str(entry.get("base_url", "")),
         api_key_env=str(entry.get("api_key_env", "")),
         api_key_set=_api_key_set(entry),
+        reasoning_effort=str(entry.get("reasoning_effort") or ""),
+        think=entry.get("think") if isinstance(entry.get("think"), bool) else None,
+        account_id=str(entry.get("account_id") or ""),
+        max_tokens=_as_int(entry.get("max_tokens")),
     )
 
 
@@ -233,6 +272,7 @@ def active_connection(project_root: Path | str) -> dict:
             "name": str(entry.get("name", "")),
             "model": str(role.get("model") or entry.get("model", "")),
             "base_url": str(entry.get("base_url", "")),
+            "account_id": str(entry.get("account_id") or ""),
             "api_key": key,
         }
     return {
@@ -240,6 +280,7 @@ def active_connection(project_root: Path | str) -> dict:
         "name": str(llm.get("provider") or data.get("name", "")),
         "model": str(llm.get("model") or data.get("model", "")),
         "base_url": str(llm.get("base_url") or data.get("base_url", "")),
+        "account_id": str(llm.get("account_id") or data.get("account_id") or ""),
         "api_key": str(llm.get("api_key") or data.get("api_key") or ""),
     }
 
@@ -252,6 +293,78 @@ def api_key_for_base_url(project_root: Path | str, base_url: str) -> str:
     return ""
 
 
+def provider_connection(project_root: Path | str, provider_id: str) -> dict | None:
+    """Datos de conexión de un proveedor guardado, **incluida la clave** (uso interno).
+
+    La familia se deduce del nombre igual que hace el runtime: ``anthropic`` → API de
+    Anthropic; cualquier otro (con ``base_url``) → OpenAI-compatible. Sirve para consultar
+    ``/models`` con las credenciales guardadas sin exponerlas a la interfaz. ``None`` si el
+    ``id`` no existe.
+    """
+    data = load_config(project_root)
+    entry = next(
+        (p for p in _entries(data) if str(p.get("id")) == str(provider_id)), None
+    )
+    if entry is None:
+        return None
+    name = str(entry.get("name", ""))
+    api_key = str(entry.get("api_key") or "")
+    if not api_key:
+        env = str(entry.get("api_key_env") or "")
+        api_key = os.getenv(env, "") if env else ""
+    from satellite.config import catalog as provider_catalog
+
+    return {
+        "id": str(entry.get("id") or ""),
+        "name": name,
+        "model": str(entry.get("model", "")),
+        "base_url": str(entry.get("base_url", "")),
+        "api_key": api_key,
+        "family": ANTHROPIC if name.strip().lower() == ANTHROPIC else OPENAI,
+        "reasoning_effort": str(entry.get("reasoning_effort") or ""),
+        # Clave del catálogo (p. ej. "xai") cuando la URL es una de las conocidas: sirve para
+        # elegir la estrategia de listado de modelos sin depender del host.
+        "provider": provider_catalog.key_for_base_url(str(entry.get("base_url", ""))),
+        "account_id": str(entry.get("account_id") or ""),
+    }
+
+
+def _apply_entry_settings(
+    entry: dict,
+    reasoning_effort: str | None,
+    max_tokens: int | None,
+    model_overrides: dict | None,
+    think: bool | None = None,
+) -> None:
+    """Vuelca en la entrada los ajustes opcionales (esfuerzo, tope de salida, capacidades).
+
+    Sólo toca lo que llega: ``None`` = no cambiar. Esfuerzo vacío/``auto`` y tope ``0``
+    se **borran** de la entrada (equivalen a «lo decide el proveedor»).
+    """
+    if reasoning_effort is not None:
+        value = str(reasoning_effort).strip().lower()
+        if value and value != "auto":
+            entry["reasoning_effort"] = value
+        else:
+            entry.pop("reasoning_effort", None)
+    if think is not None:
+        entry["think"] = bool(think)
+    if max_tokens is not None:
+        limit = _as_int(max_tokens)
+        if limit > 0:
+            entry["max_tokens"] = limit
+        else:
+            entry.pop("max_tokens", None)
+    overrides = _clean_overrides(model_overrides)
+    if overrides:
+        merged = entry.get("models") if isinstance(entry.get("models"), dict) else {}
+        merged = dict(merged)
+        for model, caps in overrides.items():
+            prev = merged.get(model)
+            merged[model] = {**(prev if isinstance(prev, dict) else {}), **caps}
+        entry["models"] = merged
+
+
 def save_provider(
     project_root: Path | str,
     *,
@@ -260,17 +373,25 @@ def save_provider(
     base_url: str = "",
     api_key: str = "",
     api_key_env: str = "",
+    account_id: str = "",
+    reasoning_effort: str | None = None,
+    think: bool | None = None,
+    max_tokens: int | None = None,
+    model_overrides: dict | None = None,
 ) -> SavedProvider:
     """Guarda un proveedor y lo deja como global (sin tocar los roles).
 
     Mismas reglas que la consola web: reutiliza el ``id`` si el proveedor es
     idéntico, conserva la ``api_key`` previa del mismo servicio y escribe
-    ``llm.provider/model/base_url/provider_id``.
+    ``llm.provider/model/base_url/provider_id``. ``reasoning_effort``,
+    ``max_tokens`` y ``model_overrides`` son opcionales: ``None`` los deja como
+    estén (los usos viejos, CLI/TUI, no los pasan).
     """
     data = load_config(project_root)
     providers = list(_entries(data))
     name, model = str(name), str(model)
     base_url, api_key, api_key_env = str(base_url), str(api_key or ""), str(api_key_env or "")
+    account_id = str(account_id or "")
 
     exact = next(
         (
@@ -288,6 +409,9 @@ def save_provider(
             entry["api_key"] = api_key
         if api_key_env:
             entry["api_key_env"] = api_key_env
+        if account_id:
+            entry["account_id"] = account_id
+        _apply_entry_settings(entry, reasoning_effort, max_tokens, model_overrides, think)
         providers = [
             p
             for p in providers
@@ -319,6 +443,11 @@ def save_provider(
                 entry["api_key"] = previous["api_key"]
             elif isinstance(previous, dict) and previous.get("api_key_env"):
                 entry["api_key_env"] = previous["api_key_env"]
+            if not account_id and isinstance(previous, dict) and previous.get("account_id"):
+                account_id = str(previous["account_id"])
+        if account_id:
+            entry["account_id"] = account_id
+        _apply_entry_settings(entry, reasoning_effort, max_tokens, model_overrides, think)
         providers.append(entry)
 
     data["providers"] = providers
@@ -332,6 +461,20 @@ def save_provider(
         llm["api_key"] = api_key
     if api_key_env:
         llm["api_key_env"] = api_key_env
+    effort = str(entry.get("reasoning_effort") or "")
+    if effort:
+        llm["reasoning_effort"] = effort
+        data["reasoning_effort"] = effort
+    else:
+        # El global no hereda el esfuerzo de otro modelo/proveedor.
+        llm.pop("reasoning_effort", None)
+        data.pop("reasoning_effort", None)
+    if isinstance(entry.get("think"), bool):
+        llm["think"] = entry["think"]
+        data["think"] = entry["think"]
+    else:
+        llm.pop("think", None)
+        data.pop("think", None)
     data["llm"] = llm
     save_config(project_root, data)
     return _to_saved(entry, providers.index(entry))
@@ -346,6 +489,11 @@ def update_provider(
     base_url: str | None = None,
     api_key: str | None = None,
     api_key_env: str | None = None,
+    reasoning_effort: str | None = None,
+    think: bool | None = None,
+    account_id: str | None = None,
+    max_tokens: int | None = None,
+    model_overrides: dict | None = None,
 ) -> SavedProvider:
     """Actualiza un proveedor guardado (por ``id`` o ``name``); clave vacía = igual."""
     data = load_config(project_root)
@@ -371,6 +519,12 @@ def update_provider(
         entry["api_key"] = str(api_key)
     if api_key_env is not None:
         entry["api_key_env"] = str(api_key_env)
+    if account_id is not None:
+        if str(account_id).strip():
+            entry["account_id"] = str(account_id).strip()
+        else:
+            entry.pop("account_id", None)
+    _apply_entry_settings(entry, reasoning_effort, max_tokens, model_overrides, think)
     providers[index] = entry
     data["providers"] = providers
 
@@ -382,6 +536,20 @@ def update_provider(
             llm["base_url"] = entry["base_url"]
         if api_key:
             llm["api_key"] = str(api_key)
+        if reasoning_effort is not None:
+            if entry.get("reasoning_effort"):
+                llm["reasoning_effort"] = entry["reasoning_effort"]
+                data["reasoning_effort"] = entry["reasoning_effort"]
+            else:
+                llm.pop("reasoning_effort", None)
+                data.pop("reasoning_effort", None)
+        if think is not None:
+            if isinstance(entry.get("think"), bool):
+                llm["think"] = entry["think"]
+                data["think"] = entry["think"]
+            else:
+                llm.pop("think", None)
+                data.pop("think", None)
         data["llm"] = llm
     save_config(project_root, data)
     return _to_saved(entry, index)
@@ -449,6 +617,19 @@ def activate(
         llm["api_key"] = entry["api_key"]
     if entry.get("api_key_env"):
         llm["api_key_env"] = entry["api_key_env"]
+    # El esfuerzo acompaña al proveedor que pasa a ser global (y no se hereda de otro).
+    if entry.get("reasoning_effort"):
+        data["reasoning_effort"] = entry["reasoning_effort"]
+        llm["reasoning_effort"] = entry["reasoning_effort"]
+    else:
+        data.pop("reasoning_effort", None)
+        llm.pop("reasoning_effort", None)
+    if isinstance(entry.get("think"), bool):
+        data["think"] = entry["think"]
+        llm["think"] = entry["think"]
+    else:
+        data.pop("think", None)
+        llm.pop("think", None)
 
     followed: list[str] = []
     pinned: list[str] = []
@@ -486,7 +667,17 @@ def set_roles(project_root: Path | str, roles: dict[str, dict]) -> None:
             key: value
             for key, value in section.items()
             if value not in (None, "")
-            and key in ("provider", "model", "base_url", "api_key", "api_key_env")
+            and key in (
+                "provider",
+                "model",
+                "base_url",
+                "api_key",
+                "api_key_env",
+                "reasoning_effort",
+                "think",
+                "effort_levels",
+                "effort_control",
+            )
         }
         if override:
             llm[role] = override

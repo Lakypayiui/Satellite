@@ -1,0 +1,52 @@
+# Plantilla de configuracion del Safe Proxy embebido (referencia/documentacion).
+#
+# NOTA: el servicio embebido NO lee YAML en tiempo de ejecucion (asi no depende de
+# PyYAML). Esta plantilla documenta el mismo contrato que se escribe en
+# <SATELLITE_HOME>/safe_proxy/config.json la primera vez que arranca; edita ESE json
+# (o la pestana Ajustes -> Safe Proxy) para cambiar la base. El estado allowlisted
+# (enabled + opciones del PATCH) se persiste aparte en state.json.
+
+upstream:
+  base_url: "https://api.deepseek.com"
+  api_key_env: "DEEPSEEK_API_KEY"   # la key vive en el host; al arrancar se toma del
+                                    # proveedor activo de Satellite o de esta variable
+  timeout_seconds: 180
+
+server:
+  host: "127.0.0.1"                 # siempre loopback; el servicio nunca escucha fuera
+  port: 8787
+  max_body_bytes: 300000
+  audit_log: "audit.jsonl"          # solo conteos y hash, nunca contenido
+  # Estado persistido (enabled + opciones allowlisted). Se escribe atomico junto a este
+  # config; nunca guarda tokens ni secretos.
+  state_file: "state.json"
+
+policy:
+  allowed_models: ["deepseek-chat", "deepseek-reasoner"]
+  allow_tools: false                # tools/function calling deshabilitado (evita fugas por esquemas)
+
+  # BLOQUEO DURO: si aparece, la peticion NO sale. Para lo que jamas debe enviarse.
+  block_terms: []                   # ej. ["Proyecto Orion Core", "formula_margen_v3"]
+  block_regex:
+    - "(?i)\\bconfidencial\\b"
+    - "(?i)\\bconfidential\\b"
+    - "(?i)all rights reserved"
+    - "(?i)todos los derechos reservados"
+  secrets_action: "block"           # block | redact  (llaves, tokens, contrasenas)
+
+  # Deteccion de CLAVES DE API (sk-..., AIza..., xai-..., hf_..., gsk_..., r8-..., pplx-...).
+  # Se tratan segun secrets_action (block | redact). false = se dejan pasar sin tocar;
+  # el resto de reglas de secretos (claves privadas, AWS, GitHub, JWT, asignaciones) siguen.
+  api_keys: true
+
+  # SUSTITUCION REVERSIBLE: se envian como <TERM_n> y se restauran en la respuesta.
+  mask_terms: []                    # ej. ["Acme Corp", "Proyecto Orion", "servidor-interno"]
+
+  # PII a enmascarar. Opciones: EMAIL PHONE CURP RFC CLABE CARD IP
+  pii: [EMAIL, PHONE, CURP, RFC, CLABE, CARD, IP]
+
+code:
+  obfuscate_python: true            # renombra identificadores propios, quita comentarios y docstrings
+  strip_comments: true
+  other_languages: "block"          # block | allow  (JS, Java, SQL... no tienen ofuscador)
+  fail_closed: true                 # si un bloque Python no se puede ofuscar, bloquear

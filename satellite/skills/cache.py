@@ -30,6 +30,7 @@ from pathlib import Path
 
 from satellite.skills.audit import Finding, audit_skill, reason_for
 from satellite.skills.models import ALLOWED_LANGUAGES, SkillManifest, SkillStatus
+from satellite.tool_manifest import is_tool_id
 
 # Permisos declarados que rompen el determinismo (si están activos, no se memoiza).
 _EFFECT_KEYS: tuple[str, ...] = (
@@ -188,6 +189,9 @@ class SkillResultCache:
         skill_dir: Path | str | None = None,
     ) -> str:
         """Motivo legible por el que NO se memoiza (``""`` si sí se memoiza)."""
+        # Ids del manifiesto de tools (fuera del kernel): nunca se memoizan.
+        if is_tool_id(str(getattr(manifest, "id", ""))):
+            return "id reservado por el manifiesto de tools: no se memoiza"
         if not getattr(manifest, "deterministic", False):
             return "la skill no declara deterministic=true"
         if manifest.status is not SkillStatus.ACTIVE:

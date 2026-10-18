@@ -161,5 +161,70 @@ try {
   );
 }
 
+// --- apariencia: titlebar propia (sin frame nativo) y catálogo de temas ---
+{
+  const { readFileSync } = await import("node:fs");
+  const main = readFileSync(path.join(raiz, "desktop", "electron", "main.ts"), "utf8");
+  comprobar("la ventana es frameless (titlebar propia)", /frame:\s*false/.test(main));
+  const canales = [
+    "satellite:window-minimize",
+    "satellite:window-toggle-maximize",
+    "satellite:window-close",
+    "satellite:window-state",
+    "satellite:preferences",
+    "satellite:preferences-set-theme",
+  ];
+  comprobar(
+    "IPC de ventana y preferencias definido",
+    canales.every((canal) => main.includes(canal)),
+  );
+
+  const preload = readFileSync(path.join(raiz, "desktop", "electron", "preload.ts"), "utf8");
+  comprobar(
+    "el preload expone windowControls y theme",
+    preload.includes("windowControls:") && preload.includes("theme:"),
+  );
+
+  const temas = readFileSync(path.join(raiz, "desktop", "electron", "themes.ts"), "utf8");
+  const ids = ["obsidiana", "grafito", "medianoche", "bosque", "claro", "deepdark"];
+  comprobar(
+    "catálogo de temas completo",
+    ids.every((id) => temas.includes(`"${id}"`)),
+    ids.join(", "),
+  );
+  comprobar("tema por defecto obsidiana", /DEFAULT_THEME:\s*ThemeId\s*=\s*"obsidiana"/.test(temas));
+
+  // Deep Dark: intensidad del blanco (4 niveles, por defecto «medio»).
+  const niveles = ["suave", "medio", "brillante", "maximo"];
+  comprobar(
+    "niveles de intensidad definidos",
+    niveles.every((nivel) => temas.includes(`id: "${nivel}"`)),
+    niveles.join(", "),
+  );
+  comprobar(
+    "intensidad por defecto media",
+    /DEFAULT_TEXT_INTENSITY:\s*TextIntensityId\s*=\s*"medio"/.test(temas),
+  );
+  comprobar(
+    "IPC de intensidad definido",
+    main.includes("satellite:preferences-set-text-intensity"),
+  );
+  comprobar(
+    "el preload expone la intensidad",
+    preload.includes("initialIntensity") && preload.includes("setIntensity"),
+  );
+
+  const estilos = readFileSync(path.join(raiz, "desktop", "src", "styles.css"), "utf8");
+  comprobar(
+    "Deep Dark con fondo negro puro",
+    /\[data-theme="deepdark"\][\s\S]*?--bg: #000000/.test(estilos),
+  );
+  comprobar(
+    "intensidad en CSS (gris claro → blanco puro)",
+    niveles.every((nivel) => estilos.includes(`[data-theme="deepdark"][data-intensidad="${nivel}"]`)) &&
+      estilos.includes("--text: #ffffff"),
+  );
+}
+
 console.log(fallos === 0 ? "\nTODO CORRECTO" : `\n${fallos} comprobación(es) fallidas`);
 process.exit(fallos === 0 ? 0 : 1);

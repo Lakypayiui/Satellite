@@ -189,3 +189,63 @@ def test_safe_mode_filters_user_agents(tmp_path: Path, monkeypatch) -> None:
     ids = {spec.id for spec in registry.all()}
     assert "user_agent" not in ids
     assert {"orchestrator", "agent_creator", "skill_curator"} <= ids
+
+
+# --- sesiones: fijar y archivar (paridad con la app y la TUI) ---
+
+
+def test_session_pin_archive_list_and_roundtrip(tmp_path: Path, monkeypatch) -> None:
+    _use_home(monkeypatch, tmp_path)
+    runner = CliRunner()
+    proyecto = ["--project", str(tmp_path)]
+
+    creada = runner.invoke(app, ["session", "new", "pruebas", *proyecto])
+    assert creada.exit_code == 0
+    assert "sesión nueva:" in creada.output
+
+    fijada = runner.invoke(app, ["session", "pin", "pruebas", *proyecto])
+    assert fijada.exit_code == 0
+    assert "fijada" in fijada.output
+
+    archivada = runner.invoke(app, ["session", "archive", "pruebas", *proyecto])
+    assert archivada.exit_code == 0
+    assert "archivada" in archivada.output
+
+    listado = runner.invoke(app, ["session", "list", *proyecto])
+    assert listado.exit_code == 0
+    assert "fijada" in listado.output
+    assert "archivada" in listado.output
+
+    desarchivada = runner.invoke(app, ["session", "unarchive", "pruebas", *proyecto])
+    assert desarchivada.exit_code == 0
+    assert "desarchivada" in desarchivada.output
+
+    desfijada = runner.invoke(app, ["session", "unpin", "pruebas", *proyecto])
+    assert desfijada.exit_code == 0
+    assert "desfijada" in desfijada.output
+
+    # La sesión sigue ahí, sin turnos, tras el ciclo fijar/archivar.
+    from satellite.orchestration.sessions import SessionStore
+
+    info = {i.name: i for i in SessionStore(tmp_path).list()}["pruebas"]
+    assert info.pinned is False and info.archived is False and info.turns == 0
+
+
+def test_session_pin_on_an_unknown_session_fails_loudly(tmp_path: Path, monkeypatch) -> None:
+    _use_home(monkeypatch, tmp_path)
+
+    resultado = CliRunner().invoke(
+        app, ["session", "pin", "no-existe", "--project", str(tmp_path)]
+    )
+
+    assert resultado.exit_code == 1
+    assert "no existe esa sesión" in resultado.output
+
+
+def test_the_session_command_is_shared_across_the_three_surfaces() -> None:
+    from satellite import commands as catalogo
+
+    spec = catalogo.get("session")
+    assert spec is not None
+    assert {"tui", "cli", "desktop"} <= set(spec.surfaces)
+    assert "pin" in spec.usage and "archive" in spec.usage

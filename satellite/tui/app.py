@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import time
 from pathlib import Path
 
 from rich.text import Text
@@ -22,7 +23,23 @@ from satellite.tui import palette, render
 from satellite.tui.provider_screen import ProviderScreen
 from satellite.tui.session import Session
 
-PROMPT_HINT = "Escríbele al agente: «necesito agregar X», «revisa esto»…  ·  /help"
+PROMPT_HINT = "Escríbele al agente…   Enter enviar  ·  / comandos  ·  @ contexto  ·  Ctrl+P modelo"
+
+
+def _rango_lineas(raw: str) -> tuple[int, int]:
+    """``3`` o ``3-5`` → ``(inicio, fin)`` para el ancla de un comentario."""
+    texto = (raw or "").strip()
+    if not texto:
+        raise ValueError("falta el rango de líneas (p. ej. 3 o 3-5)")
+    partes = texto.split("-", 1)
+    try:
+        inicio = int(partes[0])
+        fin = int(partes[1]) if len(partes) > 1 and partes[1] else inicio
+    except ValueError as exc:
+        raise ValueError("rango inválido: usa <inicio> o <inicio>-<fin>") from exc
+    if inicio < 1 or fin < 1 or fin < inicio:
+        raise ValueError("rango inválido: empieza en 1 y el fin no puede ser menor")
+    return inicio, fin
 
 
 class ApprovalScreen(ModalScreen[ApprovalDecision]):
@@ -146,48 +163,71 @@ class PlanOptionsScreen(ModalScreen[str]):
 class SatelliteTUI(App):
     """Sesión interactiva sobre el runtime de Satellite."""
 
+    # Ctrl+P se reserva para el selector de modelo (la paleta propia va en /help).
+    ENABLE_COMMAND_PALETTE = False
+
     CSS = """
-    Screen { background: $surface; }
+    Screen { background: #0f172a; color: #e2e8f0; }
+    Header { background: #1e293b; color: #e2e8f0; }
+    Footer { background: #1e293b; color: #94a3b8; }
     #main { height: 1fr; }
-    #log { height: 1fr; width: 1fr; border: round $accent; padding: 0 1; }
+    #log {
+        height: 1fr; width: 1fr; border: round #334155;
+        background: #0f172a; padding: 0 1;
+    }
     #agents-panel {
         width: 34; height: 1fr; display: none;
-        border: round $accent; background: $surface; padding: 0 1;
+        border: round #334155; background: #0f172a; padding: 0 1;
     }
     .agent-card {
-        border: round $secondary; background: $panel;
+        border: round #334155; background: #1e293b;
         padding: 0 1; margin-bottom: 1; height: auto;
     }
-    .agent-card.running { border: round $accent; }
-    .agent-card.done { border: round $success; }
-    .agent-card.failed { border: round $error; }
-    #statusbar { height: 1; padding: 0 1; }
-    #prompt { border: round $accent; }
-    #approval-box { width: 78; height: auto; border: thick $warning; background: $panel; padding: 1 2; }
+    .agent-card.running { border: round #38bdf8; }
+    .agent-card.done { border: round #22c55e; }
+    .agent-card.failed { border: round #ef4444; }
+    #statusbar { height: auto; padding: 0 1; background: #0f172a; }
+    #prompt { border: round #38bdf8; background: #1e293b; color: #e2e8f0; }
+    #prompt:focus { border: round #22c55e; }
+    #approval-box {
+        width: 78; height: auto; border: round #facc15;
+        background: #1e293b; padding: 1 2;
+    }
     #approval-actions { height: auto; align-horizontal: center; }
     #approval-actions Button { margin: 0 2; }
     #plan-box {
         width: 84; max-width: 95%; height: auto; max-height: 90%;
-        border: thick $warning; background: $panel; padding: 1 2;
+        border: round #facc15; background: #1e293b; padding: 1 2;
     }
     #plan-actions { height: auto; }
     #plan-actions Button { width: 1fr; margin-bottom: 1; }
     #approval-scroll { height: auto; max-height: 24; }
     #provider-box {
-        width: 92; height: auto; max-height: 90%;
-        border: thick $accent; background: $panel; padding: 1 2;
+        width: 92; height: auto; max-height: 92%;
+        border: round #38bdf8; background: #1e293b; padding: 1 2;
     }
-    #provider-box Input { margin-bottom: 1; }
-    #provider-apps { height: 10; }
-    #provider-models { height: 8; }
+    #provider-title { color: #e2e8f0; text-style: bold; }
+    #provider-search { margin-bottom: 1; border: round #334155; background: #0f172a; }
+    #provider-box Input { margin-bottom: 1; border: round #334155; background: #0f172a; }
+    #provider-apps { height: 12; border: round #334155; background: #0f172a; }
+    #provider-models { height: 8; border: round #334155; background: #0f172a; }
     #provider-actions { height: auto; align-horizontal: center; }
     #provider-actions Button { margin: 0 2; }
-    #provider-status { height: auto; color: $text-muted; }
+    #provider-status { height: auto; color: #94a3b8; }
+    #apikey-box {
+        width: 60; height: auto; border: round #38bdf8;
+        background: #1e293b; padding: 1 2;
+    }
+    #apikey-title { color: #e2e8f0; text-style: bold; margin-bottom: 1; }
+    #apikey-hint { color: #94a3b8; height: auto; }
+    #apikey-actions { height: auto; align-horizontal: center; margin-top: 1; }
+    #apikey-actions Button { margin: 0 2; }
     """
 
     BINDINGS = [
         ("ctrl+q", "quit", "Salir"),
         ("ctrl+l", "clear_log", "Limpiar"),
+        ("ctrl+p", "open_model", "Modelo"),
         ("f1", "show_help", "Ayuda"),
         ("escape", "focus_prompt", "Prompt"),
     ]
@@ -200,6 +240,9 @@ class SatelliteTUI(App):
         self._subscribed = False
         self._pending_options = None
         self._chat_announced = False
+        # Un turno a la vez: la cola sólo avanza entre turnos; nunca en paralelo.
+        self._turn_active = False
+        self._queue_running = False
         self._agents: dict[str, dict] = {}
         self._node_agent: dict[str, str] = {}
         self._cards: dict[str, Static] = {}
@@ -258,6 +301,11 @@ class SatelliteTUI(App):
             self._subscribed = True
         except Exception:
             self._subscribed = False
+
+    def _rearm_runtime(self) -> None:
+        """Tras cambiar el workdir el bus es otro: se vuelve a suscribir la TUI."""
+        self._subscribed = False
+        self._ensure_subscribed()
 
     def _on_event(self, event) -> None:
         self._log(render.event_text(event), plain=event.event_type.value)
@@ -339,8 +387,9 @@ class SatelliteTUI(App):
             elif kind is EventType.TOOL_CALLED:
                 tool = str(getattr(event, "tool_name", "") or payload.get("tool", ""))
                 if tool:
+                    accion = render.tool_action(tool, payload.get("arguments"))
                     self._upsert_agent(
-                        self._agent_of(event), status="running", action=f"⚙ {tool}"
+                        self._agent_of(event), status="running", action=accion
                     )
             elif kind is EventType.NODE_FINISHED:
                 failed = "fail" in str(payload.get("status", "")).lower()
@@ -376,6 +425,10 @@ class SatelliteTUI(App):
     # --- entrada ---
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        # Con un modal abierto (p. ej. el selector de proveedor) el Enter es del modal:
+        # no debe llegar aquí y ejecutarse como comando.
+        if isinstance(self.screen, ModalScreen):
+            return
         line = event.value.strip()
         event.input.value = ""
         if not line:
@@ -383,7 +436,10 @@ class SatelliteTUI(App):
         name, arg = palette.parse(line)
         if not name:
             return
-        self._log(Text.assemble(("› ", "bold green"), (line, "bold")))
+        if name == "run":
+            self._log(render.user_card(line), plain=f"› {line}")
+        else:
+            self._log(Text.assemble(("› ", "bold green"), (line, "bold")))
         handler = getattr(self, f"_cmd_{name.replace('-', '_')}", None)
         if handler is None:
             self._log(Text(f"comando desconocido: /{name}  (usa /help)", style="red"))
@@ -456,7 +512,9 @@ class SatelliteTUI(App):
             self._log(
                 Text(f"contexto: {resumen}", style="dim"), plain=f"contexto: {resumen}"
             )
+        self._turn_active = True
         self._busy(True, "el agente está trabajando…")
+        inicio = time.perf_counter()
         try:
             reply = await self.session.send_message(
                 text,
@@ -464,6 +522,7 @@ class SatelliteTUI(App):
                 plan_mode=plan_mode,
                 extra_metadata=extra_metadata,
             )
+            elapsed_ms = (time.perf_counter() - inicio) * 1000
             if not self._chat_announced:
                 self._chat_announced = True
                 restored = self.session.restored_turns()
@@ -475,7 +534,12 @@ class SatelliteTUI(App):
                         ),
                         plain=f"restaurados {restored}",
                     )
-            self._log(render.reply_panel(reply), plain=f"respuesta {reply.status}")
+            self._log(
+                render.reply_panel(
+                    reply, elapsed_ms=elapsed_ms, metrics=getattr(reply, "metrics", None)
+                ),
+                plain=f"respuesta {reply.status}",
+            )
             if reply.compaction and reply.compaction.get("dropped"):
                 self._log(
                     Text(
@@ -490,6 +554,7 @@ class SatelliteTUI(App):
         except Exception as exc:  # noqa: BLE001
             self._log(Text(f"error: {exc}", style="red"))
         finally:
+            self._turn_active = False
             self._busy(False)
             self._refresh_status()
 
@@ -557,9 +622,16 @@ class SatelliteTUI(App):
 
     async def _do_chat_option(self, option) -> None:
         self._busy(True, "el agente está trabajando…")
+        inicio = time.perf_counter()
         try:
             reply = await self.session.choose_option(option, approval=self.approval)
-            self._log(render.reply_panel(reply), plain=f"respuesta {reply.status}")
+            elapsed_ms = (time.perf_counter() - inicio) * 1000
+            self._log(
+                render.reply_panel(
+                    reply, elapsed_ms=elapsed_ms, metrics=getattr(reply, "metrics", None)
+                ),
+                plain=f"respuesta {reply.status}",
+            )
         except Exception as exc:  # noqa: BLE001
             self._log(Text(f"error: {exc}", style="red"))
         finally:
@@ -620,15 +692,27 @@ class SatelliteTUI(App):
 
     # --- comandos sincrónicos ---
 
+    def _turn_en_curso(self) -> bool:
+        """True (y avisa) si ya hay un turno o un drenado de cola en marcha."""
+        if self._turn_active or self._queue_running:
+            texto = "turno en curso: usa /queue add <texto> para la siguiente instrucción"
+            self._log(Text(texto, style="yellow"), plain="turno en curso")
+            return True
+        return False
+
     def _cmd_run(self, arg: str) -> None:
         if not arg.strip():
             self._log(Text("uso: /run <mensaje>", style="yellow"))
+            return
+        if self._turn_en_curso():
             return
         self._spawn(self._do_chat(arg.strip()), name="chat")
 
     def _cmd_plan(self, arg: str) -> None:
         if not arg.strip():
             self._log(Text("uso: /plan <tarea ambigua o a planificar>", style="yellow"))
+            return
+        if self._turn_en_curso():
             return
         self._spawn(self._do_chat(arg.strip(), plan_mode=True), name="plan")
 
@@ -640,20 +724,318 @@ class SatelliteTUI(App):
         turns = self.session.conversation()
         self._log(render.conversation_table(turns), plain=f"history={len(turns)}")
 
+    # --- comentarios inline (TUI: ancla explícita, sin diff visual) ---
+
+    def _active_session_id(self) -> str:
+        from satellite.orchestration.sessions import SessionStore
+
+        return SessionStore(self.session.project_root).active_id()
+
+    def _current_task_id(self) -> str:
+        """Tarea del último turno con ``task_id`` (para vincular el comentario)."""
+        for turno in reversed(self.session.conversation()):
+            task_id = str(getattr(turno, "task_id", "") or "")
+            if task_id:
+                return task_id
+        return ""
+
+    def _cmd_comments(self, arg: str) -> None:
+        """``/comments [list|add|resolve|reopen|delete]`` con archivo + lado + rango."""
+        from satellite import comments
+
+        root = self.session.project_root
+        partes = arg.strip().split(" ", 1)
+        accion = partes[0].lower() if partes and partes[0] else ""
+        resto = partes[1].strip() if len(partes) > 1 else ""
+
+        if accion in ("", "list"):
+            items = comments.list_comments(root)
+            if not items:
+                self._log(Text("(sin comentarios)", style="dim"), plain="comments=0")
+                return
+            lineas = []
+            for item in items:
+                rango = (
+                    f"{item['line_start']}-{item['line_end']}"
+                    if item["line_end"] != item["line_start"]
+                    else str(item["line_start"])
+                )
+                estado = "resuelto" if item["resolved"] else "abierto"
+                lineas.append(
+                    f"{item['id']}  {item['file']}:{rango}  [{estado}] [{item['side']}]  {item['text']}"
+                )
+            self._log(Text("\n".join(lineas)), plain=f"comments={len(lineas)}")
+            return
+
+        if accion == "add":
+            side = "new"
+            if resto.startswith("--old "):
+                side = "old"
+                resto = resto[len("--old ") :].strip()
+            trozos = resto.split(" ", 2)
+            if len(trozos) < 3:
+                self._log(
+                    Text(
+                        "uso: /comments add [--old] <archivo> <inicio|inicio-fin> <texto>",
+                        style="yellow",
+                    ),
+                    plain="uso: /comments add",
+                )
+                return
+            archivo, rango, texto = trozos
+            try:
+                inicio, fin = _rango_lineas(rango)
+                item = comments.add_comment(
+                    root,
+                    file=archivo,
+                    line_start=inicio,
+                    line_end=fin,
+                    text=texto,
+                    side=side,
+                    session_id=self._active_session_id(),
+                    task_id=self._current_task_id(),
+                )
+            except ValueError as exc:
+                self._log(Text(f"error: {exc}", style="red"), plain=f"error: {exc}")
+                return
+            self._log(
+                Text(
+                    f"comentario {item['id']}: {item['file']}:{item['line_start']}-{item['line_end']}",
+                    style="green",
+                ),
+                plain=f"comentario {item['id']}",
+            )
+            self._cmd_comments("list")
+            return
+
+        if accion in ("resolve", "reopen"):
+            if not resto:
+                self._log(
+                    Text(f"uso: /comments {accion} <id>", style="yellow"),
+                    plain=f"uso: /comments {accion}",
+                )
+                return
+            try:
+                comments.update_comment(root, resto, resolved=(accion == "resolve"))
+            except KeyError:
+                self._log(
+                    Text(f"no existe el comentario {resto}", style="yellow"),
+                    plain="comentario no existe",
+                )
+                return
+            except ValueError as exc:
+                self._log(Text(f"error: {exc}", style="red"), plain=f"error: {exc}")
+                return
+            self._log(
+                Text(
+                    f"comentario {resto}: {'resuelto' if accion == 'resolve' else 'reabierto'}",
+                    style="green",
+                ),
+                plain=f"comentario {accion}",
+            )
+            self._cmd_comments("list")
+            return
+
+        if accion == "delete":
+            if not resto:
+                self._log(
+                    Text("uso: /comments delete <id>", style="yellow"),
+                    plain="uso: /comments delete",
+                )
+                return
+            if not comments.delete_comment(root, resto):
+                self._log(
+                    Text(f"no existe el comentario {resto}", style="yellow"),
+                    plain="comentario no existe",
+                )
+                return
+            self._log(Text(f"comentario {resto} borrado", style="green"), plain="comentario borrado")
+            self._cmd_comments("list")
+            return
+
+        self._log(
+            Text(
+                "uso: /comments [list | add [--old] <archivo> <rango> <texto> | "
+                "resolve|reopen|delete <id>]",
+                style="yellow",
+            ),
+            plain="uso: /comments",
+        )
+
+    # --- cola de instrucciones (siguiente turno, nunca in-flight) ---
+
+    def _cmd_queue(self, arg: str) -> None:
+        """``/queue [list|add|edit|remove|clear|run]``."""
+        from satellite import prompt_queue
+
+        root = self.session.project_root
+        partes = arg.strip().split(" ", 1)
+        accion = partes[0].lower() if partes and partes[0] else ""
+        resto = partes[1].strip() if len(partes) > 1 else ""
+
+        if accion in ("", "list"):
+            items = prompt_queue.list_items(root)
+            if not items:
+                self._log(Text("(cola vacía)", style="dim"), plain="cola=0")
+                return
+            lineas = [
+                f"{indice}. {item['id']}  {item['text']}"
+                + (" [plan]" if item["plan_mode"] else "")
+                for indice, item in enumerate(items, 1)
+            ]
+            self._log(Text("\n".join(lineas)), plain=f"cola={len(lineas)}")
+            return
+
+        if accion == "add":
+            plan_mode = False
+            if resto.startswith("--plan "):
+                plan_mode = True
+                resto = resto[len("--plan ") :].strip()
+            if not resto:
+                self._log(
+                    Text("uso: /queue add [--plan] <texto>", style="yellow"),
+                    plain="uso: /queue add",
+                )
+                return
+            try:
+                prompt_queue.enqueue(root, resto, plan_mode=plan_mode)
+            except ValueError as exc:
+                self._log(Text(f"error: {exc}", style="red"), plain=f"error: {exc}")
+                return
+            self._log(Text(f"encolado: {resto}", style="green"), plain="encolado")
+            self._cmd_queue("list")
+            return
+
+        if accion == "edit":
+            item_id, _, texto = resto.partition(" ")
+            if not item_id or not texto.strip():
+                self._log(
+                    Text("uso: /queue edit <id> <texto>", style="yellow"),
+                    plain="uso: /queue edit",
+                )
+                return
+            try:
+                prompt_queue.update_item(root, item_id, text=texto.strip())
+            except KeyError:
+                self._log(
+                    Text(f"no existe el item {item_id}", style="yellow"),
+                    plain="item no existe",
+                )
+                return
+            except ValueError as exc:
+                self._log(Text(f"error: {exc}", style="red"), plain=f"error: {exc}")
+                return
+            self._log(
+                Text(f"editado: {item_id} (afecta al turno futuro)", style="green"),
+                plain="cola editada",
+            )
+            self._cmd_queue("list")
+            return
+
+        if accion in ("remove", "rm"):
+            if not resto:
+                self._log(
+                    Text("uso: /queue remove <id>", style="yellow"),
+                    plain="uso: /queue remove",
+                )
+                return
+            try:
+                prompt_queue.remove_item(root, resto)
+            except KeyError:
+                self._log(
+                    Text(f"no existe el item {resto}", style="yellow"),
+                    plain="item no existe",
+                )
+                return
+            self._log(Text(f"quitado: {resto}", style="green"), plain="cola quitada")
+            self._cmd_queue("list")
+            return
+
+        if accion == "clear":
+            prompt_queue.clear(root)
+            self._log(Text("cola vacía", style="green"), plain="cola=0")
+            return
+
+        if accion == "run":
+            self._run_queue()
+            return
+
+        self._log(
+            Text(
+                "uso: /queue [list | add [--plan] <texto> | edit <id> <texto> | "
+                "remove <id> | clear | run]",
+                style="yellow",
+            ),
+            plain="uso: /queue",
+        )
+
+    def _run_queue(self) -> None:
+        """Arranca el drenado de la cola (un prompt por turno), si no hay otro en curso."""
+        from satellite import prompt_queue
+
+        if self._queue_running:
+            self._log(Text("la cola ya se está ejecutando", style="yellow"), plain="cola ya en marcha")
+            return
+        if self._turn_active:
+            self._log(
+                Text(
+                    "turno en curso: espera a que termine (o /cancel) antes de /queue run",
+                    style="yellow",
+                ),
+                plain="turno en curso",
+            )
+            return
+        if not prompt_queue.list_items(self.session.project_root):
+            self._log(Text("(cola vacía)", style="dim"), plain="cola=0")
+            return
+        # Se marca antes de programar el worker: dos /queue run seguidos no duplican el drenado.
+        self._queue_running = True
+        try:
+            self._spawn(self._do_run_queue(), name="queue")
+        except Exception:
+            self._queue_running = False
+            raise
+
+    async def _do_run_queue(self) -> None:
+        """Ejecuta la cola en orden reutilizando ``_do_chat`` (el flujo real de envío)."""
+        from satellite import prompt_queue
+
+        try:
+            while True:
+                item = prompt_queue.pop_next(self.session.project_root)
+                if item is None:
+                    break
+                self._log(
+                    Text(f"cola › {item['text']}", style="dim"),
+                    plain=f"cola: {item['text']}",
+                )
+                await self._do_chat(item["text"], plan_mode=bool(item.get("plan_mode")))
+        finally:
+            self._queue_running = False
+            self._refresh_status()
+
     def _cmd_sessions(self, arg: str) -> None:
-        """Lista las conversaciones guardadas (la activa con ●)."""
+        """Lista las conversaciones guardadas (activa ●, fijada ★, archivada)."""
         infos = self.session.sessions()
         if not infos:
             self._log(Text("(sin sesiones guardadas)", style="dim"), plain="sessions=0")
             return
-        lines = [
-            f" {'●' if info.active else ' '} {info.id}  {info.name}  ({info.turns} turnos)"
-            for info in infos
-        ]
+        lines = []
+        for info in infos:
+            marcas = []
+            if info.pinned:
+                marcas.append("★")
+            if info.archived:
+                marcas.append("archivada")
+            sufijo = f"  [{' '.join(marcas)}]" if marcas else ""
+            lines.append(
+                f" {'●' if info.active else ' '} {info.id}  {info.name}  "
+                f"({info.turns} turnos){sufijo}"
+            )
         self._log(Text("\n".join(lines)), plain=f"sessions={len(infos)}")
 
     def _cmd_session(self, arg: str) -> None:
-        """``/session new [nombre]``, ``/session use <id|nombre>``, ``/session name <t>``."""
+        """``/session new|use|name|pin|unpin|archive|unarchive [id|nombre]``."""
         partes = arg.strip().split(" ", 1)
         accion = partes[0].lower() if partes and partes[0] else ""
         resto = partes[1].strip() if len(partes) > 1 else ""
@@ -690,12 +1072,195 @@ class SatelliteTUI(App):
                 plain=f"sesión renombrada: {resto}",
             )
             return
+        if accion in ("pin", "unpin"):
+            if not resto:
+                self._log(
+                    Text("uso: /session pin|unpin <id|nombre>", style="yellow"),
+                    plain="uso: /session pin|unpin <id|nombre>",
+                )
+                return
+            session_id = self.session.pin_session(resto, accion == "pin")
+            if session_id is None:
+                self._log(
+                    Text("no existe esa sesión (mira /sessions)", style="yellow"),
+                    plain="no existe esa sesión (mira /sessions)",
+                )
+                return
+            hecho = "fijada" if accion == "pin" else "desfijada"
+            self._log(
+                Text(f"sesión {hecho}: {session_id}", style="green"),
+                plain=f"sesión {hecho}: {session_id}",
+            )
+            self._cmd_sessions("")  # refresca el listado
+            return
+        if accion in ("archive", "unarchive"):
+            if not resto:
+                self._log(
+                    Text("uso: /session archive|unarchive <id|nombre>", style="yellow"),
+                    plain="uso: /session archive|unarchive <id|nombre>",
+                )
+                return
+            session_id = self.session.archive_session(resto, accion == "archive")
+            if session_id is None:
+                self._log(
+                    Text("no existe esa sesión (mira /sessions)", style="yellow"),
+                    plain="no existe esa sesión (mira /sessions)",
+                )
+                return
+            hecho = "archivada" if accion == "archive" else "desarchivada"
+            self._log(
+                Text(f"sesión {hecho}: {session_id}", style="green"),
+                plain=f"sesión {hecho}: {session_id}",
+            )
+            self._cmd_sessions("")  # refresca el listado (activa incluida)
+            return
         self._log(
             Text(
-                "uso: /session <new [nombre] | use <id|nombre> | name <nombre>>",
+                "uso: /session <new [nombre] | use <id|nombre> | name <nombre> | "
+                "pin|unpin <id|nombre> | archive|unarchive <id|nombre>>",
                 style="yellow",
             ),
-            plain="uso: /session <new [nombre] | use <id|nombre> | name <nombre>>",
+            plain=(
+                "uso: /session <new [nombre] | use <id|nombre> | name <nombre> | "
+                "pin|unpin <id|nombre> | archive|unarchive <id|nombre>>"
+            ),
+        )
+
+    def _cmd_git(self, arg: str) -> None:
+        """Estado real del repo en el workdir activo (sólo lectura)."""
+        from satellite import gitops
+
+        root = self.session.project_root
+        objetivo = gitops.active_workdir(root) or root
+        try:
+            data = gitops.status(objetivo)
+        except gitops.GitError as exc:
+            self._log(Text(str(exc), style="yellow"), plain="git: sin repositorio")
+            return
+        lineas = [f"rama: {data['branch']}" + (" (detached)" if data["detached"] else "")]
+        if objetivo != root:
+            lineas.append(f"workdir: {objetivo}")
+        if data["upstream"]:
+            lineas.append(f"upstream: {data['upstream']} ↑{data['ahead']} ↓{data['behind']}")
+        if data["clean"]:
+            lineas.append("sin cambios")
+        for grupo, titulo in (
+            ("conflicts", "conflicto"),
+            ("staged", "staged"),
+            ("unstaged", "sin preparar"),
+            ("untracked", "sin seguimiento"),
+        ):
+            for entry in data[grupo]:
+                lineas.append(f"  [{titulo}] {entry['code']} {entry['path']}")
+        self._log(
+            Text("\n".join(lineas)),
+            plain=f"git={data['branch']} files={len(data['files'])}",
+        )
+
+    def _cmd_worktrees(self, arg: str) -> None:
+        """``/worktrees [list|add|use|remove]``: contexto de ejecución del proyecto."""
+        from satellite import gitops
+
+        root = self.session.project_root
+        if not gitops.is_repo(root):
+            self._log(Text("no es un repositorio git", style="yellow"), plain="worktrees=0")
+            return
+
+        partes = arg.strip().split(" ", 1)
+        accion = partes[0].lower() if partes and partes[0] else ""
+        resto = partes[1].strip() if len(partes) > 1 else ""
+
+        if accion == "add":
+            if not resto:
+                self._log(
+                    Text("uso: /worktrees add <nombre>", style="yellow"),
+                    plain="uso: /worktrees add",
+                )
+                return
+            try:
+                creado = gitops.add_worktree(root, resto)
+            except gitops.GitError as exc:
+                self._log(Text(str(exc), style="yellow"), plain="worktree error")
+                return
+            self._log(
+                Text(
+                    f"worktree creado: {creado['path']} (rama {creado['branch']})",
+                    style="green",
+                ),
+                plain=f"worktree {creado['branch']}",
+            )
+            self._cmd_worktrees("")
+            return
+
+        if accion in ("use", "activate"):
+            objetivo = "" if resto.lower() in ("proyecto", "project", "") else resto
+            try:
+                efectivo = self.session.use_workdir(objetivo or None)
+            except gitops.GitError as exc:
+                self._log(Text(str(exc), style="yellow"), plain="worktree error")
+                return
+            self._log(
+                Text(f"ejecutando en: {efectivo or root}", style="green"),
+                plain=f"workdir={efectivo or root}",
+            )
+            self._rearm_runtime()
+            self._refresh_status()
+            return
+
+        if accion == "remove":
+            force = resto.strip().endswith("--force")
+            path = resto.strip()
+            if force:
+                path = path[: -len("--force")].strip()
+            if not path:
+                self._log(
+                    Text("uso: /worktrees remove <ruta> [--force]", style="yellow"),
+                    plain="uso: /worktrees remove",
+                )
+                return
+            activo_antes = gitops.active_workdir(root)
+            try:
+                quitado = gitops.remove_worktree(root, path, force=force)
+            except gitops.GitError as exc:
+                self._log(Text(str(exc), style="yellow"), plain="worktree error")
+                return
+            removido = Path(str(quitado.get("removed", ""))).resolve()
+            if activo_antes is not None and activo_antes == removido:
+                self.session.use_workdir(None)
+                self._rearm_runtime()
+            self._log(
+                Text(f"worktree quitado: {quitado.get('removed', path)}", style="green"),
+                plain="worktree quitado",
+            )
+            self._refresh_status()
+            return
+
+        if accion not in ("", "list"):
+            self._log(
+                Text(
+                    "uso: /worktrees [list | add <nombre> | use <ruta|proyecto> | "
+                    "remove <ruta> [--force]]",
+                    style="yellow",
+                ),
+                plain="uso: /worktrees",
+            )
+            return
+
+        activo = gitops.active_workdir(root)
+        lineas = []
+        for wt in gitops.list_worktrees(root):
+            marcas = []
+            if wt.get("main"):
+                marcas.append("principal")
+            if activo and str(activo) == wt["path"]:
+                marcas.append("activo")
+            if wt.get("dirty"):
+                marcas.append("con cambios")
+            sufijo = f"  [{', '.join(marcas)}]" if marcas else ""
+            lineas.append(f"{wt['branch'] or '(detached)'}{sufijo}  {wt['path']}")
+        self._log(
+            Text("\n".join(lineas) or "(sin worktrees)"),
+            plain=f"worktrees={len(lineas)}",
         )
 
     def _cmd_jobs(self, arg: str) -> None:
@@ -1028,6 +1593,10 @@ class SatelliteTUI(App):
 
     def action_show_help(self) -> None:
         self._cmd_help("")
+
+    def action_open_model(self) -> None:
+        """Ctrl+P: abre el selector rápido de proveedor/modelo."""
+        self._cmd_provider("")
 
     def action_focus_prompt(self) -> None:
         self.query_one("#prompt", Input).focus()

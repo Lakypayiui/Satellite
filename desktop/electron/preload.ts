@@ -5,11 +5,46 @@
 
 import { contextBridge, ipcRenderer } from "electron";
 
+/**
+ * Este preload corre en un renderer con `sandbox: true`, donde `require` sólo resuelve
+ * `electron` y unos pocos built-ins: **no puede importar módulos locales**. Por eso es
+ * autocontenido. El tema inicial se toma tal cual del argumento del proceso principal (que
+ * siempre manda un id válido del catálogo) y, si faltara, se cae a «obsidiana»; el renderer
+ * lo valida igualmente contra el catálogo compartido (`src/`).
+ */
+
 export interface Envelope<T> {
   ok: boolean;
   data?: T;
   error?: { code: string; message: string; status: number };
 }
+
+export interface WindowState {
+  maximized: boolean;
+  fullscreen: boolean;
+}
+
+export interface ThemePreference {
+  theme: string;
+  text_intensity: string;
+  chat_watermark: boolean;
+  chat_watermark_opacity: number;
+  language: string;
+}
+
+/** Lee un argumento `--nombre=valor` que el proceso principal añade al renderer. */
+function argumento(nombre: string): string {
+  const prefijo = `--${nombre}=`;
+  const encontrado = process.argv.find((item) => item.startsWith(prefijo));
+  return encontrado ? encontrado.slice(prefijo.length) : "";
+}
+
+const temaInicial = argumento("satellite-theme");
+const intensidadInicial = argumento("satellite-text-intensity");
+const marcaInicial = argumento("satellite-chat-watermark");
+const marcaOpacidadInicial = argumento("satellite-chat-watermark-opacity");
+const idiomaInicial = argumento("satellite-language");
+const plataforma = argumento("satellite-platform") || process.platform;
 
 const api = {
   /** Petición a la API local a través del proceso principal. */
@@ -42,6 +77,57 @@ const api = {
       repoRoot: string;
       dev: boolean;
     }>,
+
+  /** Plataforma del proceso (`win32`, `darwin`, `linux`). */
+  platform: plataforma,
+
+  /** Controles de la titlebar propia (frame:false). Canales IPC limitados y validados. */
+  windowControls: {
+    minimize: () => ipcRenderer.send("satellite:window-minimize"),
+    toggleMaximize: () => ipcRenderer.send("satellite:window-toggle-maximize"),
+    close: () => ipcRenderer.send("satellite:window-close"),
+    state: () => ipcRenderer.invoke("satellite:window-state") as Promise<WindowState>,
+    onState: (onState: (state: WindowState) => void) => {
+      const handler = (_evento: unknown, state: WindowState) => onState(state);
+      ipcRenderer.on("satellite:window-state", handler);
+      return () => ipcRenderer.removeListener("satellite:window-state", handler);
+    },
+  },
+
+  /** Tema e intensidad persistidos; los cambios se validan en el proceso principal. */
+  theme: {
+    // El proceso principal siempre manda ids válidos; estos son sólo el respaldo.
+    initial: temaInicial || "obsidiana",
+    initialIntensity: intensidadInicial || "medio",
+    // Marca de agua: "1"/"0" y la opacidad ya acotada por el proceso principal.
+    initialWatermark: marcaInicial || "1",
+    initialWatermarkOpacity: marcaOpacidadInicial || "0.06",
+    // Idioma de la interfaz (por defecto «es»).
+    initialLanguage: idiomaInicial || "es",
+    get: () => ipcRenderer.invoke("satellite:preferences") as Promise<ThemePreference>,
+    set: (theme: string) =>
+      ipcRenderer.invoke("satellite:preferences-set-theme", theme) as Promise<ThemePreference>,
+    setIntensity: (intensity: string) =>
+      ipcRenderer.invoke(
+        "satellite:preferences-set-text-intensity",
+        intensity,
+      ) as Promise<ThemePreference>,
+    setWatermark: (visible: boolean) =>
+      ipcRenderer.invoke(
+        "satellite:preferences-set-chat-watermark",
+        visible,
+      ) as Promise<ThemePreference>,
+    setWatermarkOpacity: (opacity: number) =>
+      ipcRenderer.invoke(
+        "satellite:preferences-set-chat-watermark-opacity",
+        opacity,
+      ) as Promise<ThemePreference>,
+    setLanguage: (language: string) =>
+      ipcRenderer.invoke(
+        "satellite:preferences-set-language",
+        language,
+      ) as Promise<ThemePreference>,
+  },
 };
 
 contextBridge.exposeInMainWorld("satellite", api);

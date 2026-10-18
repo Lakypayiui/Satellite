@@ -119,6 +119,21 @@ def get(key: str) -> CatalogEntry | None:
     return _BY_KEY.get(str(key).strip().lower())
 
 
+def key_for_base_url(base_url: str) -> str:
+    """Clave del catálogo cuya ``base_url`` coincide (``""`` si no es del catálogo).
+
+    Sirve para reconocer el proveedor de un guardado, que sólo conserva la familia
+    (``openai``/``anthropic``) y la URL, y así elegir su estrategia de listado de modelos.
+    """
+    wanted = str(base_url or "").strip().rstrip("/").lower()
+    if not wanted:
+        return ""
+    for entry in CATALOG:
+        if entry.base_url.strip().rstrip("/").lower() == wanted:
+            return entry.key
+    return ""
+
+
 def find(text: str) -> list[CatalogEntry]:
     """Entradas cuya clave, etiqueta o grupo contienen ``text`` (vacío = todas)."""
     needle = str(text).strip().lower()

@@ -1,57 +1,35 @@
-"""Paleta de comandos de la TUI: catálogo y parseo (sin dependencias de UI)."""
+"""Paleta de comandos de la TUI: catálogo y parseo (sin dependencias de UI).
+
+La lista de comandos **no** se escribe aquí: sale del catálogo compartido
+:mod:`satellite.commands`, el mismo que publica la CLI y consume la app. Esta capa sólo
+le da forma (nombre/uso/resumen) y añade el parseo de la línea.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from satellite.commands import for_surface
+
 
 @dataclass(frozen=True)
 class Command:
-    """Un comando de la paleta."""
+    """Un comando de la paleta, visto para la TUI."""
 
     name: str
     usage: str
     summary: str
 
 
-COMMANDS: tuple[Command, ...] = (
-    Command("run", "/run <mensaje>", "Envía un mensaje al agente (igual que texto libre)"),
-    Command("plan", "/plan <tarea>", "Modo plan: el LLM propone alternativas para elegir"),
-    Command("new", "/new", "Empieza una conversación nueva"),
-    Command("compact", "/compact", "Compacta el contexto (resumen + últimos turnos)"),
-    Command("history", "/history", "Muestra la conversación actual"),
-    Command("help", "/help", "Muestra esta ayuda"),
-    Command("agents", "/agents", "Lista el catálogo de agentes"),
-    Command("create", "/create <necesidad>", "Crea un agente nuevo (con aprobación)"),
-    Command("skills", "/skills", "Lista las skills globales"),
-    Command("skill-search", "/skill-search <texto>", "Busca skills (BM25, sin LLM)"),
-    Command("skill-edit", "/skill-edit <id> [--description <t>] [--tags a,b]", "Edita una skill"),
-    Command("skill-delete", "/skill-delete <id>", "Elimina una skill"),
-    Command("curate", "/curate [petición]", "Ejecuta el curador de skills"),
-    Command("changes", "/changes [task_id]", "Archivos y diff que cambió una tarea"),
-    Command("undo-task", "/undo-task [task_id]", "Restaura los cambios de esa tarea"),
-    Command("sessions", "/sessions", "Lista las conversaciones guardadas"),
-    Command("session", "/session <new|use|name>", "Crea, reanuda o renombra una conversación"),
-    Command("jobs", "/jobs [list|output|wait|stop]", "Comandos largos en segundo plano"),
-    Command("cancel", "/cancel [motivo]", "Pide cancelar el turno en curso"),
-    Command("tasks", "/tasks", "Lista las tareas persistidas"),
-    Command("status", "/status <task_id>", "Eventos de una tarea"),
-    Command("inspect", "/inspect <task_id>", "Grafo serializado de una tarea"),
-    Command("stats", "/stats", "Métricas de skills (línea base = estimación)"),
-    Command("doctor", "/doctor", "Diagnóstico de integridad"),
-    Command("setup", "/setup", "Detecta Docker (sandbox N1)"),
-    Command("config", "/config", "Muestra config.json"),
-    Command("provider", "/provider [list]", "Configura el proveedor (catálogo + modelos)"),
-    Command("mode", "/mode <ask|auto|unrestricted>", "Cambia la política de aprobación"),
-    Command("safe-mode", "/safe-mode <on|off>", "Arranque sólo con agentes base"),
-    Command("reset", "/reset [--factory]", "Limpia agentes creados (y skills con --factory)"),
-    Command("snapshots", "/snapshots", "Lista snapshots"),
-    Command("restore", "/restore <nombre>", "Restaura desde un snapshot"),
-    Command("clear", "/clear", "Limpia la pantalla"),
-    Command("quit", "/quit", "Sale de la TUI"),
+# Una sola definición para las tres interfaces: ver :mod:`satellite.commands`.
+COMMANDS: tuple[Command, ...] = tuple(
+    Command(spec.id, spec.usage, spec.summary) for spec in for_surface("tui")
 )
 
 _BY_NAME = {command.name: command for command in COMMANDS}
+
+# Alias de tecleo: no crean comandos nuevos, sólo apuntan a uno existente.
+_ALIASES = {"q": "quit", "model": "provider", "models": "provider"}
 
 
 def parse(line: str) -> tuple[str, str]:
@@ -62,8 +40,7 @@ def parse(line: str) -> tuple[str, str]:
     if text.startswith("/"):
         head, _, rest = text[1:].partition(" ")
         name = head.strip().lower()
-        if name == "q":
-            name = "quit"
+        name = _ALIASES.get(name, name)
         return (name, rest.strip())
     return ("run", text)
 
@@ -87,4 +64,5 @@ def help_text() -> str:
     lines.append("")
     lines.append("  (texto libre)  Envía un mensaje al agente (conversación)")
     lines.append("  @contexto      Adjunta contexto: @src/api.py, @src/, @login (símbolo)")
+    lines.append("  /model         Abre el selector rápido de proveedor/modelo (alias de /provider)")
     return "\n".join(lines)

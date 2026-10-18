@@ -163,3 +163,35 @@ def test_duplicate_id_rejected() -> None:
     report = make_validator().validate(make_proposal(id="existing_agent"))
     assert report.ok is False
     assert any("ya existe" in e for e in report.errors)
+
+
+def test_tool_id_from_tools_manifest_is_reserved() -> None:
+    validator = make_validator(tool_ids={"read_file"})
+    report = validator.validate(make_proposal(id="desktop_observe", tools=("read_file",)))
+    assert report.ok is False
+    assert any("reservado" in e for e in report.errors)
+
+
+def test_desktop_control_plus_shell_is_rejected() -> None:
+    validator = make_validator(tool_ids={"desktop_observe", "run_command"})
+    report = validator.validate(make_proposal(tools=("desktop_observe", "run_command")))
+    assert report.ok is False
+    assert any("no combinable" in e for e in report.errors)
+
+
+def test_desktop_control_plus_network_capability_is_rejected() -> None:
+    validator = make_validator(tool_ids={"desktop_observe"})
+    report = validator.validate(
+        make_proposal(
+            tools=("desktop_observe",),
+            capabilities=("browse_web", "extract_data"),
+        )
+    )
+    assert report.ok is False
+    assert any("no combinable" in e for e in report.errors)
+
+
+def test_desktop_control_alone_is_allowed() -> None:
+    validator = make_validator(tool_ids={"desktop_observe"})
+    report = validator.validate(make_proposal(tools=("desktop_observe",)))
+    assert report.ok is True

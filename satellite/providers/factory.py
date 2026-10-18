@@ -32,6 +32,12 @@ class ProviderConfig:
     # ``llm.models.<id>``: capacidades por modelo (p. ej. familias de razonamiento).
     # Fuera de ``eq``/``hash`` para que la config siga siendo hashable.
     model_overrides: dict = field(default_factory=dict, compare=False)
+    # Nivel de esfuerzo de razonamiento pedido (``None``/``auto`` = no enviar nada).
+    # Fuera de ``eq``/``hash``: es plumbing, no identidad.
+    reasoning_effort: str | None = field(default=None, compare=False)
+    # Interruptor «Think» explícito (``None`` = no tocar; ``True``/``False`` = encender/apagar
+    # por el canal que declare el modelo). Fuera de ``eq``/``hash``: es plumbing.
+    thinking: bool | None = field(default=None, compare=False)
     # ``llm.cache``: modo (explicit|auto), diagnóstico y pre-calentado.
     cache_options: dict = field(default_factory=dict, compare=False)
 

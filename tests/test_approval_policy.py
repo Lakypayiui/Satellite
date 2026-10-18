@@ -97,3 +97,30 @@ def test_counter_hour_quota_and_pruning() -> None:
     now["t"] += 3601.0
     assert counter.hour_count() == 0
     assert counter.within_quotas("t1") is True
+
+
+def test_requires_human_never_auto_approves() -> None:
+    for mode in (PolicyMode.AUTO, PolicyMode.UNRESTRICTED):
+        policy = ApprovalPolicy(mode)
+        assert policy.pre_decide(requires_human=True) is None
+
+
+def test_requires_human_without_port_is_rejected() -> None:
+    decision = run(
+        ApprovalPolicy(PolicyMode.UNRESTRICTED).decide(
+            {}, ApprovalContext(kind="desktop_control"), None, requires_human=True
+        )
+    )
+    assert decision.status is ApprovalStatus.REJECTED
+    assert "puerto" in decision.reason
+
+
+def test_requires_human_asks_the_port() -> None:
+    port = EchoPort(ApprovalDecision(status=ApprovalStatus.APPROVED, reason="humano"))
+    decision = run(
+        ApprovalPolicy(PolicyMode.AUTO).decide(
+            {}, ApprovalContext(kind="desktop_control"), port, requires_human=True
+        )
+    )
+    assert decision.status is ApprovalStatus.APPROVED
+    assert port.calls == 1

@@ -28,6 +28,7 @@ from satellite.providers.caching import (
     TtlLedger,
     limits_for,
 )
+from satellite.providers.capabilities import override_entry, resolve_effort, thinking_payload
 from satellite.providers.parsing import coerce_arguments
 from satellite.providers.prefix import estimate_prefix_tokens, prefix_hash, prefix_payload
 
@@ -141,6 +142,24 @@ class AnthropicProvider(LLMProvider):
             # Caching automático: un `cache_control` de nivel superior y la API
             # mueve el breakpoint sola (no se marcan bloques).
             kwargs["cache_control"] = marker
+
+        # Thinking extendido: sólo si se pidió un nivel y el modelo lo declara (override en
+        # `llm.models.<id>`); "auto" no envía nada, así el comportamiento por defecto no
+        # cambia. Anthropic exige `max_tokens` > `budget_tokens` y no admite `temperature`
+        # junto al thinking, así que la temperatura se omite cuando va activo.
+        overrides = getattr(self.config, "model_overrides", None)
+        level = resolve_effort(
+            self.config.model, overrides, getattr(self.config, "reasoning_effort", None) or ""
+        )
+        if level is not None:
+            thinking = thinking_payload(level, override_entry(self.config.model, overrides))
+            if thinking is not None:
+                budget = int(thinking.get("budget_tokens", 0) or 0)
+                if budget and limit <= budget:
+                    limit = budget + 1024
+                    kwargs["max_tokens"] = limit
+                kwargs["thinking"] = thinking
+                kwargs.pop("temperature", None)
 
         create = self._diagnostics_create()
         sent = None

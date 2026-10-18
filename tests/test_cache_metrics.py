@@ -384,6 +384,11 @@ def test_runtime_installs_the_metered_provider(tmp_path: Path, monkeypatch) -> N
     )
     orchestrator, _bus, _store, _registry = build_runtime(tmp_path)
     provider = orchestrator.services.provider
+    # El Safe Proxy (modo interno) envuelve por fuera; la medición sigue instalada dentro.
+    from satellite.safe_proxy.interceptor import SanitizingProvider
+
+    if isinstance(provider, SanitizingProvider):
+        provider = provider.inner
     assert isinstance(provider, MeteredProvider)
     assert provider.model == "fake-model"
     assert provider.recorder is not None

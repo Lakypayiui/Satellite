@@ -69,11 +69,14 @@ class ApprovalPolicy:
         reserved: bool = False,
         quota_ok: bool = True,
         validation_ok: bool = True,
+        requires_human: bool = False,
     ) -> ApprovalDecision | None:
         """Decisión determinista previa; ``None`` = hay que preguntar.
 
         Los ids reservados y las cuotas se rechazan SIEMPRE (ni ``unrestricted``
-        los salta). ``auto`` sólo aprueba si la validación pasó.
+        los salta). ``auto`` sólo aprueba si la validación pasó. ``requires_human``
+        (p. ej. control de escritorio) **nunca** se autoaprueba: ni ``auto`` ni
+        ``unrestricted`` la saltan; sin puerto se rechaza en ``decide``.
         """
         if reserved:
             return ApprovalDecision(
@@ -83,6 +86,8 @@ class ApprovalPolicy:
             return ApprovalDecision(
                 status=ApprovalStatus.REJECTED, reason="cuota de propuestas excedida"
             )
+        if requires_human:
+            return None
         if self.mode is PolicyMode.AUTO:
             if validation_ok:
                 return ApprovalDecision(
@@ -104,10 +109,14 @@ class ApprovalPolicy:
         reserved: bool = False,
         quota_ok: bool = True,
         validation_ok: bool = True,
+        requires_human: bool = False,
     ) -> ApprovalDecision:
         """Aplica la política y, si toca, delega la pregunta en el puerto."""
         forced = self.pre_decide(
-            reserved=reserved, quota_ok=quota_ok, validation_ok=validation_ok
+            reserved=reserved,
+            quota_ok=quota_ok,
+            validation_ok=validation_ok,
+            requires_human=requires_human,
         )
         if forced is not None:
             return forced

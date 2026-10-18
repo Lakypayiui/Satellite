@@ -39,10 +39,10 @@ def card_text(app: SatelliteTUI, agent: str) -> str:
 
 
 def test_card_shows_who_it_is_and_what_it_does() -> None:
-    text = str(agent_card("skill_curator", "running", "⚙ run_command"))
+    text = str(agent_card("skill_curator", "running", "Ejecutando tests"))
     assert "skill_curator" in text
     assert "en curso" in text
-    assert "run_command" in text
+    assert "Ejecutando tests" in text
 
 
 def test_card_clips_long_content_and_marks_the_state() -> None:
@@ -85,11 +85,19 @@ def test_one_rectangle_per_agent_with_its_current_action(tmp_path, monkeypatch) 
             await pilot.pause()
             app._on_event(event(E.NODE_STARTED, node_id="n1", payload={"spec": "curador"}))
             app._on_event(event(E.NODE_STARTED, node_id="n2", payload={"spec": "orchestrator"}))
-            app._on_event(event(E.TOOL_CALLED, node_id="n1", tool="run_command"))
+            app._on_event(
+                event(
+                    E.TOOL_CALLED,
+                    node_id="n1",
+                    tool="read_file",
+                    payload={"arguments": {"path": "docs/README.md"}},
+                )
+            )
             await pilot.pause()
 
             assert len(app.query(".agent-card")) == 2
-            assert "run_command" in card_text(app, "curador")
+            # acción semántica (sin engranes): nombra lo que se está haciendo
+            assert "Leyendo README.md" in card_text(app, "curador")
             assert "razonando" in card_text(app, "orchestrator")
             # el que trabaja lleva la clase que ilumina el borde
             assert app._cards["curador"].has_class("running")

@@ -9,8 +9,32 @@ from satellite.core.errors import ProviderError
 from satellite.core.messages import LLMRequest, LLMResponse, Message, Role, Usage
 from satellite.core.tool_models import ToolCall
 from satellite.providers.base import LLMProvider
-from satellite.providers.capabilities import model_capabilities
+from satellite.providers.capabilities import (
+    EFFORT_PARAM,
+    OUTPUT_CONFIG_EFFORT_PARAM,
+    model_capabilities,
+    resolve_effort,
+    resolve_think,
+)
 from satellite.providers.parsing import coerce_arguments
+
+# Parámetros de esfuerzo que este adaptador genérico sabe enviar. Los controles propios de un
+# proveedor (``thinking_level`` de Gemini nativo, ``thinking``/``budget_tokens`` de Anthropic)
+# **no** se mandan desde aquí: en la forma OpenAI-compatible no son válidos (HTTP 400).
+_OPENAI_SENDABLE_EFFORT: frozenset[str] = frozenset({EFFORT_PARAM, OUTPUT_CONFIG_EFFORT_PARAM})
+
+
+def _set_effort(kwargs: dict, param: str, value: object) -> None:
+    """Coloca el nivel en ``param``, admitiendo rutas anidadas (``output_config.effort``)."""
+    if "." in param:
+        head, _, tail = param.partition(".")
+        section = kwargs.get(head)
+        if not isinstance(section, dict):
+            section = {}
+            kwargs[head] = section
+        section[tail] = value
+    else:
+        kwargs[param] = value
 
 
 class OpenAICompatProvider(LLMProvider):
@@ -58,6 +82,28 @@ class OpenAICompatProvider(LLMProvider):
         # los modelos de razonamiento rechazan `temperature` no estándar
         if caps.accepts_temperature:
             kwargs["temperature"] = request.temperature
+        # esfuerzo de razonamiento: sólo si el modelo lo admite, el nivel está entre los suyos y
+        # el canal es uno que este adaptador sabe enviar. "auto" = no enviar nada; "off" = el
+        # valor que apaga el razonamiento (p. ej. `none`). `resolve_effort` devuelve None cuando
+        # no aplica, así que nunca se manda un valor inválido ni un parámetro ajeno.
+        effort = resolve_effort(
+            self.config.model,
+            getattr(self.config, "model_overrides", None),
+            getattr(self.config, "reasoning_effort", None) or "",
+            thinking=getattr(self.config, "thinking", None),
+        )
+        effort_param = caps.effort_param or EFFORT_PARAM
+        if effort and effort_param in _OPENAI_SENDABLE_EFFORT:
+            _set_effort(kwargs, effort_param, effort)
+        # Interruptor «Think» explícito (p. ej. DeepSeek ``thinking: {type: ...}``): sólo si el
+        # modelo declara ese canal; si no, no se envía nada (nunca se finge).
+        think = resolve_think(
+            self.config.model,
+            getattr(self.config, "model_overrides", None),
+            getattr(self.config, "thinking", None),
+        )
+        if think:
+            kwargs.update(think)
         if request.tools is not None:
             kwargs["tools"] = [
                 {
@@ -70,9 +116,13 @@ class OpenAICompatProvider(LLMProvider):
                 }
                 for t in request.tools
             ]
-        if request.max_tokens is not None:
+        limit = request.max_tokens
+        if limit is None:
+            # Sin límite en la petición, se usa el del proveedor guardado (si lo hay).
+            limit = getattr(self.config, "max_tokens", None)
+        if limit is not None:
             # `max_tokens` no existe en las familias de razonamiento
-            kwargs[caps.token_param] = request.max_tokens
+            kwargs[caps.token_param] = limit
         try:
             resp = await self._client.chat.completions.create(**kwargs)
         except Exception as exc:  # noqa: BLE001 — el provider envuelve cualquier error

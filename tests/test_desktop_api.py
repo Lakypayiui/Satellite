@@ -352,3 +352,63 @@ def test_providers_must_be_complete(tmp_path: Path, entorno) -> None:
     assert en_blanco.json()["error"]["code"] == "invalid_provider"
     assert mal_formado.status_code == 422
     assert mal_formado.json()["error"]["code"] == "invalid_request"
+
+
+# --- fijar y archivar (paridad con CLI/TUI) ---
+
+
+def test_sessions_can_be_pinned_and_archived(tmp_path: Path) -> None:
+    client = make_client(make_backend(tmp_path))
+    store = SessionStore(tmp_path)
+    primera = store.create("primera")
+    segunda = store.create("segunda")  # activa
+
+    fijada = client.patch(f"/api/sessions/{primera}", json={"pinned": True})
+    archivada = client.patch(f"/api/sessions/{segunda}", json={"archived": True})
+
+    assert fijada.status_code == 200
+    assert fijada.json()["pinned"] is True
+    # Fijar no cambia cuál está activa.
+    assert fijada.json()["current"] == segunda
+
+    assert archivada.status_code == 200
+    assert archivada.json()["archived"] is True
+    # Al archivar la activa, pasa a otra sin archivar (la fijada).
+    assert archivada.json()["current"] == primera
+
+    porid = {item["id"]: item for item in client.get("/api/sessions").json()["sessions"]}
+    assert porid[primera]["pinned"] is True
+    assert porid[segunda]["archived"] is True
+    # Archivar no borró turnos ni la sesión.
+    assert client.get(f"/api/sessions/{segunda}/turns").status_code == 200
+
+    desconocida = client.patch("/api/sessions/no-existe", json={"pinned": True})
+    assert desconocida.status_code == 404
+    assert desconocida.json()["error"]["code"] == "session_not_found"
+
+
+def test_archiving_the_only_session_leaves_no_active(tmp_path: Path) -> None:
+    client = make_client(make_backend(tmp_path))
+    store = SessionStore(tmp_path)
+    sola = store.create("sola")
+
+    respuesta = client.patch(f"/api/sessions/{sola}", json={"archived": True})
+
+    assert respuesta.status_code == 200
+    # No queda ninguna sin archivar: la activa apunta a la archivada (estado vacío en la app).
+    assert respuesta.json()["current"] == sola
+    # Y la sesión sigue existiendo con sus turnos accesibles.
+    assert client.get(f"/api/sessions/{sola}/turns").status_code == 200
+
+
+def test_a_patch_without_known_fields_changes_nothing(tmp_path: Path) -> None:
+    client = make_client(make_backend(tmp_path))
+    store = SessionStore(tmp_path)
+    session_id = store.create("intacta")
+
+    respuesta = client.patch(f"/api/sessions/{session_id}", json={})
+
+    assert respuesta.status_code == 200
+    assert respuesta.json()["pinned"] is False
+    assert respuesta.json()["archived"] is False
+    assert respuesta.json()["current"] == session_id

@@ -26,6 +26,9 @@ class ToolContext:
     sink: EventSink | None = None
     policy: SecurityPolicy | None = None
     task_id: str = ""
+    # Sesión (conversación) para grants de sesión+app (control de escritorio). Si
+    # está vacía, la política usa `task_id` como clave de sesión.
+    session_id: str = ""
     node_id: str = ""
     engine: object | None = None
     skills: object | None = None

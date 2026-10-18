@@ -11,7 +11,14 @@ from satellite.agents.prompts import render_system, render_template
 from satellite.core.context_models import ContextBundle
 from satellite.core.events import EventType, ExecutionEvent
 from satellite.core.messages import CallContext, LLMRequest, Message, Role, Usage
-from satellite.core.result import AgentResult, AgentStatus, ExecutionMetrics, ToolRecord
+from satellite.core.result import (
+    AgentResult,
+    AgentStatus,
+    ExecutionMetrics,
+    Finding,
+    FindingSeverity,
+    ToolRecord,
+)
 from satellite.core.spec import AgentSpec
 from satellite.core.tool_models import ToolCall
 from satellite.providers.base import LLMProvider
@@ -123,6 +130,7 @@ class LLMAgent(Agent):
         policy: SecurityPolicy | None = None,
         context_engine=None,
         project_root: Path | None = None,
+        workdir: Path | None = None,
         delegation_manager=None,
         delegation_ctx=None,
     ) -> None:
@@ -136,6 +144,9 @@ class LLMAgent(Agent):
         self.policy = policy
         self.context_engine = context_engine
         self.project_root = project_root
+        # Raíz donde las tools escriben/ejecutan (worktree activo). Si es None, el
+        # ``ToolContext`` cae a ``project_root``: el comportamiento de siempre.
+        self.workdir = workdir
         self.delegation_manager = delegation_manager
         self.delegation_ctx = delegation_ctx
         if self.delegation_ctx is None and delegation_manager is not None:
@@ -251,9 +262,10 @@ class LLMAgent(Agent):
             # Sin tool_calls → intentar síntesis
             break
 
+        dropped: list[str] = []
         if self.spec.output_schema:
             candidate = extract_json_object(response.content or "")
-            ok, parsed = self._validate_schema(candidate)
+            ok, parsed, dropped = self._validate_schema(candidate)
             if not ok:
                 messages.append(Message(role=Role.ASSISTANT, content=response.content or ""))
                 messages.append(
@@ -267,10 +279,11 @@ class LLMAgent(Agent):
                     return self._cancelled(ctx, node_id, started, usage_total, tuple(tool_records))
                 usage_total = _accumulate(usage_total, retry.usage)
                 candidate = extract_json_object(retry.content or "")
-                ok, parsed = self._validate_schema(candidate)
+                ok, parsed, dropped = self._validate_schema(candidate)
                 if not ok:
                     error = f"respuesta no cumple output_schema: {parsed}"
                     final_output = {"content": retry.content or ""}
+                    dropped = []
                 else:
                     final_output = parsed
             else:
@@ -287,6 +300,7 @@ class LLMAgent(Agent):
             summary=_summarize(task, final_output, error),
             output=final_output or {},
             tool_calls=tuple(tool_records),
+            findings=_schema_findings(dropped),
             metrics=ExecutionMetrics(
                 tokens_in=usage_total.prompt_tokens,
                 tokens_out=usage_total.completion_tokens,
@@ -457,9 +471,11 @@ class LLMAgent(Agent):
         started = time.monotonic()
         tool_ctx = ToolContext(
             project_root=self.project_root or Path("."),
+            workdir=self.workdir,
             policy=self.policy,
             sink=ctx.sink,
             task_id=ctx.task_id,
+            session_id=getattr(ctx, "session_id", ""),
             node_id=ctx.node_id or "",
             engine=self.context_engine,
             delegation=self.delegation_manager,
@@ -484,31 +500,37 @@ class LLMAgent(Agent):
         return record, result
 
     def _validate_schema(self, candidate: dict | None):
-        """Devuelve (ok, output o mensaje de error).
+        """Devuelve (ok, output normalizado o error, claves descartadas).
 
-        Se valida contra una copia **normalizada** del esquema (el del autor no se toca):
-        si declara `properties`, se prohíben las claves extra, y una salida vacía no
-        vale. Sin esto, un esquema sin `required` daba por bueno cualquier objeto
-        inventado — p.ej. `{"title": …}` en un agente que debía explicar un proyecto — y
-        el usuario veía el payload en vez de una respuesta.
+        Se valida contra el esquema del autor, pero **recortando antes** las claves que
+        no declara: los nodos suelen devolver campos de más (``title``, ``notes``…)
+        junto a los correctos, y prohibirlos tumbaba la respuesta entera (``Additional
+        properties are not allowed``) perdiendo también los datos válidos. Recortar
+        conserva lo declarado — con sus tipos y ``required`` — y sólo cuenta como
+        vacía la respuesta que *únicamente* traía claves inventadas.
         """
         if candidate is None:
-            return False, "no se encontró JSON en la respuesta"
+            return False, "no se encontró JSON en la respuesta", []
         if candidate == {} or candidate == []:
-            return False, "la salida está vacía"
+            return False, "la salida está vacía", []
         try:
-            import copy
-
             import jsonschema
 
             schema = self.spec.output_schema or {}
-            if isinstance(schema, dict) and schema.get("properties"):
-                schema = copy.deepcopy(schema)
-                schema.setdefault("additionalProperties", False)
-            jsonschema.validate(candidate, schema)
-            return True, candidate
+            recortado, descartadas = _prune_to_schema(schema, candidate)
+            if recortado == {} or recortado == []:
+                detalle = (
+                    " (sólo traía claves no declaradas: "
+                    + ", ".join(sorted(dict.fromkeys(descartadas)))
+                    + ")"
+                    if descartadas
+                    else ""
+                )
+                return False, f"la salida está vacía{detalle}", descartadas
+            jsonschema.validate(recortado, schema)
+            return True, recortado, descartadas
         except Exception as exc:  # noqa: BLE001
-            return False, str(exc)
+            return False, str(exc), []
 
     def _emit(self, ctx: AgentContext, event_type: EventType, payload: dict) -> None:
         if ctx.sink is None:
@@ -521,6 +543,59 @@ class LLMAgent(Agent):
                 payload=payload,
             )
         )
+
+
+def _prune_to_schema(schema, value, _path: str = ""):
+    """Recorta de ``value`` las claves que ``schema`` no declara.
+
+    Devuelve ``(valor_normalizado, claves_descartadas)``. Sólo recorta donde el
+    esquema declara ``properties`` y no admite adicionales (``additionalProperties``
+    ausente o ``False``); si el esquema los admite (``true`` o un subesquema), respeta
+    la salida tal cual. Recorre anidados (objetos y arrays) para que una clave extra
+    profunda no tumbe la validación.
+    """
+    if not isinstance(schema, dict):
+        return value, []
+    if isinstance(value, dict):
+        props = schema.get("properties")
+        if not isinstance(props, dict) or not props:
+            return value, []
+        if schema.get("additionalProperties", False) is not False:
+            return value, []
+        normalizado: dict = {}
+        descartadas: list[str] = []
+        for clave, sub in value.items():
+            if clave in props:
+                hijo, extra = _prune_to_schema(props[clave], sub, f"{_path}{clave}.")
+                normalizado[clave] = hijo
+                descartadas.extend(extra)
+            else:
+                descartadas.append(f"{_path}{clave}")
+        return normalizado, descartadas
+    items = schema.get("items")
+    if isinstance(value, list) and isinstance(items, dict):
+        normalizado = []
+        descartadas = []
+        for elemento in value:
+            hijo, extra = _prune_to_schema(items, elemento, f"{_path}[].")
+            normalizado.append(hijo)
+            descartadas.extend(extra)
+        return normalizado, descartadas
+    return value, []
+
+
+def _schema_findings(dropped: list[str]) -> tuple[Finding, ...]:
+    """Diagnóstico de las claves que el nodo devolvió de más y se descartaron."""
+    if not dropped:
+        return ()
+    unicas = sorted(dict.fromkeys(dropped))
+    return (
+        Finding(
+            severity=FindingSeverity.WARNING,
+            message="Se ignoraron claves no declaradas en el output_schema: " + ", ".join(unicas),
+            suggestion="Agrégalas al output_schema del agente si deben conservarse.",
+        ),
+    )
 
 
 def _accumulate(total: Usage, part: Usage | None) -> Usage:

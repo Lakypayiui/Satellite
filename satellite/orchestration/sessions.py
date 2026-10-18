@@ -23,13 +23,19 @@ DEFAULT_SESSION_NAME = "conversación principal"
 
 @dataclass(frozen=True)
 class SessionInfo:
-    """Lo que se muestra de una sesión en la lista."""
+    """Lo que se muestra de una sesión en la lista.
+
+    ``pinned`` y ``archived`` son estados persistentes. Las sesiones de antes de que
+    existieran no traen las claves: se leen como ``False`` (compatibilidad).
+    """
 
     id: str
     name: str
     turns: int = 0
     updated_at: str = ""
     active: bool = False
+    pinned: bool = False
+    archived: bool = False
 
 
 def _now() -> str:
@@ -101,11 +107,27 @@ class SessionStore:
             name=str(data.get("name") or session_id),
             turns=len(turns),
             updated_at=str(data.get("updated_at") or ""),
+            pinned=bool(data.get("pinned")),
+            archived=bool(data.get("archived")),
         )
         return info, turns
 
-    def save(self, session_id: str, turns: list[dict], *, name: str = "") -> bool:
-        """Escribe la sesión (atómico). Devuelve False si no se pudo guardar."""
+    def save(
+        self,
+        session_id: str,
+        turns: list[dict],
+        *,
+        name: str = "",
+        pinned: bool | None = None,
+        archived: bool | None = None,
+        touch: bool = True,
+    ) -> bool:
+        """Escribe la sesión (atómico). Devuelve False si no se pudo guardar.
+
+        ``pinned``/``archived`` en ``None`` conservan lo que ya hubiera (y ``False`` si la
+        sesión es antigua). ``touch=False`` no actualiza ``updated_at``: fijar o archivar no
+        es actividad de la conversación.
+        """
         path = self.session_path(session_id)
         previous: dict = {}
         if path.is_file():
@@ -119,8 +141,10 @@ class SessionStore:
             "id": session_id,
             "name": name or str(previous.get("name") or session_id),
             "created_at": str(previous.get("created_at") or _now()),
-            "updated_at": _now(),
+            "updated_at": _now() if touch else str(previous.get("updated_at") or ""),
             "turns": turns,
+            "pinned": bool(previous.get("pinned")) if pinned is None else bool(pinned),
+            "archived": bool(previous.get("archived")) if archived is None else bool(archived),
         }
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -179,9 +203,37 @@ class SessionStore:
         return session_id
 
     def rename(self, session_id: str, name: str) -> bool:
-        """Renombra la sesión (conserva sus turnos)."""
+        """Renombra la sesión (conserva sus turnos, su fijado y su archivo)."""
         _info, turns = self.read(session_id)
         return self.save(session_id, turns, name=name.strip())
+
+    def set_pinned(self, session_id: str, pinned: bool) -> bool:
+        """Fija o deja de fijar la sesión. No cambia cuál está activa."""
+        info, turns = self.read(session_id)
+        # Se reenvía el nombre leído: la sesión «default» puede no tener fichero todavía y su
+        # nombre por defecto no está en disco (evita rebautizarla al fijar).
+        return self.save(session_id, turns, name=info.name, pinned=bool(pinned), touch=False)
+
+    def set_archived(self, session_id: str, archived: bool) -> bool:
+        """Archiva o desarchiva la sesión (conserva sus turnos: archivar no borra nada)."""
+        info, turns = self.read(session_id)
+        return self.save(session_id, turns, name=info.name, archived=bool(archived), touch=False)
+
+    def next_active_after_archive(self, archived_id: str) -> str | None:
+        """Conversación sin archivar a la que pasar tras archivar la activa.
+
+        Prefiere las fijadas y, dentro de cada grupo, la más reciente. Devuelve ``None`` si no
+        queda ninguna otra sin archivar: entonces no hay conversación activa (estado vacío).
+        Es la misma operación para la app, la CLI y la TUI.
+        """
+        candidatas = [
+            info for info in self.list() if info.id != archived_id and not info.archived
+        ]
+        if not candidatas:
+            return None
+        candidatas.sort(key=lambda info: info.updated_at or "", reverse=True)  # recencia
+        candidatas.sort(key=lambda info: not info.pinned)  # estable: las fijadas primero
+        return candidatas[0].id
 
     def _info(self, path: Path, *, active: bool) -> SessionInfo | None:
         _info, turns = self.read(path.stem)
@@ -193,4 +245,6 @@ class SessionStore:
             turns=len(turns),
             updated_at=_info.updated_at,
             active=active,
+            pinned=_info.pinned,
+            archived=_info.archived,
         )

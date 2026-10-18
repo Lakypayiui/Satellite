@@ -13,6 +13,7 @@ from satellite.kernel.manifest import is_reserved, sha256_bytes
 from satellite.retrieval.base import Hit
 from satellite.retrieval.index import DEFAULT_MIN_SCORE, SkillIndex
 from satellite.skills.models import SkillManifest, SkillStats, SkillStatus
+from satellite.tool_manifest import is_tool_id
 
 MANIFEST_NAME = "manifest.json"
 QUARANTINE_DIR = "_quarantine"
@@ -115,6 +116,8 @@ class SkillRegistry:
         """Registra (o reemplaza) una skill escribiendo manifest + script."""
         if is_reserved(manifest.id):
             raise ToolError(f"id reservado por el kernel: '{manifest.id}'")
+        if is_tool_id(manifest.id):
+            raise ToolError(f"id reservado por el manifiesto de tools: '{manifest.id}'")
         if not isinstance(script, str) or not script.strip():
             raise ToolError(f"script vacío para '{manifest.id}' (una skill necesita código)")
         script_bytes = script.encode("utf-8")

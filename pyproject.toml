@@ -18,7 +18,32 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+# La app de escritorio y el Safe Proxy embebido (satellite/safe_proxy) corren sobre
+# FastAPI + uvicorn. httpx (cliente del upstream y del control local) ya es dependencia
+# base; el servicio embebido NO necesita PyYAML (su config es JSON).
 desktop = ["fastapi>=0.110", "uvicorn>=0.27"]
+# Backend UIA de sólo lectura para Windows (control de escritorio). Dependencia
+# OPCIONAL con import perezoso: nunca se instala en la base. Rango estable:
+# 0.6.9 es el último estable; 1.0.0b1 es beta (excluida por <1.0 y por no admitir
+# prereleases). Sólo se resuelve en Windows.
+desktop-control = [
+    "pywinauto>=0.6.9,<1.0; platform_system == 'Windows'",
+]
+# macOS AX (pyobjc): ApplicationServices para AXUIElement* y Quartz para CGWindowList*.
+# Sólo se resuelve en Darwin; el proceso necesita permiso de Accesibilidad.
+desktop-control-macos = [
+    "pyobjc-framework-ApplicationServices>=10.0; platform_system == 'Darwin'",
+    "pyobjc-framework-Quartz>=10.0; platform_system == 'Darwin'",
+]
+# Linux AT-SPI: PyGObject + typelib «Atspi 2.0». Además hace falta el paquete del
+# sistema gir1.2-atspi-2.0 y el bus de accesibilidad del escritorio activo.
+desktop-control-linux = [
+    "PyGObject>=3.42; platform_system == 'Linux'",
+]
+
+[tool.setuptools.package-data]
+# El servicio vendorizado viaja con su config de referencia, su README y su aviso.
+"satellite.safe_proxy" = ["*.md", "*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

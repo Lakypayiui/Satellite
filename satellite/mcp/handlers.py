@@ -31,7 +31,10 @@ class RuntimeBundle:
         """Build or retrieve the runtime for a project root."""
         root = str(Path(project_root or _DEFAULT_ROOT or Path.cwd()).resolve())
         if root not in self._runtimes:
-            orchestrator, bus, store, registry = build_runtime(Path(root))
+            # Gate explícito: MCP NO registra tools de control de escritorio.
+            orchestrator, bus, store, registry = build_runtime(
+                Path(root), allow_desktop=False
+            )
             self._runtimes[root] = {
                 "orchestrator": orchestrator,
                 "bus": bus,

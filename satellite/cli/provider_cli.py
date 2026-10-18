@@ -149,11 +149,11 @@ def _pick_family(name: str) -> str:
         say(f"  familia no válida: usa {', '.join(catalog.FAMILIES)}")
 
 
-def _pick_model(base_url: str, family: str, api_key: str) -> str:
+def _pick_model(base_url: str, family: str, api_key: str, provider: str = "") -> str:
     """Lista los modelos del proveedor y deja elegir; fallo ruidoso si no puede."""
     if not base_url:
         return _prompt("Modelo (id exacto)")
-    result = fetch_models(base_url, family, api_key or None)
+    result = fetch_models(base_url, family, api_key or None, provider=provider)
     if not result.ok:
         say(f"\n  ✗ no pude listar modelos en {result.url}")
         say(f"    {result.error}")
@@ -251,7 +251,7 @@ def _run_one(project: Path, entry: catalog.CatalogEntry | None) -> pconfig.Saved
     else:
         api_key, api_key_env = _ask_key(key_for_env)
 
-    model = _pick_model(base_url, family, api_key)
+    model = _pick_model(base_url, family, api_key, entry.key if entry is not None else "")
     if not model:
         raise typer.BadParameter("hace falta un modelo")
     return _save(
@@ -335,7 +335,7 @@ def models_cmd(
     if not base_url:
         raise typer.BadParameter("hace falta --app o --base-url")
     key = api_key or pconfig.api_key_for_base_url(root, base_url) or None
-    result = fetch_models(base_url, provider, key)
+    result = fetch_models(base_url, provider, key, provider=entry.key if entry is not None else "")
     if not result.ok:
         say(f"✗ {result.url}: {result.error}")
         raise typer.Exit(code=1)

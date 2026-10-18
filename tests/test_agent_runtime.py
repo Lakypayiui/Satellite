@@ -292,10 +292,34 @@ def test_a_schema_without_required_is_still_enforced(tmp_path: Path) -> None:
     )
     agent, _ = make_agent(spec, [], tmp_path)
 
-    ok, mensaje = agent._validate_schema({"title": "inventado"})
-    assert ok is False and "title" in mensaje
+    ok, mensaje, descartadas = agent._validate_schema({"title": "inventado"})
+    assert ok is False and "title" in mensaje and descartadas == ["title"]
 
-    ok, salida = agent._validate_schema({"summary": "explicación"})
-    assert ok is True and salida["summary"] == "explicación"
+    ok, salida, descartadas = agent._validate_schema({"summary": "explicación"})
+    assert ok is True and salida["summary"] == "explicación" and descartadas == []
 
     assert agent._validate_schema({})[0] is False  # vacío no vale
+
+
+def test_output_schema_extra_keys_are_dropped_not_fatal(tmp_path: Path) -> None:
+    """Claves de más junto a las correctas ya no tumban el nodo entero.
+
+    Regresión de `code_explainer`: el modelo devolvía `title` sobre un esquema que
+    sólo declaraba `summary`, y el nodo fallaba con «Additional properties are not
+    allowed» perdiendo también la explicación válida.
+    """
+    spec = make_spec(
+        output_schema={
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        }
+    )
+    script = [{"content": "{\"summary\": \"explicación\", \"title\": \"de más\"}"}]
+    agent, _ = make_agent(spec, script, tmp_path)
+
+    result = run(agent.execute({"node_id": "n1"}, make_ctx(tmp_path)))
+
+    assert result.status is AgentStatus.OK
+    assert result.output == {"summary": "explicación"}
+    assert any("title" in hallazgo.message for hallazgo in result.findings)

@@ -91,6 +91,77 @@ def test_a_corrupt_session_does_not_explode(tmp_path: Path) -> None:
     assert turns == []
 
 
+def test_pin_is_persisted_and_does_not_change_the_active(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    first = store.create("primera")
+    second = store.create("segunda")  # queda activa
+
+    assert store.set_pinned(first, True) is True
+
+    info, _turns = store.read(first)
+    assert info.pinned is True
+    assert store.active_id() == second  # fijar no cambia la activa
+
+
+def test_archive_persists_and_keeps_the_turns(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    session_id = store.create("con historia")
+    store.save(
+        session_id, [{"role": "user", "content": "hola"}], name="con historia"
+    )
+
+    assert store.set_archived(session_id, True) is True
+
+    info, turns = store.read(session_id)
+    assert info.archived is True
+    assert len(turns) == 1  # archivar no borra turnos
+
+
+def test_old_sessions_read_as_not_pinned_nor_archived(tmp_path: Path) -> None:
+    """Compatibilidad: un fichero sin los campos nuevos se lee como False."""
+    store = SessionStore(tmp_path)
+    path = store.session_path("vieja")
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({"id": "vieja", "name": "vieja", "turns": []}), encoding="utf-8"
+    )
+
+    info, _turns = store.read("vieja")
+
+    assert info.pinned is False and info.archived is False
+
+
+def test_next_active_after_archive_prefers_pinned(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    a = store.create("a")
+    b = store.create("b")
+    c = store.create("c")  # activa
+    _set_updated(store, a, "2020-01-01T00:00:00+00:00")  # a es la más antigua
+    _set_updated(store, b, "2021-01-01T00:00:00+00:00")
+
+    store.set_pinned(a, True)
+    assert store.next_active_after_archive(c) == a  # la fijada gana a la recencia
+
+    store.set_pinned(a, False)
+    assert store.next_active_after_archive(c) == b  # sin fijadas, la más reciente
+
+
+def test_next_active_is_none_when_nothing_is_left(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    only = store.create("sola")
+    store.set_archived(only, True)
+
+    assert store.next_active_after_archive(only) is None
+
+
+def _set_updated(store: SessionStore, session_id: str, when: str) -> None:
+    """Fija ``updated_at`` a mano para que la recencia sea determinista en la prueba."""
+    path = store.session_path(session_id)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["updated_at"] = when
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
 # --- el chat ---
 
 
@@ -193,5 +264,86 @@ def test_the_session_commands_create_list_and_resume(tmp_path, monkeypatch) -> N
             assert "uso: /session name" in salida
             assert "uso: /session <new" in salida
             assert "sessions=1" in salida
+
+    asyncio.run(scenario())
+
+
+def test_the_tui_pins_and_archives_a_session(tmp_path, monkeypatch) -> None:
+    """La TUI expone fijar/desfijar y archivar/desarchivar, con el listado refrescado."""
+
+    async def scenario():
+        import json as _json
+
+        from satellite.orchestration.sessions import SessionStore
+        from satellite.tui.app import SatelliteTUI
+        from satellite.tui.session import Session
+
+        home = tmp_path / "home"
+        monkeypatch.setenv("SATELLITE_HOME", str(home))
+        monkeypatch.delenv("SATELLITE_SKILLS_DIR", raising=False)
+        cfg = tmp_path / ".satellite" / "config"
+        cfg.mkdir(parents=True, exist_ok=True)
+        (cfg / "config.json").write_text(
+            _json.dumps({"name": "fake", "model": "m"}), encoding="utf-8"
+        )
+        app = SatelliteTUI(Session(tmp_path, home=home))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._cmd_session("new pruebas")
+            app._cmd_session("pin pruebas")
+            app._cmd_session("unpin pruebas")
+            app._cmd_session("archive pruebas")
+            app._cmd_session("unarchive pruebas")
+            app._cmd_session("pin no-existe")
+            await pilot.pause()
+            salida = "\n".join(app.transcript)
+            assert "sesión fijada:" in salida
+            assert "sesión desfijada:" in salida
+            assert "sesión archivada:" in salida
+            assert "sesión desarchivada:" in salida
+            assert "no existe esa sesión" in salida
+
+        store = SessionStore(tmp_path)
+        por_nombre = {info.name: info for info in store.list()}
+        info = por_nombre["pruebas"]
+        assert info.pinned is False and info.archived is False  # el ciclo dejó el estado base
+        assert info.turns == 0  # archivar/desarchivar no borró ni creó turnos
+
+    asyncio.run(scenario())
+
+
+def test_the_tui_moves_the_active_when_archiving_it(tmp_path, monkeypatch) -> None:
+    """Archivar la activa desde la TUI pasa a otra sin archivar (la fijada), como la app."""
+
+    async def scenario():
+        import json as _json
+
+        from satellite.orchestration.sessions import SessionStore
+        from satellite.tui.app import SatelliteTUI
+        from satellite.tui.session import Session
+
+        home = tmp_path / "home"
+        monkeypatch.setenv("SATELLITE_HOME", str(home))
+        monkeypatch.delenv("SATELLITE_SKILLS_DIR", raising=False)
+        cfg = tmp_path / ".satellite" / "config"
+        cfg.mkdir(parents=True, exist_ok=True)
+        (cfg / "config.json").write_text(
+            _json.dumps({"name": "fake", "model": "m"}), encoding="utf-8"
+        )
+
+        store = SessionStore(tmp_path)
+        a = store.create("a")
+        b = store.create("b")  # activa
+        store.set_pinned(a, True)
+
+        app = SatelliteTUI(Session(tmp_path, home=home))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._cmd_session(f"archive {b}")
+            await pilot.pause()
+
+        fresca = SessionStore(tmp_path)
+        assert fresca.active_id() == a  # la activa pasó a la fijada
+        assert fresca.read(b)[0].archived is True
 
     asyncio.run(scenario())

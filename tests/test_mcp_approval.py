@@ -192,3 +192,24 @@ def test_request_elicitation_times_out_without_hanging() -> None:
     assert server.request_elicitation("m", {"type": "object"}, timeout_s=0.2) == {
         "action": "timeout"
     }
+
+
+def test_desktop_control_kind_is_never_elicited() -> None:
+    port = McpApproval()
+    decision = run(
+        port.request({}, make_ctx(kind="desktop_control", summary="controlar escritorio"))
+    )
+    assert decision.status is ApprovalStatus.REJECTED
+
+
+def test_desktop_control_never_reaches_the_client() -> None:
+    calls: list = []
+
+    def channel(message, schema, timeout):
+        calls.append(message)
+        return {"action": "accept", "content": {"approve": True}}
+
+    port = McpApproval(channel)
+    decision = run(port.request({}, make_ctx(kind="desktop_control")))
+    assert decision.status is ApprovalStatus.REJECTED
+    assert calls == []

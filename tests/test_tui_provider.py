@@ -5,12 +5,12 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from textual.widgets import Input, OptionList
+from textual.widgets import Button, Input, OptionList
 
 from satellite.config import catalog
 from satellite.config.models import ModelsResult
 from satellite.tui.app import SatelliteTUI
-from satellite.tui.provider_screen import ProviderScreen
+from satellite.tui.provider_screen import ApiKeyScreen, ProviderScreen
 from satellite.tui.session import Session
 
 
@@ -158,6 +158,83 @@ def test_provider_save_writes_config_and_closes(tmp_path, monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+def test_provider_enter_saves_and_activates(tmp_path, monkeypatch) -> None:
+    """Enter en el campo del modelo guarda y deja activo el proveedor."""
+
+    async def scenario():
+        app = make_app(tmp_path, monkeypatch)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await open_provider(app, pilot)
+            screen._pick_app(option("groq"))
+            screen.query_one("#provider-key", Input).value = "gsk-9"
+            screen.query_one("#provider-model", Input).value = "llama-3"
+            screen.query_one("#provider-model", Input).focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.pause()
+
+            assert not isinstance(app.screen, ProviderScreen)
+            data = read_config(tmp_path)
+            assert data["providers"][0]["model"] == "llama-3"
+            assert data["model"] == "llama-3"
+
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    asyncio.run(scenario())
+
+
+def test_provider_asks_the_key_with_a_minimal_step(tmp_path, monkeypatch) -> None:
+    """Sin clave, guardar pide sólo la API key en un paso mínimo y luego activa."""
+
+    async def scenario():
+        app = make_app(tmp_path, monkeypatch)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await open_provider(app, pilot)
+            screen._pick_app(option("groq"))
+            screen._show_models(ModelsResult(ok=True, models=("llama-3",), url="u"))
+            screen.query_one("#provider-model", Input).value = "llama-3"
+
+            screen._save()
+            await pilot.pause()
+            assert isinstance(app.screen, ApiKeyScreen)
+            app.screen.query_one("#apikey-input", Input).value = "gsk-2"
+            app.screen.query_one("#apikey-save", Button).press()
+            await pilot.pause()
+            await pilot.pause()
+
+            assert read_config(tmp_path)["providers"][0]["api_key"] == "gsk-2"
+            assert not isinstance(app.screen, ProviderScreen)
+
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    asyncio.run(scenario())
+
+
+def test_provider_uses_the_environment_variable_when_it_exists(tmp_path, monkeypatch) -> None:
+    """Si la variable de entorno convencional ya tiene valor, no se pide la clave."""
+
+    async def scenario():
+        app = make_app(tmp_path, monkeypatch)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await open_provider(app, pilot)
+            screen._pick_app(option("groq"))
+            screen._show_models(ModelsResult(ok=True, models=("llama-3",), url="u"))
+            screen.query_one("#provider-model", Input).value = "llama-3"
+
+            screen._save()
+            await pilot.pause()
+            await pilot.pause()
+
+            assert not isinstance(app.screen, ApiKeyScreen)
+            data = read_config(tmp_path)
+            assert data["providers"][0]["api_key_env"] == "GROQ_API_KEY"
+            assert not isinstance(app.screen, ProviderScreen)
+
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-del-entorno")
+    asyncio.run(scenario())
+
+
 def test_provider_save_requires_model(tmp_path, monkeypatch) -> None:
     async def scenario():
         app = make_app(tmp_path, monkeypatch)
@@ -177,7 +254,7 @@ def test_provider_load_models_runs_in_worker(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         Session,
         "load_models",
-        lambda self, url, family, api_key="": ModelsResult(
+        lambda self, url, family="", api_key="", provider="", account_id="": ModelsResult(
             ok=True, models=("m1", "m2"), url=url
         ),
     )
@@ -195,6 +272,34 @@ def test_provider_load_models_runs_in_worker(tmp_path, monkeypatch) -> None:
                 if options.option_count:
                     break
             assert options.option_count == 2
+
+    asyncio.run(scenario())
+
+
+def test_model_alias_opens_the_selector(tmp_path, monkeypatch) -> None:
+    async def scenario():
+        app = make_app(tmp_path, monkeypatch)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await open_provider(app, pilot)
+            screen.action_cancel()
+            await pilot.pause()
+            assert not isinstance(app.screen, ProviderScreen)
+
+            await press(app.query_one("#prompt", Input), pilot, "/model")
+            assert isinstance(app.screen, ProviderScreen)
+
+    asyncio.run(scenario())
+
+
+def test_ctrl_p_opens_the_selector(tmp_path, monkeypatch) -> None:
+    async def scenario():
+        app = make_app(tmp_path, monkeypatch)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("ctrl+p")
+            await pilot.pause()
+            assert isinstance(app.screen, ProviderScreen)
 
     asyncio.run(scenario())
 

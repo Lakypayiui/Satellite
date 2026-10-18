@@ -11,7 +11,26 @@
     "build:electron": "tsc -p tsconfig.node.json",
     "build": "npm run typecheck && npm run build:renderer && npm run build:electron",
     "start": "npm run build && electron .",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "icons": "electron scripts/icons.mjs"
+  },
+  "build": {
+    "appId": "ai.satellite.desktop",
+    "productName": "Satellite",
+    "files": ["dist/**", "dist-electron/**", "package.json"],
+    "mac": {
+      "icon": "build/icon.icns",
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": ["nsis"]
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "Development",
+      "target": ["AppImage"]
+    }
   },
   "dependencies": {
     "react": "^19.0.0",

@@ -16,9 +16,21 @@ from satellite.persistence.store import FileStore
 app = typer.Typer(help="Satellite 2.0 — microagent framework CLI.")
 skills_app = typer.Typer(help="Gestión de skills globales.")
 tools_app = typer.Typer(help="Herramientas (primitivas) del runtime.")
+session_app = typer.Typer(
+    help="Conversaciones guardadas: listar, crear, reanudar, fijar y archivar."
+)
+git_app = typer.Typer(help="Estado de git y worktrees (lectura + ciclo de worktrees).")
+git_worktree_app = typer.Typer(help="Worktrees del repo.")
+comments_app = typer.Typer(help="Comentarios inline persistidos (revisión de cambios).")
+queue_app = typer.Typer(help="Cola de instrucciones persistida (el siguiente prompt).")
 app.add_typer(skills_app, name="skills")
 app.add_typer(tools_app, name="tools")
 app.add_typer(provider_app, name="provider")
+app.add_typer(session_app, name="session")
+app.add_typer(git_app, name="git")
+app.add_typer(comments_app, name="comments")
+app.add_typer(queue_app, name="queue")
+git_app.add_typer(git_worktree_app, name="worktree")
 
 
 @app.callback()
@@ -63,7 +75,7 @@ def run(
     yes: bool = typer.Option(False, "--yes", help="Auto-aprobar propuestas (sin preguntar)."),
 ) -> None:
     """Run the orchestrator for a goal and print the summary."""
-    orchestrator, _bus, _store, _ = build_runtime(project)
+    orchestrator, _bus, _store, _ = build_runtime(project, allow_desktop=True)
     from satellite.approval.base import AutoApprovalPort
     from satellite.approval.cli import CliApproval
     from satellite.core.task import Task
@@ -98,7 +110,7 @@ def plan(
 
     from satellite.orchestration.chat import ChatSession
 
-    orchestrator, _bus, _store, _registry = build_runtime(project)
+    orchestrator, _bus, _store, _registry = build_runtime(project, allow_desktop=True)
     chat = ChatSession(project.resolve(), orchestrator)
     reply = asyncio.run(chat.send(goal, plan_mode=True))
     say(reply.text)
@@ -144,16 +156,49 @@ def tui(
 @app.command()
 def agents(
     project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
-    create: str = typer.Option("", "--create", help="Necesidad de capacidad a crear."),
+    create: str = typer.Option(
+        "",
+        "--create",
+        help="Necesidad de capacidad o plantilla (p. ej. desktop_operator).",
+    ),
     yes: bool = typer.Option(False, "--yes", help="Auto-aprobar la creación."),
 ) -> None:
     """List the agent catalog, or create a new agent from a capability need."""
     import asyncio
 
+    from satellite.agents.templates import has_template
     from satellite.approval.base import AutoApprovalPort
     from satellite.approval.cli import CliApproval
 
-    orchestrator, _bus, _store, registry = build_runtime(project)
+    template_id = create.strip().lower() if create else ""
+    if template_id and has_template(template_id):
+        # Plantilla determinista: no necesita LLM; sí validador y aprobación.
+        from satellite.agents.expander import AgentExpander
+        from satellite.approval.policy import ApprovalPolicy
+        from satellite.cli.runtime_builder import build_agent_catalog
+
+        registry, prompts, catalog_store, validator = build_agent_catalog(project)
+        expander = AgentExpander(
+            None,
+            registry,
+            prompts,
+            catalog_store=catalog_store,
+            policy=ApprovalPolicy(),
+            validator=validator,
+        )
+        port = AutoApprovalPort() if yes else CliApproval()
+        outcome = asyncio.run(
+            expander.create_template(template_id, approval_port=port)
+        )
+        detail = (
+            outcome.spec.id
+            if outcome.spec is not None
+            else outcome.reason or outcome.question or outcome.reuse_candidate or ""
+        )
+        say(f"{outcome.kind}: {detail}")
+        return
+
+    orchestrator, _bus, _store, registry = build_runtime(project, allow_desktop=True)
     if create:
         expander = getattr(orchestrator, "expander", None)
         if expander is None:
@@ -406,7 +451,7 @@ def compact(
     orchestrator = None
     if not no_llm:
         try:
-            orchestrator, _bus, _store, _registry = build_runtime(root)
+            orchestrator, _bus, _store, _registry = build_runtime(root, allow_desktop=True)
         except Exception as exc:  # noqa: BLE001
             say(f"! sin proveedor utilizable ({exc}); resumen determinista")
 
@@ -468,7 +513,7 @@ def doctor(
     else:
         say("✓ config: presente")
     try:
-        orchid, _bus, _store, registry = build_runtime(root)
+        orchid, _bus, _store, registry = build_runtime(root, allow_desktop=True)
     except Exception as exc:  # noqa: BLE001
         say(f"✗ runtime: {exc}")
         ok = False
@@ -624,3 +669,567 @@ def context(project: Path = typer.Option(Path.cwd(), "--project", help="Project 
         )
     if usage.percent >= threshold:
         say("  se compactará al enviar el próximo mensaje ('/compact' en la TUI)")
+
+
+@app.command()
+def commands(
+    json_out: bool = typer.Option(False, "--json", help="Salida JSON del catálogo."),
+    gaps: bool = typer.Option(False, "--gaps", help="Sólo los huecos de paridad."),
+) -> None:
+    """List the shared command/action catalog (one definition for TUI, CLI and app)."""
+    import json as _json
+
+    from satellite import commands as catalogo
+
+    if json_out:
+        say(
+            _json.dumps(
+                [spec.to_dict() for spec in catalogo.CATALOG], ensure_ascii=False, indent=2
+            )
+        )
+        return
+    if gaps:
+        # No es una prueba: es el informe que pide el criterio (ver huecos sin taparlos con botones).
+        informe = catalogo.parity()
+        say(
+            f"catálogo: {informe['commands']} comandos · "
+            f"por superficie {informe['per_surface']}"
+        )
+        for surface, faltan in informe["gaps"].items():
+            say(f"  {surface}: {len(faltan)} sin cubrir — {', '.join(faltan) or '(ninguno)'}")
+        return
+    for spec in catalogo.CATALOG:
+        marcas = ",".join(spec.surfaces)
+        say(f"  {spec.id:<16} [{marcas}]  {spec.summary}")
+
+
+# ---------------------------------------------------------------- sesiones
+
+
+def _session_store(project: Path):
+    """Almacén de conversaciones del proyecto (misma operación que la TUI y la app)."""
+    from satellite.orchestration.sessions import SessionStore
+
+    return SessionStore(project.resolve())
+
+
+def _session_marks(info) -> str:
+    marks = []
+    if info.active:
+        marks.append("● activa")
+    if info.pinned:
+        marks.append("★ fijada")
+    if info.archived:
+        marks.append("archivada")
+    return f"  [{', '.join(marks)}]" if marks else ""
+
+
+def _require_session(store, target: str) -> str:
+    session_id = store.find(target)
+    if session_id is None:
+        say(f"no existe esa sesión: {target}")
+        raise typer.Exit(code=1)
+    return session_id
+
+
+@session_app.command("list")
+def session_list(
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Lista las conversaciones guardadas (marca la activa, la fijada y la archivada)."""
+    infos = _session_store(project).list()
+    if not infos:
+        say("(sin conversaciones guardadas)")
+        return
+    for info in infos:
+        say(f"{info.id}  {info.name}  ({info.turns} turnos){_session_marks(info)}")
+
+
+@session_app.command("new")
+def session_new(
+    name: str = typer.Argument("", help="Nombre de la conversación."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Crea una conversación nueva (vacía) y la deja activa."""
+    session_id = _session_store(project).create(name)
+    say(f"sesión nueva: {session_id}")
+
+
+@session_app.command("use")
+def session_use(
+    target: str = typer.Argument(..., help="Id o nombre de la conversación."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Reanuda una conversación (la deja activa)."""
+    session_id = _session_store(project).switch(target)
+    if session_id is None:
+        say(f"no existe esa sesión: {target}")
+        raise typer.Exit(code=1)
+    say(f"sesión activa: {session_id}")
+
+
+@session_app.command("name")
+def session_name(
+    name: str = typer.Argument(..., help="Nombre nuevo de la conversación activa."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Renombra la conversación activa (conserva sus turnos)."""
+    store = _session_store(project)
+    if not name.strip():
+        say("el nombre no puede estar vacío")
+        raise typer.Exit(code=1)
+    store.rename(store.active_id(), name.strip())
+    say(f"sesión renombrada: {name.strip()}")
+
+
+def _set_session_flag(
+    target: str,
+    project: Path,
+    *,
+    message: str,
+    pinned: bool | None = None,
+    archived: bool | None = None,
+) -> None:
+    """Fija/archiva una conversación; al archivar la activa se pasa a otra sin archivar."""
+    store = _session_store(project)
+    session_id = _require_session(store, target)
+    if pinned is not None:
+        store.set_pinned(session_id, pinned)
+    if archived is not None:
+        store.set_archived(session_id, archived)
+        if archived and store.active_id() == session_id:
+            destino = store.next_active_after_archive(session_id)
+            if destino is None:
+                say("no queda ninguna conversación sin archivar: sin conversación activa")
+            else:
+                store.set_active(destino)
+                say(f"activa ahora: {destino}")
+    say(f"{message}: {session_id}")
+
+
+@session_app.command("pin")
+def session_pin(
+    target: str = typer.Argument(..., help="Id o nombre de la conversación."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Fija una conversación (no cambia cuál está activa)."""
+    _set_session_flag(target, project, pinned=True, message="sesión fijada")
+
+
+@session_app.command("unpin")
+def session_unpin(
+    target: str = typer.Argument(..., help="Id o nombre de la conversación."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Deja de fijar una conversación."""
+    _set_session_flag(target, project, pinned=False, message="sesión desfijada")
+
+
+@session_app.command("archive")
+def session_archive(
+    target: str = typer.Argument(..., help="Id o nombre de la conversación."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Archiva una conversación (conserva turnos; si era la activa, pasa a otra)."""
+    _set_session_flag(target, project, archived=True, message="sesión archivada")
+
+
+@session_app.command("unarchive")
+def session_unarchive(
+    target: str = typer.Argument(..., help="Id o nombre de la conversación."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Desarchiva una conversación."""
+    _set_session_flag(target, project, archived=False, message="sesión desarchivada")
+
+
+# ---------------------------------------------------------------- git
+
+
+@git_app.command("status")
+def git_status(
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Muestra el estado real del repo (en el worktree activo, si lo hay)."""
+    from satellite import gitops
+
+    root = project.resolve()
+    objetivo = gitops.active_workdir(root) or root
+    try:
+        data = gitops.status(objetivo)
+    except gitops.GitError as exc:
+        say(str(exc))
+        raise typer.Exit(code=1) from exc
+    if objetivo != root:
+        say(f"workdir: {objetivo}")
+    say(f"rama: {data['branch']}" + (" (detached)" if data["detached"] else ""))
+    if data["upstream"]:
+        say(f"upstream: {data['upstream']} ↑{data['ahead']} ↓{data['behind']}")
+    if data["clean"]:
+        say("sin cambios")
+        return
+    for grupo, titulo in (
+        ("conflicts", "conflicto"),
+        ("staged", "staged"),
+        ("unstaged", "sin preparar"),
+        ("untracked", "sin seguimiento"),
+    ):
+        for entry in data[grupo]:
+            say(f"  [{titulo}] {entry['code']} {entry['path']}")
+
+
+@git_worktree_app.command("list")
+def git_worktree_list(
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Lista los worktrees y marca el activo como contexto de ejecución."""
+    from satellite import gitops
+
+    root = project.resolve()
+    if not gitops.is_repo(root):
+        say("no es un repositorio git")
+        raise typer.Exit(code=1)
+    activo = gitops.active_workdir(root)
+    for wt in gitops.list_worktrees(root):
+        marcas = []
+        if wt.get("main"):
+            marcas.append("principal")
+        if activo and str(activo) == wt["path"]:
+            marcas.append("activo")
+        sufijo = f"  [{', '.join(marcas)}]" if marcas else ""
+        say(f"{wt['branch'] or '(detached)'}{sufijo}")
+        say(f"    {wt['path']}")
+
+
+@git_worktree_app.command("add")
+def git_worktree_add(
+    name: str = typer.Argument(..., help="Nombre gestionado del worktree."),
+    branch: str = typer.Option("", "--branch", help="Rama a crear (por defecto wt/<nombre>)."),
+    base_ref: str = typer.Option("", "--from", help="Ref base (por defecto HEAD)."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Crea un worktree gestionado con una rama nueva."""
+    from satellite import gitops
+
+    try:
+        creado = gitops.add_worktree(project.resolve(), name, branch=branch, base_ref=base_ref)
+    except gitops.GitError as exc:
+        say(str(exc))
+        raise typer.Exit(code=1) from exc
+    say(f"worktree creado: {creado['path']} (rama {creado['branch']})")
+
+
+@git_worktree_app.command("use")
+def git_worktree_use(
+    path: str = typer.Argument(..., help="Ruta del worktree, o 'proyecto' para volver."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Deja un worktree como contexto de ejecución (o vuelve al proyecto)."""
+    from satellite import gitops
+
+    root = project.resolve()
+    objetivo = "" if path.strip().lower() in ("proyecto", "project") else path
+    try:
+        efectivo = gitops.set_active_workdir(root, objetivo or None)
+    except gitops.GitError as exc:
+        say(str(exc))
+        raise typer.Exit(code=1) from exc
+    say(f"ejecutando en: {efectivo or root}")
+
+
+@git_worktree_app.command("remove")
+def git_worktree_remove(
+    path: str = typer.Argument(..., help="Ruta del worktree gestionado."),
+    force: bool = typer.Option(False, "--force", help="Descarta cambios sin confirmar."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Quita un worktree gestionado (rechaza cambios sin confirmar salvo --force)."""
+    from satellite import gitops
+
+    try:
+        quitado = gitops.remove_worktree(project.resolve(), path, force=force)
+    except gitops.GitError as exc:
+        say(str(exc))
+        raise typer.Exit(code=1) from exc
+    say(f"worktree quitado: {quitado.get('removed', path)}")
+
+
+# ---------------------------------------------------------------- comentarios
+
+
+def _parse_line_range(raw: str) -> tuple[int, int]:
+    """``3`` o ``3-5`` → ``(inicio, fin)``; falla en claro si no es válido."""
+    texto = (raw or "").strip()
+    if not texto:
+        raise ValueError("falta el rango de líneas (p. ej. 3 o 3-5)")
+    partes = texto.split("-", 1)
+    try:
+        inicio = int(partes[0])
+        fin = int(partes[1]) if len(partes) > 1 and partes[1] else inicio
+    except ValueError as exc:
+        raise ValueError("rango inválido: usa <inicio> o <inicio>-<fin>") from exc
+    if inicio < 1 or fin < 1 or fin < inicio:
+        raise ValueError("rango inválido: empieza en 1 y el fin no puede ser menor")
+    return inicio, fin
+
+
+def _active_session_id(root: Path) -> str:
+    """Sesión activa del proyecto (para vincular el comentario), sin armar runtime."""
+    from satellite.orchestration.sessions import SessionStore
+
+    return SessionStore(root).active_id()
+
+
+@comments_app.command("list")
+def comments_list(
+    file: str = typer.Option("", "--file", help="Filtrar por archivo."),
+    task_id: str = typer.Option("", "--task", help="Filtrar por tarea."),
+    session_id: str = typer.Option("", "--session", help="Filtrar por sesión."),
+    open_only: bool = typer.Option(False, "--open", help="Sólo los no resueltos."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Lista los comentarios inline persistidos."""
+    from satellite import comments as comments_store
+
+    items = comments_store.list_comments(
+        project.resolve(),
+        file=file or None,
+        task_id=task_id or None,
+        session_id=session_id or None,
+        include_resolved=not open_only,
+    )
+    if not items:
+        say("(sin comentarios)")
+        return
+    for item in items:
+        estado = "resuelto" if item["resolved"] else "abierto"
+        rango = (
+            f"{item['line_start']}-{item['line_end']}"
+            if item["line_end"] != item["line_start"]
+            else str(item["line_start"])
+        )
+        say(f"{item['id']}  {item['file']}:{rango}  [{estado}] [{item['side']}]  {item['text']}")
+
+
+@comments_app.command("add")
+def comments_add(
+    file: str = typer.Argument(..., help="Archivo relativo al proyecto."),
+    lines: str = typer.Argument(..., help="Línea o rango: 3 o 3-5."),
+    text: str = typer.Argument(..., help="Texto del comentario (entre comillas si lleva espacios)."),
+    side: str = typer.Option("new", "--side", help="new | old."),
+    task_id: str = typer.Option("", "--task", help="Tarea vinculada (opcional)."),
+    session_id: str = typer.Option("", "--session", help="Sesión (por defecto la activa)."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Crea un comentario inline con archivo, lado y rango de líneas explícitos."""
+    from satellite import comments as comments_store
+
+    root = project.resolve()
+    try:
+        inicio, fin = _parse_line_range(lines)
+        item = comments_store.add_comment(
+            root,
+            file=file,
+            line_start=inicio,
+            line_end=fin,
+            text=text,
+            side=side,
+            task_id=task_id,
+            session_id=session_id or _active_session_id(root),
+        )
+    except ValueError as exc:
+        say(str(exc))
+        raise typer.Exit(code=1) from exc
+    say(f"comentario {item['id']}: {item['file']}:{item['line_start']}-{item['line_end']}")
+
+
+def _set_comment_resolved(comment_id: str, resolved: bool, project: Path) -> None:
+    from satellite import comments as comments_store
+
+    try:
+        comments_store.update_comment(project.resolve(), comment_id, resolved=resolved)
+    except KeyError as exc:
+        say(f"no existe el comentario {comment_id}")
+        raise typer.Exit(code=1) from exc
+    except ValueError as exc:
+        say(str(exc))
+        raise typer.Exit(code=1) from exc
+    say(f"comentario {comment_id}: {'resuelto' if resolved else 'reabierto'}")
+
+
+@comments_app.command("resolve")
+def comments_resolve(
+    comment_id: str = typer.Argument(..., help="Id del comentario."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Marca un comentario como resuelto."""
+    _set_comment_resolved(comment_id, True, project)
+
+
+@comments_app.command("reopen")
+def comments_reopen(
+    comment_id: str = typer.Argument(..., help="Id del comentario."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Reabre un comentario resuelto."""
+    _set_comment_resolved(comment_id, False, project)
+
+
+@comments_app.command("delete")
+def comments_delete(
+    comment_id: str = typer.Argument(..., help="Id del comentario."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Borra un comentario persistido."""
+    from satellite import comments as comments_store
+
+    if not comments_store.delete_comment(project.resolve(), comment_id):
+        say(f"no existe el comentario {comment_id}")
+        raise typer.Exit(code=1)
+    say(f"comentario {comment_id} borrado")
+
+
+# ---------------------------------------------------------------- cola
+
+
+@queue_app.command("list")
+def queue_list(
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Lista la cola de instrucciones (la primera es la siguiente)."""
+    from satellite import prompt_queue
+
+    items = prompt_queue.list_items(project.resolve())
+    if not items:
+        say("(cola vacía)")
+        return
+    for index, item in enumerate(items, 1):
+        marca = " [plan]" if item["plan_mode"] else ""
+        say(f"{index}. {item['id']}  {item['text']}{marca}")
+
+
+@queue_app.command("add")
+def queue_add(
+    text: str = typer.Argument(..., help="Instrucción a encolar (entre comillas si lleva espacios)."),
+    plan: bool = typer.Option(False, "--plan", help="Ejecutarla en modo plan."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Encola una instrucción para el turno siguiente (no interrumpe el actual)."""
+    from satellite import prompt_queue
+
+    try:
+        prompt_queue.enqueue(project.resolve(), text, plan_mode=plan)
+    except ValueError as exc:
+        say(str(exc))
+        raise typer.Exit(code=1) from exc
+    say(f"encolado: {text}")
+
+
+@queue_app.command("edit")
+def queue_edit(
+    item_id: str = typer.Argument(..., help="Id del item en cola."),
+    text: str = typer.Argument(..., help="Nuevo texto (entre comillas si lleva espacios)."),
+    plan: bool = typer.Option(False, "--plan", help="Marcar como modo plan."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Edita un item aún no ejecutado (afecta a un turno futuro, no al que corre)."""
+    from satellite import prompt_queue
+
+    try:
+        prompt_queue.update_item(project.resolve(), item_id, text=text, plan_mode=plan or None)
+    except KeyError as exc:
+        say(f"no existe el item {item_id}")
+        raise typer.Exit(code=1) from exc
+    except ValueError as exc:
+        say(str(exc))
+        raise typer.Exit(code=1) from exc
+    say(f"editado: {item_id}")
+
+
+@queue_app.command("remove")
+def queue_remove(
+    item_id: str = typer.Argument(..., help="Id del item en cola."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Quita un item de la cola (no ejecuta nada)."""
+    from satellite import prompt_queue
+
+    try:
+        prompt_queue.remove_item(project.resolve(), item_id)
+    except KeyError as exc:
+        say(f"no existe el item {item_id}")
+        raise typer.Exit(code=1) from exc
+    say(f"quitado: {item_id}")
+
+
+@queue_app.command("clear")
+def queue_clear(
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Vacía la cola por completo."""
+    from satellite import prompt_queue
+
+    prompt_queue.clear(project.resolve())
+    say("cola vacía")
+
+
+@queue_app.command("run")
+def queue_run(
+    yes: bool = typer.Option(False, "--yes", help="Auto-aprobar propuestas (sin preguntar)."),
+    project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
+) -> None:
+    """Ejecuta la cola en orden: un prompt por turno, con el flujo real de envío."""
+    import asyncio
+
+    from satellite import prompt_queue
+
+    root = project.resolve()
+    if not prompt_queue.list_items(root):
+        say("(cola vacía)")
+        return
+
+    from satellite.approval.base import AutoApprovalPort
+    from satellite.approval.cli import CliApproval
+    from satellite.cli.runtime_builder import build_runtime
+    from satellite.orchestration.chat import ChatSession
+
+    try:
+        orchestrator, _bus, _store, _registry = build_runtime(root, allow_desktop=True)
+    except Exception as exc:  # noqa: BLE001 — sin proveedor no hay turno
+        say(f"no se pudo arrancar el runtime: {exc}")
+        raise typer.Exit(code=1) from exc
+    approval = AutoApprovalPort() if yes else CliApproval()
+    chat = ChatSession(root, orchestrator)
+    chat.load()
+
+    async def drenar() -> None:
+        while True:
+            item = prompt_queue.pop_next(root)
+            if item is None:
+                break
+            say(f"› {item['text']}")
+            try:
+                reply = await chat.send(
+                    item["text"],
+                    approval=approval,
+                    plan_mode=bool(item.get("plan_mode")),
+                )
+            except Exception as exc:  # noqa: BLE001 — se dice y se sigue con el siguiente
+                say(f"  error: {exc}")
+                continue
+            say(f"  {reply.status}: {reply.text}")
+            if reply.error:
+                say(f"  error: {reply.error}")
+            plan_options = (reply.output or {}).get("plan_options")
+            if isinstance(plan_options, dict):
+                recommendation = plan_options.get("recommendation", "")
+                for index, option in enumerate(plan_options.get("options", []), 1):
+                    if not isinstance(option, dict):
+                        continue
+                    mark = " ★ recomendada" if option.get("id") == recommendation else ""
+                    say(f"    {index}. {option.get('title')}{mark}")
+                    if option.get("summary"):
+                        say(f"       {option.get('summary')}")
+
+    asyncio.run(drenar())
+    say("cola vacía")

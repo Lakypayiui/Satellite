@@ -78,6 +78,8 @@ class ChatReply:
     error: str | None = None
     output: dict = field(default_factory=dict)
     compaction: dict | None = None
+    # Métricas de la ejecución (tokens/duración) para el pie de la respuesta en la TUI.
+    metrics: dict = field(default_factory=dict)
 
 
 class ChatSession:
@@ -406,6 +408,7 @@ class ChatSession:
             error=result.error,
             output=dict(result.output or {}),
             compaction=compaction.to_dict() if compaction else None,
+            metrics=result.metrics.to_dict() if result.metrics else {},
         )
 
     async def choose(self, option, *, approval: ApprovalPort | None = None) -> ChatReply:

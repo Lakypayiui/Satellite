@@ -1,9 +1,19 @@
-/* Sobrio: casi negro, texto hueso, un solo acento, monoespaciado para lo que es dato.
-   Nada de píldoras de colores, nada de cajas dentro de cajas: hairlines y aire. */
+/* Satélite · interfaz de escritorio.
+ *
+ * Sobrio: casi negro (#1c1a19), texto hueso, un solo acento verde y monoespaciado para lo
+ * que es dato. Sin píldoras de colores ni cajas dentro de cajas: hairlines y aire.
+ *
+ * La escala es corta y se usa siempre la misma: espaciado en --s1..--s5 (4/8/12/16/24) y tres
+ * tamaños de letra (dato mono 11.5px, mono 12px, cuerpo 13px, título 14px).
+ */
+
+/* ---------------------------------------------------------------- tokens */
 
 :root {
+  color-scheme: dark;
   --bg: #1c1a19;
   --bg-2: #201e1d;
+  --bg-3: #171514;
   --line: #2c2927;
   --line-soft: #241f1e;
   --text: #f2efec;
@@ -12,9 +22,269 @@
   --accent: #8fbf9f;
   --warn: #c9a227;
   --bad: #c96f6f;
+
+  /* Derivados semánticos: acento/bad/warn en sus variantes de texto y de fondo. Existen para que
+   * ningún tema deje colores codificados que rompan el contraste. */
+  --accent-strong: #b6dcc4;
+  --accent-line: #33473c;
+  --warn-line: #4a3f1c;
+  --warn-bg: #221f19;
+  --bad-line: #472e2e;
+  --bad-strong: #e0a7a7;
+  --bad-bg: #221a1a;
+  --bad-text: #e0c9c9;
+  --anchor-bg: #22303a;
+  /* Texto sobre un fondo --bad (hover de «cerrar», etc.). */
+  --on-bad: #ffffff;
+
+  /* Barra de título propia, overlays, sombras y scrollbar. */
+  --titlebar-bg: #171514;
+  --titlebar-border: #2c2927;
+  --titlebar-text: #c9c3bd;
+  --titlebar-text-strong: #f2efec;
+  --titlebar-hover: #2c2927;
+  --overlay: rgba(10, 9, 9, 0.72);
+  --overlay-soft: rgba(10, 9, 9, 0.55);
+  --shadow: rgba(0, 0, 0, 0.45);
+  --scrollbar-thumb: #3a3532;
+  --scrollbar-track: transparent;
+  --selection-bg: #33473c;
+  /* Tintes de hover/selección: en los temas de color son los mismos fondos de antes; en Deep
+   * Dark (negro puro) pasan a un blanco translúcido para que la fila se note. */
+  --tinte-hover: var(--bg-2);
+  --tinte-elegido: var(--bg);
+
   --mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
   --sans: "Segoe UI", system-ui, -apple-system, sans-serif;
+
+  /* Espaciado: cuatro pasos y medio. Todo lo demás se compone de estos. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+
+  /* Tamaños: el dato en mono pequeño, el texto a 13px, los títulos a 14px. */
+  --fs-dato: 11.5px;
+  --fs-mono: 12px;
+  --fs-cuerpo: 13px;
+  --fs-titulo: 14px;
+
+  --radio: 4px;
+  --ancho-izq: 244px;
+  --ancho-der: 344px;
+  --alto-scroll: 44vh;
 }
+
+/* ---------------------------------------------------------------- temas */
+/* Obsidiana es el tema por defecto: sus valores son los de `:root`. Cada tema redefine la paleta
+ * completa (base, semánticos, barra de título, overlays, scrollbar y selección) para que ninguna
+ * parte quede con colores de otro tema. */
+
+[data-theme="grafito"] {
+  color-scheme: dark;
+  --bg: #202325;
+  --bg-2: #26292c;
+  --bg-3: #1a1d1f;
+  --line: #343a3e;
+  --line-soft: #2b3034;
+  --text: #eef1f3;
+  --text-soft: #c5ccd1;
+  --muted: #8a959c;
+  --accent: #9fb8cc;
+  --warn: #d1a64a;
+  --bad: #d27878;
+  --accent-strong: #c2d6e4;
+  --accent-line: #3b4a55;
+  --warn-line: #52431f;
+  --warn-bg: #2a2519;
+  --bad-line: #503434;
+  --bad-strong: #e7a5a5;
+  --bad-bg: #2a2020;
+  --bad-text: #e5c9c9;
+  --anchor-bg: #2b3842;
+  --titlebar-bg: #1a1d1f;
+  --titlebar-border: #343a3e;
+  --titlebar-text: #c5ccd1;
+  --titlebar-text-strong: #eef1f3;
+  --titlebar-hover: #343a3e;
+  --overlay: rgba(8, 10, 12, 0.75);
+  --overlay-soft: rgba(8, 10, 12, 0.55);
+  --shadow: rgba(0, 0, 0, 0.5);
+  --scrollbar-thumb: #3f474d;
+  --selection-bg: #3b4a55;
+}
+
+[data-theme="medianoche"] {
+  color-scheme: dark;
+  --bg: #0f1724;
+  --bg-2: #141f30;
+  --bg-3: #0b121c;
+  --line: #22314a;
+  --line-soft: #1a263a;
+  --text: #e8eef8;
+  --text-soft: #b9c8de;
+  --muted: #7c8ea8;
+  --accent: #6fa8ff;
+  --warn: #e0b24a;
+  --bad: #e07a7a;
+  --accent-strong: #a8ccff;
+  --accent-line: #2b4a72;
+  --warn-line: #4f3f1c;
+  --warn-bg: #262315;
+  --bad-line: #4e2b2b;
+  --bad-strong: #f0aaaa;
+  --bad-bg: #2a1c22;
+  --bad-text: #f0caca;
+  --anchor-bg: #1c3350;
+  --titlebar-bg: #0b121c;
+  --titlebar-border: #22314a;
+  --titlebar-text: #b9c8de;
+  --titlebar-text-strong: #e8eef8;
+  --titlebar-hover: #1a263a;
+  --overlay: rgba(4, 8, 15, 0.78);
+  --overlay-soft: rgba(4, 8, 15, 0.58);
+  --shadow: rgba(0, 0, 0, 0.55);
+  --scrollbar-thumb: #2c3f5a;
+  --selection-bg: #2b4a72;
+}
+
+[data-theme="bosque"] {
+  color-scheme: dark;
+  --bg: #121b16;
+  --bg-2: #17231c;
+  --bg-3: #0d1511;
+  --line: #26382d;
+  --line-soft: #1d2c23;
+  --text: #e8f2e9;
+  --text-soft: #bdd1c1;
+  --muted: #7f9787;
+  --accent: #9fd39a;
+  --warn: #d6b25a;
+  --bad: #d47f7f;
+  --accent-strong: #c4e8c0;
+  --accent-line: #36543b;
+  --warn-line: #4e431f;
+  --warn-bg: #232414;
+  --bad-line: #4d2e2e;
+  --bad-strong: #e8aaaa;
+  --bad-bg: #231a1a;
+  --bad-text: #e8cccc;
+  --anchor-bg: #243b2c;
+  --titlebar-bg: #0d1511;
+  --titlebar-border: #26382d;
+  --titlebar-text: #bdd1c1;
+  --titlebar-text-strong: #e8f2e9;
+  --titlebar-hover: #1d2c23;
+  --overlay: rgba(5, 10, 7, 0.76);
+  --overlay-soft: rgba(5, 10, 7, 0.56);
+  --shadow: rgba(0, 0, 0, 0.5);
+  --scrollbar-thumb: #345040;
+  --selection-bg: #36543b;
+}
+
+[data-theme="claro"] {
+  color-scheme: light;
+  --bg: #f4eee5;
+  --bg-2: #ece4d8;
+  --bg-3: #fbf7f0;
+  --line: #d5c9b8;
+  --line-soft: #e2d8ca;
+  --text: #2b2621;
+  --text-soft: #4a4239;
+  --muted: #6f6459;
+  --accent: #2f7d5c;
+  --warn: #8a6510;
+  --bad: #a63d3d;
+  --accent-strong: #1f6247;
+  --accent-line: #9fc7b5;
+  --warn-line: #dcc58a;
+  --warn-bg: #f5ecd2;
+  --bad-line: #e0b4b4;
+  --bad-strong: #7d2c2c;
+  --bad-bg: #f6e3e3;
+  --bad-text: #6f2626;
+  --anchor-bg: #dcebe4;
+  --titlebar-bg: #e7ded1;
+  --titlebar-border: #d5c9b8;
+  --titlebar-text: #4a4239;
+  --titlebar-text-strong: #2b2621;
+  --titlebar-hover: #d8cdbd;
+  --overlay: rgba(40, 32, 24, 0.45);
+  --overlay-soft: rgba(40, 32, 24, 0.35);
+  --shadow: rgba(60, 45, 30, 0.25);
+  --scrollbar-thumb: #c4b7a5;
+  --selection-bg: #9fc7b5;
+}
+
+/* Deep Dark: negro puro (#000) en toda la app. Los grises de --line/--line-soft y los tintes
+ * de hover son lo único que separa superficies; el texto es blanco ajustable por `data-intensidad`
+ * (más abajo). Se conservan el acento y los estados semánticos, aclarados para leerse sobre negro. */
+[data-theme="deepdark"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --bg-2: #000000;
+  --bg-3: #000000;
+  --line: #262626;
+  --line-soft: #171717;
+  /* Valores de partida = intensidad media; los bloques de intensidad los refinan. */
+  --text: #ededed;
+  --text-soft: #c7c7c7;
+  --muted: #9a9a9a;
+  --accent: #6fd3ff;
+  --warn: #e6b450;
+  --bad: #ff7a7a;
+  --accent-strong: #a8e4ff;
+  --accent-line: #1d4a5e;
+  --warn-line: #4a3d1a;
+  --warn-bg: #14100a;
+  --bad-line: #4a2020;
+  --bad-strong: #ffb0b0;
+  --bad-bg: #170d0d;
+  --bad-text: #ffcccc;
+  --anchor-bg: #10202a;
+  --on-bad: #000000;
+  --titlebar-bg: #000000;
+  --titlebar-border: #262626;
+  /* La titlebar sigue la intensidad del texto. */
+  --titlebar-text: var(--text-soft);
+  --titlebar-text-strong: var(--text);
+  --titlebar-hover: rgba(255, 255, 255, 0.1);
+  --overlay: rgba(0, 0, 0, 0.82);
+  --overlay-soft: rgba(0, 0, 0, 0.66);
+  --shadow: rgba(0, 0, 0, 0.9);
+  --scrollbar-thumb: #3a3a3a;
+  --selection-bg: #1d4a5e;
+  --tinte-hover: rgba(255, 255, 255, 0.08);
+  --tinte-elegido: rgba(255, 255, 255, 0.06);
+}
+
+/* Intensidad del blanco: progresión de gris claro a blanco puro (sólo Deep Dark). */
+[data-theme="deepdark"][data-intensidad="suave"] {
+  --text: #d9d9d9;
+  --text-soft: #b0b0b0;
+  --muted: #8a8a8a;
+}
+
+[data-theme="deepdark"][data-intensidad="medio"] {
+  --text: #ededed;
+  --text-soft: #c7c7c7;
+  --muted: #9a9a9a;
+}
+
+[data-theme="deepdark"][data-intensidad="brillante"] {
+  --text: #f7f7f7;
+  --text-soft: #dcdcdc;
+  --muted: #b4b4b4;
+}
+
+[data-theme="deepdark"][data-intensidad="maximo"] {
+  --text: #ffffff;
+  --text-soft: #f2f2f2;
+  --muted: #d0d0d0;
+}
+
+/* ------------------------------------------------------------- base */
 
 * {
   box-sizing: border-box;
@@ -30,10 +300,54 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
-  font: 13px/1.6 var(--sans);
+  font-family: var(--sans);
+  font-size: var(--fs-cuerpo);
+  line-height: 1.6;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
+
+::selection {
+  background: var(--selection-bg);
+  color: var(--text);
+}
+
+/* Scrollbar del tema (Firefox y Chromium). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* --------------------------------------------------------- controles */
 
 button,
 input,
@@ -46,10 +360,10 @@ textarea {
 button {
   background: transparent;
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: var(--radio);
   padding: 5px 10px;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--fs-mono);
   color: var(--text-soft);
   cursor: pointer;
 }
@@ -69,6 +383,11 @@ button.primary {
   border-color: var(--accent);
 }
 
+button.primary:hover:not(:disabled) {
+  color: var(--accent-strong);
+  border-color: var(--accent);
+}
+
 button.quiet {
   border-color: transparent;
   color: var(--muted);
@@ -79,36 +398,161 @@ button.quiet:hover:not(:disabled) {
   border-color: transparent;
 }
 
+button.peligro {
+  color: var(--bad);
+  border-color: var(--bad-line);
+}
+
+button.peligro:hover:not(:disabled) {
+  color: var(--bad-strong);
+  border-color: var(--bad);
+}
+
 input,
 select,
 textarea {
   background: var(--bg-2);
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: var(--radio);
   padding: 6px 8px;
   width: 100%;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--fs-mono);
 }
 
 textarea {
   font-family: var(--sans);
-  font-size: 13px;
+  font-size: var(--fs-cuerpo);
+}
+
+/* El foco se ve siempre: nada de quitar el contorno. El acento, y el ratón no lo dispara. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 input:focus,
-textarea:focus,
-select:focus {
-  outline: none;
+select:focus,
+textarea:focus {
   border-color: var(--muted);
 }
 
-/* --- armazón --- */
+/* ------------------------------------------------------- armazón */
+
+/* Columna: barra de título propia arriba y el resto de la app debajo. */
+.aplicacion {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Franja de título integrada (ventana `frame:false`). Es la región de arrastre; los controles
+ * llevan `no-drag`. Sigue el tema por las variables --titlebar-*. */
+.barra-titulo {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex: 0 0 34px;
+  height: 34px;
+  padding: 0 var(--s2) 0 var(--s3);
+  background: var(--titlebar-bg);
+  border-bottom: 1px solid var(--titlebar-border);
+  color: var(--titlebar-text);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.barra-marca {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.barra-app {
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--titlebar-text-strong);
+}
+
+.barra-proyecto {
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barra-espaciador {
+  flex: 1;
+}
+
+.barra-controles {
+  display: flex;
+  align-items: stretch;
+  align-self: stretch;
+  -webkit-app-region: no-drag;
+}
+
+.barra-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--titlebar-text);
+  font-family: var(--mono);
+  font-size: var(--fs-mono);
+  -webkit-app-region: no-drag;
+}
+
+.barra-control:hover:not(:disabled) {
+  background: var(--titlebar-hover);
+  color: var(--titlebar-text-strong);
+  border: 0;
+}
+
+.barra-control:focus-visible {
+  outline-offset: -2px;
+}
+
+.barra-control.cerrar:hover:not(:disabled) {
+  background: var(--bad);
+  color: var(--on-bad);
+}
 
 .layout {
+  flex: 1;
   display: grid;
   grid-template-columns: auto 1fr auto;
-  height: 100%;
+  min-height: 0;
+}
+
+.centro {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
 }
 
 .panel {
@@ -120,12 +564,12 @@ select:focus {
 }
 
 .panel.izq {
-  width: 244px;
+  width: var(--ancho-izq);
   border-right: 1px solid var(--line-soft);
 }
 
 .panel.der {
-  width: 344px;
+  width: var(--ancho-der);
   border-left: 1px solid var(--line-soft);
 }
 
@@ -142,45 +586,162 @@ select:focus {
   border-bottom: 1px solid var(--line-soft);
   border-radius: 0;
   width: 100%;
+  padding: var(--s3) 0;
   text-align: center;
-  padding: 8px 0;
   background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--fs-titulo);
+  line-height: 1;
 }
 
-.centro {
+.plegar:hover {
+  color: var(--text);
+}
+
+/* Engrane de Ajustes, anclado al pie del panel: grande y con etiqueta. */
+.ajustes-pie {
   display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  background: var(--bg);
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  width: 100%;
+  padding: 10px var(--s2);
+  font-size: var(--fs-titulo);
 }
 
-/* --- barra superior: una línea, monoespaciada, sin adornos --- */
+.ajustes-pie .glifo {
+  font-size: 26px;
+  line-height: 1;
+}
+
+/* Sólo aparece (y sólo existe en el DOM) mientras un panel es un cajón superpuesto. */
+.drawer-fondo {
+  display: none;
+}
+
+/* ------------------------------------------- barra superior y chips */
 
 .cabecera {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
+  gap: var(--s3);
+  padding: 10px var(--s4);
   border-bottom: 1px solid var(--line-soft);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--fs-mono);
   color: var(--muted);
-}
-
-.cabecera .proyecto {
-  color: var(--text-soft);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl;
-  text-align: left;
-  flex: 1;
   min-width: 0;
 }
 
+.cabecera .proyecto {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-soft);
+  direction: rtl;
+  text-align: left;
+}
+
+.sep {
+  color: var(--line);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  padding: 1px var(--s2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.chip.alerta {
+  color: var(--warn);
+  border-color: var(--warn-line);
+}
+
+.chip.mal {
+  color: var(--bad);
+  border-color: var(--bad-line);
+}
+
+.chip.acento {
+  color: var(--accent);
+  border-color: var(--accent-line);
+}
+
+.chip.boton {
+  cursor: pointer;
+  background: transparent;
+}
+
+.chip.boton:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+/* Selector de proveedor/modelo en la cabecera: mismo aire que un chip. */
+.chip-sel {
+  width: auto;
+  max-width: 280px;
+  padding: 1px var(--s2);
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--text-soft);
+}
+
+/* Compatibilidad con el marcado anterior de la cabecera, que usaba .dato. */
 .cabecera .dato {
   white-space: nowrap;
+}
+
+/* Edición rápida de Think/esfuerzo desde la píldora del modelo activo. */
+.quick-think {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Píldora del modelo: mismo texto y tamaño compacto que el selector anterior. */
+.quick-think > .chip-sel {
+  appearance: none;
+  width: auto;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text-soft);
+}
+
+.quick-think > .chip-sel:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+.quick-think-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  min-width: 260px;
+  padding: var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 .cabecera .dato.alerta {
@@ -191,40 +752,36 @@ select:focus {
   color: var(--bad);
 }
 
-.sep {
-  color: var(--line);
-}
-
-/* --- listas --- */
+/* ----------------------------------------------------------- listas */
 
 .bloque {
-  padding: 12px 16px;
+  padding: var(--s3) var(--s4);
   border-bottom: 1px solid var(--line-soft);
 }
 
 .etiqueta {
+  margin: 0 0 var(--s2);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--fs-dato);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--muted);
-  margin: 0 0 8px;
 }
 
 .lista {
-  overflow-y: auto;
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
 }
 
 .item {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  padding: 6px 16px;
-  cursor: pointer;
+  gap: var(--s2);
+  padding: 6px var(--s4);
   border-left: 1px solid transparent;
-  font-size: 13px;
+  font-size: var(--fs-cuerpo);
+  cursor: pointer;
 }
 
 .item:hover {
@@ -251,35 +808,37 @@ select:focus {
 
 .item .meta {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--fs-dato);
   color: var(--muted);
 }
 
 .vacio {
-  padding: 24px 16px;
+  padding: var(--s5) var(--s4);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--fs-cuerpo);
 }
 
-/* --- chat --- */
+/* ----------------------------------------------------------- chat */
 
 .chat {
+  position: relative;
+  z-index: 0;
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 24px 0;
+  padding: var(--s5) 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  min-height: 0;
 }
 
 .turno {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
   padding: 10px 20px;
   white-space: pre-wrap;
   word-break: break-word;
-  max-width: 900px;
-  width: 100%;
-  margin: 0 auto;
 }
 
 .turno.usuario {
@@ -296,60 +855,156 @@ select:focus {
   color: var(--text-soft);
 }
 
-.latido {
-  padding: 6px 20px;
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--muted);
-  max-width: 900px;
+/* ------------------------------------- progreso del turno (plegable) */
+
+.progreso {
   width: 100%;
+  max-width: 900px;
   margin: 0 auto;
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
 }
 
-/* --- permiso: lo justo para decidir --- */
+.progreso summary {
+  padding: var(--s1) var(--s4);
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.progreso summary:hover {
+  color: var(--text-soft);
+}
+
+.paso {
+  display: flex;
+  gap: var(--s2);
+  padding: 1px var(--s4);
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--text-soft);
+}
+
+.paso .hora {
+  color: var(--muted);
+}
+
+.paso .tipo {
+  color: var(--text);
+}
+
+/* ---------------------------------------------- permiso: decidir ya */
 
 .permiso {
-  max-width: 900px;
   width: 100%;
+  max-width: 900px;
   margin: 10px auto;
-  padding: 14px 20px;
-  border-top: 1px solid var(--warn);
-  border-bottom: 1px solid var(--warn);
-  background: #221f19;
+  padding: var(--s3) 20px;
+  border-left: 2px solid var(--warn);
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--warn-bg);
 }
 
 .permiso h3 {
   margin: 0 0 6px;
-  font-size: 13px;
+  font-size: var(--fs-cuerpo);
   font-weight: 600;
 }
 
 .permiso .porque {
+  margin-bottom: var(--s1);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--fs-mono);
   color: var(--text-soft);
-  margin-bottom: 4px;
 }
 
 .permiso .detalle {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--fs-dato);
   color: var(--muted);
   word-break: break-all;
 }
 
 .acciones {
   display: flex;
-  gap: 8px;
-  margin-top: 12px;
+  gap: var(--s2);
+  margin-top: var(--s3);
   flex-wrap: wrap;
 }
 
-/* --- caja de texto --- */
+/* -------------------------------------- plan del turno (elegir alternativa) */
+
+.plan {
+  width: 100%;
+  max-width: 900px;
+  margin: 10px auto;
+  padding: var(--s3) 20px;
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--bg-2);
+}
+
+.plan-cabecera {
+  margin-bottom: var(--s2);
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.opcion-plan {
+  padding: var(--s3) 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.opcion-plan-cabecera {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+}
+
+.opcion-plan h3 {
+  flex: 1;
+  margin: 0;
+  font-size: var(--fs-cuerpo);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.opcion-plan .resumen {
+  margin: var(--s1) 0 0;
+  color: var(--text-soft);
+}
+
+.pasos-plan {
+  margin: var(--s2) 0 0;
+  padding-left: var(--s4);
+  font-size: var(--fs-mono);
+  color: var(--text-soft);
+}
+
+.meta-plan {
+  display: flex;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin-top: var(--s2);
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--muted);
+}
+
+.opcion-plan .acciones {
+  margin-top: var(--s2);
+}
+
+/* ------------------------------------------------------- caja de texto */
 
 .caja-texto {
   border-top: 1px solid var(--line-soft);
-  padding: 12px 16px 14px;
+  padding: var(--s3) var(--s4) 14px;
 }
 
 .caja-texto .fila {
@@ -360,6 +1015,7 @@ select:focus {
 .caja-texto textarea {
   background: transparent;
   border: 0;
+  border-radius: 0;
   padding: 0 0 10px;
   min-height: 52px;
   max-height: 200px;
@@ -369,15 +1025,17 @@ select:focus {
 
 .caja-texto textarea:focus {
   border: 0;
+  border-color: transparent;
 }
 
 .controles {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--s3);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--fs-dato);
   color: var(--muted);
+  flex-wrap: wrap;
 }
 
 .controles label {
@@ -390,115 +1048,91 @@ select:focus {
   width: auto;
 }
 
-/* --- panel derecho --- */
+/* ------------------------------------- sugerencias de @contexto (@mención) */
 
-.pestanas {
-  display: flex;
-  gap: 14px;
-  padding: 12px 16px 0;
-  border-bottom: 1px solid var(--line-soft);
+.menciones {
+  max-height: 240px;
+  margin-bottom: var(--s2);
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radio);
+  background: var(--bg-2);
 }
 
-.pestanas button {
+.menciones .mencion {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  width: 100%;
+  padding: 5px 10px;
   border: 0;
-  border-bottom: 1px solid transparent;
+  border-bottom: 1px solid var(--line-soft);
   border-radius: 0;
-  padding: 0 0 8px;
-  color: var(--muted);
   background: transparent;
+  text-align: left;
 }
 
-.pestanas button.activa {
-  color: var(--text);
-  border-bottom-color: var(--accent);
+.menciones .mencion:last-child {
+  border-bottom: 0;
 }
 
-.evento {
-  display: flex;
-  gap: 10px;
-  padding: 4px 16px;
+.menciones .mencion.elegida {
+  background: var(--bg);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.menciones .mencion .valor {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--fs-mono);
   color: var(--text-soft);
 }
 
-.evento .hora {
+.menciones .mencion .meta {
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
   color: var(--muted);
 }
 
-.evento .tipo {
-  color: var(--text);
+.menciones .vacio {
+  padding: var(--s2) 10px;
 }
 
-.ficha {
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--line-soft);
-  cursor: pointer;
-}
-
-.ficha:hover {
-  background: var(--bg);
-}
-
-.ficha h3 {
-  margin: 0;
-  font-size: 12px;
+/* Fila de comando («/id  resumen») en la lista del compositor: misma caja que las menciones. */
+.menciones .mencion .clave {
   font-family: var(--mono);
-  font-weight: 500;
+  font-size: var(--fs-mono);
   color: var(--text);
 }
 
-.ficha .sub {
-  font-size: 12px;
+.menciones .mencion .desc {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-mono);
   color: var(--muted);
 }
 
-.ficha .estado {
-  font-family: var(--mono);
-  font-size: 11px;
+.menciones .mencion.no-disponible {
+  opacity: 0.55;
 }
 
-.estado.trabajando {
-  color: var(--accent);
-}
-
-.estado.fallido {
-  color: var(--bad);
-}
-
-pre {
-  font-family: var(--mono);
-  font-size: 11.5px;
-  line-height: 1.5;
-}
-
-.diff,
-.salida {
-  white-space: pre;
-  overflow: auto;
-  background: #171514;
-  border-top: 1px solid var(--line-soft);
-  border-bottom: 1px solid var(--line-soft);
-  padding: 10px 16px;
-  margin: 0;
-  max-height: 44vh;
-}
-
-.salida {
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* --- paleta de comandos --- */
+/* ------------------------------------------------ paleta de comandos */
 
 .paleta {
   position: fixed;
   inset: 0;
-  background: rgba(10, 9, 9, 0.72);
+  z-index: 60;
   display: flex;
   justify-content: center;
   padding-top: 12vh;
-  z-index: 30;
+  background: var(--overlay);
 }
 
 .paleta .hoja {
@@ -512,13 +1146,15 @@ pre {
   overflow: hidden;
 }
 
-.paleta input {
+/* Sólo el buscador de arriba va sin caja: los campos del comando sí son campos. */
+.paleta .hoja > input {
   border: 0;
   border-bottom: 1px solid var(--line);
   border-radius: 0;
   background: transparent;
-  padding: 14px 16px;
-  font-size: 13px;
+  padding: 14px var(--s4);
+  font-family: var(--mono);
+  font-size: var(--fs-cuerpo);
   color: var(--text);
 }
 
@@ -526,66 +1162,131 @@ pre {
   overflow-y: auto;
 }
 
+.paleta .grupo {
+  padding: var(--s3) var(--s4) 0;
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 .paleta .acceso {
   display: flex;
-  gap: 12px;
+  gap: var(--s3);
   align-items: baseline;
-  padding: 8px 16px;
+  padding: var(--s2) var(--s4);
   cursor: pointer;
   border-left: 1px solid transparent;
 }
 
 .paleta .acceso.elegido {
-  background: var(--bg);
+  background: var(--tinte-elegido);
   border-left-color: var(--accent);
 }
 
-.paleta .acceso .clave {
+.paleta .acceso .clave,
+.paleta .clave {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--fs-mono);
   color: var(--text);
+}
+
+.paleta .acceso .clave {
   min-width: 190px;
 }
 
-.paleta .acceso .texto {
+.paleta .acceso .texto,
+.paleta .texto {
+  font-size: var(--fs-mono);
   color: var(--muted);
-  font-size: 12px;
+}
+
+.paleta .acceso .texto {
+  flex: 1;
+  min-width: 0;
+}
+
+/* El comando dice cuándo está disponible: aquí, cuando el runtime aún no lo está. */
+.paleta .acceso .meta {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--warn);
+}
+
+/* Las que no se ejecutan aquí (p. ej. abrir la TUI) van en tono neutro: no es un aviso. */
+.paleta .acceso .meta.terminal {
+  margin-left: 0;
+  color: var(--muted);
+}
+
+.paleta .acceso.no-disponible {
+  opacity: 0.55;
+}
+
+.paleta .campos {
+  display: flex;
+  gap: var(--s2);
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--line-soft);
+  flex-wrap: wrap;
+}
+
+.paleta .campo {
+  flex: 1 1 160px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  margin-bottom: 0;
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--muted);
 }
 
 .paleta .pie {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2) var(--s4);
   border-top: 1px solid var(--line);
-  padding: 8px 16px;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--fs-dato);
   color: var(--muted);
+  flex-wrap: wrap;
 }
 
-/* --- avisos y ajustes --- */
+/* --------------------------------------------------------- avisos */
 
 .linea-aviso {
   display: flex;
   align-items: baseline;
-  gap: 10px;
-  padding: 8px 16px;
+  gap: var(--s2);
+  padding: var(--s2) var(--s4);
   border-bottom: 1px solid var(--line-soft);
+  background: var(--warn-bg);
   font-size: 12.5px;
   color: var(--text-soft);
-  background: #221f19;
 }
 
 .linea-aviso.mal {
-  background: #221a1a;
-  color: #e0c9c9;
+  background: var(--bad-bg);
+  color: var(--bad-text);
 }
 
+/* ------------------------- modales de datos (volcado y confirmación) */
+
+/* Sólo para lo que sí es un diálogo: el volcado de una respuesta y la confirmación de una acción
+ * destructiva. La configuración (ajustes, asistente y editor de modelo) no usa esto: va como
+ * página en el área principal (ver «pantallas de configuración»). */
 .ajustes {
   position: fixed;
   inset: 0;
-  background: rgba(10, 9, 9, 0.72);
+  z-index: 50;
   display: flex;
   justify-content: center;
-  padding: 8vh 16px;
-  z-index: 25;
+  padding: 8vh var(--s4);
+  background: var(--overlay);
 }
 
 .ajustes .hoja {
@@ -596,83 +1297,97 @@ pre {
   overflow-y: auto;
 }
 
-.ajustes .cabecera-hoja {
+.cabecera-hoja {
   display: flex;
   align-items: baseline;
-  padding: 16px;
+  gap: var(--s2);
+  padding: var(--s4);
   border-bottom: 1px solid var(--line-soft);
   position: sticky;
   top: 0;
+  z-index: 1;
   background: var(--bg);
 }
 
-.ajustes .cabecera-hoja h2 {
+.cabecera-hoja h2 {
   flex: 1;
   margin: 0;
-  font-size: 14px;
+  font-size: var(--fs-titulo);
   font-weight: 600;
 }
 
+.cabecera-hoja .clave {
+  font-family: var(--mono);
+  font-size: var(--fs-mono);
+  color: var(--muted);
+}
+
+/* Tarjetas de ajustes: una por función, con su encabezado */
+
 .tarjeta {
+  padding: var(--s4);
   border-bottom: 1px solid var(--line-soft);
-  padding: 16px;
 }
 
 .tarjeta h3 {
-  margin: 0 0 2px;
+  margin: 0 0 var(--s3);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--fs-dato);
+  font-weight: 500;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--muted);
-  font-weight: 500;
 }
 
-.tarjeta .nota {
-  color: var(--muted);
-  font-size: 12px;
+.nota {
   margin: 6px 0 0;
+  font-size: var(--fs-mono);
+  color: var(--muted);
 }
+
+/* Formularios */
 
 .rejilla {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--s3);
 }
 
 .campo {
-  margin-bottom: 10px;
+  margin-bottom: var(--s3);
 }
 
 .campo label {
   display: block;
+  margin-bottom: var(--s1);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--fs-dato);
   color: var(--muted);
-  margin-bottom: 4px;
 }
 
 .opcion {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  padding: 4px 0;
-  font-size: 13px;
+  gap: var(--s2);
+  padding: var(--s1) 0;
+  font-size: var(--fs-cuerpo);
 }
 
 .opcion input {
   width: auto;
 }
 
+/* Lista de modelos sugeridos por el proveedor */
+
 .lista-modelos {
   max-height: 200px;
+  margin-top: var(--s2);
   overflow-y: auto;
   border: 1px solid var(--line);
-  border-radius: 4px;
-  margin-top: 8px;
+  border-radius: var(--radio);
 }
 
-.lista-modelos .modelo {
+.modelo {
   display: block;
   width: 100%;
   text-align: left;
@@ -681,14 +1396,1100 @@ pre {
   border-radius: 0;
   padding: 6px 10px;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--fs-mono);
   color: var(--text-soft);
 }
 
-.lista-modelos .modelo:hover {
+.modelo:hover {
+  background: var(--tinte-hover);
+}
+
+.modelo.elegido {
+  color: var(--accent);
+}
+
+/* Proveedores guardados */
+
+.lista-prov {
+  margin-top: var(--s2);
+  border: 1px solid var(--line);
+  border-radius: var(--radio);
+}
+
+.lista-prov .item {
+  border-left: 0;
+}
+
+/* Sub-bloques dentro de una tarjeta (herramientas, snapshots, guardados) */
+
+.subbloque {
+  margin-top: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line-soft);
+}
+
+.filtro {
+  width: 100%;
+  margin-bottom: var(--s2);
+}
+
+/* ------------------------- pantallas de configuración (no son modales) */
+
+/* Ajustes, el asistente inicial y el editor de modelo comparten este armazón: sustituyen el
+ * contenido del área principal —al lado de la barra lateral y bajo la cabecera de la app— como
+ * una página. No hay fondo oscurecido, ni tarjeta centrada, ni ancho máximo: el formulario llena
+ * el espacio disponible. El pie de acciones, cuando lo hay, queda siempre a la vista. */
+.pantalla,
+.editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.pantalla-cabecera,
+.editor-cabecera {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--line-soft);
+  flex-wrap: wrap;
+}
+
+.pantalla-cabecera h2,
+.editor-cabecera h2 {
+  margin: 0;
+  font-size: var(--fs-titulo);
+  font-weight: 600;
+}
+
+.pantalla-cabecera .nota,
+.editor-cabecera .nota {
+  margin: 0;
+}
+
+/* El desplazamiento vive aquí, no en la ventana: la cabecera del armazón no se mueve. */
+.pantalla-cuerpo {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Cuerpo: índice a la izquierda y secciones a la derecha, ocupando todo el ancho del área
+ * principal. Sin ancho máximo ni centrado: el formulario no es una tarjeta flotante. */
+.editor-cuerpo {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s5);
+  padding: var(--s5);
+}
+
+/* Índice de secciones: se queda pegado arriba mientras se recorre la página. */
+.editor-indice {
+  position: sticky;
+  top: 0;
+  flex: 0 0 176px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
+.editor-indice a {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--s2) var(--s3);
+  border-left: 2px solid transparent;
+  border-radius: 0 var(--radio) var(--radio) 0;
+  text-decoration: none;
+  color: var(--muted);
+}
+
+.editor-indice a:hover {
+  color: var(--text);
+  border-left-color: var(--accent);
+}
+
+.editor-indice .seccion-nombre {
+  font-family: var(--mono);
+  font-size: var(--fs-mono);
+}
+
+.editor-indice .seccion-resumen {
+  font-size: var(--fs-dato);
+  color: var(--muted);
+}
+
+.editor-secciones {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  /* El aire entre secciones lo pone el relleno de cada una: así el hairline que las separa queda
+   * centrado y la página se lee como un documento continuo, no como bloques apilados. */
+  gap: 0;
+}
+
+/* Las secciones van separadas por un hairline, **sin marco**: esta pantalla es un documento
+ * abierto de ancho completo, no una pila de tarjetas (nada de caja, sombra, centrado ni ancho
+ * máximo). Se anula el marco que `.tarjeta` usa en Ajustes; aquí sólo quedan el aire y el
+ * separador, la misma separación que usa el resto de la app. */
+.editor-secciones > .tarjeta {
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+  border-radius: 0;
+  padding: var(--s4) 0;
+}
+
+.editor-secciones > .tarjeta:first-child {
+  padding-top: 0;
+}
+
+.editor-secciones > .tarjeta:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.lista-capacidades {
+  margin: 0;
+  padding-left: 18px;
+  font-family: var(--mono);
+  font-size: var(--fs-mono);
+  color: var(--text-soft);
+}
+
+.lista-capacidades code {
+  color: var(--accent);
+}
+
+.editor-acciones {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+  flex-wrap: wrap;
+}
+
+.editor-error {
+  color: var(--bad);
+  font-family: var(--mono);
+  font-size: var(--fs-mono);
+}
+
+/* --------------------------------------------------- inspector (panel derecho) */
+
+.pestanas {
+  display: flex;
+  gap: 14px;
+  padding: var(--s3) var(--s4) 0;
+  border-bottom: 1px solid var(--line-soft);
+  flex-wrap: wrap;
+}
+
+.pestanas button {
+  border: 0;
+  border-bottom: 1px solid transparent;
+  border-radius: 0;
+  padding: 0 0 var(--s2);
+  background: transparent;
+  color: var(--muted);
+}
+
+.pestanas button.activa {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.evento {
+  display: flex;
+  gap: var(--s2);
+  padding: var(--s1) var(--s4);
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--text-soft);
+}
+
+.evento .hora {
+  color: var(--muted);
+}
+
+.evento .tipo {
+  color: var(--text);
+}
+
+.ficha {
+  padding: 10px var(--s4);
+  border-bottom: 1px solid var(--line-soft);
+  cursor: pointer;
+}
+
+.ficha:hover {
+  background: var(--bg);
+}
+
+.ficha h3 {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  margin: 0;
+  font-family: var(--mono);
+  font-size: var(--fs-mono);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.ficha .sub,
+.sub {
+  font-size: var(--fs-mono);
+  color: var(--muted);
+}
+
+.estado {
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+}
+
+.estado.trabajando {
+  color: var(--accent);
+}
+
+.estado.fallido {
+  color: var(--bad);
+}
+
+/* ------------------------------------------ datos volcados (pre.diff/salida) */
+
+pre {
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  line-height: 1.5;
+}
+
+pre.diff,
+pre.salida,
+.diff,
+.salida {
+  margin: 0;
+  padding: 10px var(--s4);
+  overflow: auto;
+  background: var(--bg-3);
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+  max-height: var(--alto-scroll);
+}
+
+pre.diff,
+.diff {
+  white-space: pre;
+  max-height: var(--alto-scroll);
+}
+
+pre.salida,
+.salida {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 40vh;
+}
+
+/* ------------------------------------------------ barra lateral: piezas nuevas */
+
+/* Botón principal: crear una conversación. */
+.nueva-conv {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  padding: 7px 10px;
+  color: var(--accent);
+  border-color: var(--accent-line);
+  text-align: left;
+}
+
+.nueva-conv:hover:not(:disabled) {
+  color: var(--accent-strong);
+  border-color: var(--accent);
+}
+
+.nueva-conv .signo {
+  font-size: var(--fs-titulo);
+  line-height: 1;
+}
+
+/* Recientes y Archivadas: bloques secundarios y plegables. */
+.recientes > summary,
+.archivadas > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.recientes > summary::-webkit-details-marker,
+.archivadas > summary::-webkit-details-marker {
+  display: none;
+}
+
+.recientes > summary::before,
+.archivadas > summary::before {
+  content: "▸ ";
+  color: var(--muted);
+}
+
+.recientes[open] > summary::before,
+.archivadas[open] > summary::before {
+  content: "▾ ";
+}
+
+.recientes[open] > summary,
+.archivadas[open] > summary {
+  margin-bottom: var(--s2);
+}
+
+/* Fila de conversación con acciones: el botón «⋯» aparece al pasar el ratón o al enfocar. */
+.conv {
+  display: flex;
+  flex-direction: column;
+}
+
+.item .accion-item {
+  align-self: center;
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  white-space: nowrap;
+  opacity: 0;
+}
+
+.item:hover .accion-item,
+.item:focus-within .accion-item,
+.item.activo .accion-item,
+.accion-item.siempre {
+  opacity: 1;
+}
+
+.item .accion-item:hover:not(:disabled) {
+  color: var(--text);
+  border: 0;
+}
+
+/* Menú de acciones de una conversación: fila de botones bajo el elemento. */
+.menu-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  padding: var(--s1) var(--s4) var(--s2);
+  background: var(--bg);
+}
+
+.menu-item button {
+  border-color: var(--line);
+}
+
+/* Marca de conversación fijada. */
+.item .pin {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: var(--fs-dato);
+  line-height: 1.6;
+}
+
+/* Conversación archivada: presente pero apagada; no se activa desde aquí. */
+.item.archivada {
+  cursor: default;
+}
+
+.item.archivada .nombre {
+  color: var(--muted);
+}
+
+/* Pie de la barra lateral: proveedor + Ajustes, siempre abajo. */
+.pie-panel {
+  margin-top: auto;
+}
+
+/* ------------------------------------------------ bienvenida del chat */
+
+/* Sólo cuando no hay nada todavía: turnos, pasos ni ejecución. Las sugerencias rellenan el
+ * compositor pero nunca envían. */
+.bienvenida {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: var(--s5) 20px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.bienvenida h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.bienvenida .nota {
+  margin: 0;
+}
+
+.bienvenida .sugerencias {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+
+.bienvenida .sugerencia {
+  cursor: pointer;
+}
+
+.bienvenida .acceso-compositor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
+.bienvenida .pista {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s2);
+  width: 100%;
+  justify-content: flex-start;
+  border: 0;
+  border-radius: 0;
+  padding: 2px 0;
+  color: var(--muted);
+  font-size: var(--fs-mono);
+  text-align: left;
+}
+
+.bienvenida .pista:hover {
+  color: var(--text-soft);
+  border-color: transparent;
+}
+
+.bienvenida .pista code {
+  font-family: var(--mono);
+  color: var(--accent);
+}
+
+/* ------------------------------------------------ progreso compacto del turno */
+
+.progreso-compacto {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 8px 20px;
+  border-top: 1px solid var(--line-soft);
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--muted);
+}
+
+.progreso-compacto .ultimo-paso {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-soft);
+}
+
+.progreso-compacto .pulso {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: pulso 1.2s ease-in-out infinite;
+}
+
+@keyframes pulso {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ------------------------------------------------ inspector: atención y cambios */
+
+/* Indicador de atención en la pestaña Cambios. */
+.punto-atencion {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: var(--s2);
+  border-radius: 999px;
+  background: var(--warn);
+  vertical-align: middle;
+}
+
+/* Resumen del diff de una tarea. */
+.resumen-cambios {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  font-size: var(--fs-mono);
+  color: var(--text-soft);
+}
+
+.resumen-cambios .suma {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+}
+
+.resumen-cambios .resta {
+  color: var(--bad);
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+}
+
+.resumen-cambios .meta {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--muted);
+}
+
+/* ------------------------------------------------ ajustes: categorías y páginas */
+
+/* Página principal: rejilla de categorías; cada una abre su propia página. */
+.ajustes-grid {
+  list-style: none;
+  margin: 0;
+  padding: var(--s5);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--s3);
+}
+
+.ajustes-grid li {
+  display: flex;
+  min-width: 0;
+}
+
+.categoria {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s1);
+  width: 100%;
+  padding: var(--s4);
+  text-align: left;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radio);
+  color: var(--text-soft);
+}
+
+.categoria:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.categoria-titulo {
+  font-size: var(--fs-cuerpo);
+  color: var(--text);
+}
+
+.categoria-resumen {
+  font-family: var(--mono);
+  font-size: var(--fs-mono);
+  color: var(--muted);
+}
+
+.categoria-meta {
+  margin-top: var(--s2);
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--muted);
+}
+
+/* Página de una categoría (sustituye a la lista; no es un ancla). */
+.ajustes-pagina {
+  padding: var(--s5);
+}
+
+/* Migas de pan de las páginas de Ajustes. */
+.migas {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin: 0;
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--muted);
+}
+
+.migas button {
+  padding: 0;
+}
+
+.migas [aria-current="page"] {
+  color: var(--text-soft);
+}
+
+/* ------------------------------------------------ ajustes: apariencia (temas) */
+
+/* Selección de tema: cada tarjeta muestra un swatch real del tema y se aplica al hacer clic. */
+.temas-grid {
+  list-style: none;
+  margin: var(--s4) 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--s3);
+}
+
+.temas-grid li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.tema {
+  display: grid;
+  grid-template-columns: 64px 1fr auto;
+  align-items: center;
+  gap: var(--s3);
+  width: 100%;
+  padding: var(--s3);
+  text-align: left;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radio);
+  color: var(--text-soft);
+}
+
+.tema:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+.tema.activo {
+  border-color: var(--accent);
+}
+
+.tema-preview {
+  position: relative;
+  display: block;
+  width: 64px;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: var(--radio);
+  overflow: hidden;
+}
+
+.tema-preview-panel {
+  position: absolute;
+  inset: 10px 6px 6px 6px;
+  border-radius: 2px;
+}
+
+.tema-preview-barra {
+  position: absolute;
+  top: 5px;
+  left: 0;
+  right: 0;
+  height: 4px;
+  opacity: 0.85;
+}
+
+.tema-preview-acento {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+.tema-texto {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tema-nombre {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  font-size: var(--fs-cuerpo);
+  color: var(--text);
+}
+
+.tema-modo {
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--muted);
+}
+
+.tema-desc {
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--muted);
+}
+
+/* Control de intensidad del blanco: sólo en la tarjeta de Deep Dark. */
+.tema-intensidad {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  padding: var(--s2) var(--s3);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radio);
+}
+
+.tema-intensidad-titulo {
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--muted);
+}
+
+.tema-intensidad select {
+  width: 100%;
+}
+
+/* ------------------------------------------------ diff con comentarios */
+
+.diff-lineas {
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--bg-3);
+  max-height: var(--alto-scroll);
+  overflow: auto;
+}
+
+.dif-linea {
+  display: flex;
+  gap: var(--s2);
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  line-height: 1.5;
+  white-space: pre;
+  cursor: pointer;
+}
+
+.dif-linea:hover {
+  background: var(--tinte-hover);
+}
+
+.dif-linea .dif-num {
+  flex: 0 0 44px;
+  padding-right: var(--s2);
+  text-align: right;
+  color: var(--muted);
+  border-right: 1px solid var(--line-soft);
+  user-select: none;
+}
+
+.dif-linea .dif-texto {
+  flex: 1;
+  min-width: 0;
+}
+
+.dif-linea.suma .dif-texto {
+  color: var(--accent);
+}
+
+.dif-linea.resta .dif-texto {
+  color: var(--bad);
+}
+
+.dif-linea.cabecera .dif-texto,
+.dif-linea.rango .dif-texto {
+  color: var(--muted);
+}
+
+.dif-linea.anclada {
+  background: var(--anchor-bg);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.comentario {
+  margin: 0 var(--s4);
+  padding: var(--s2) var(--s3);
+  border-left: 2px solid var(--warn);
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--warn-bg);
+  font-size: var(--fs-mono);
+  color: var(--text-soft);
+}
+
+.comentario.resuelto {
+  opacity: 0.6;
+  border-left-color: var(--line);
+}
+
+/* Índice plegable de todos los comentarios de la tarea. */
+.comentarios-todos > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.comentarios-todos > summary::-webkit-details-marker {
+  display: none;
+}
+
+.comentarios-todos > summary::before {
+  content: "▸ ";
+  color: var(--muted);
+}
+
+.comentarios-todos[open] > summary::before {
+  content: "▾ ";
+}
+
+/* ------------------------------------------------ cola de instrucciones */
+
+.cola {
+  margin-bottom: var(--s2);
+  border: 1px solid var(--line);
+  border-radius: var(--radio);
   background: var(--bg-2);
 }
 
-.lista-modelos .modelo.elegido {
-  color: var(--accent);
+.cola-cabecera {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.cola-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s1) var(--s3);
+}
+
+.cola-item input {
+  flex: 1;
+  min-width: 0;
+}
+
+.cola-num {
+  min-width: 16px;
+  text-align: right;
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--muted);
+}
+
+/* -------------------------------------------- pantallas estrechas (cajones) */
+
+/* Por debajo de ~1080px los paneles laterales dejan de robar ancho al centro: pasan a ser
+ * cajones fijos que se deslizan sobre el contenido, con el .drawer-fondo detrás mientras el
+ * inspector está abierto (la app sólo lo monta en ese caso). Plegados siguen siendo la banda
+ * fina de siempre, así que el sitio donde pinchar para abrirlos no desaparece. */
+@media (max-width: 1080px) {
+  .panel.izq:not(.plegado) {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(320px, 86vw);
+    z-index: 30;
+    box-shadow: 12px 0 28px var(--shadow);
+  }
+
+  .panel.der:not(.plegado) {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: min(360px, 88vw);
+    z-index: 30;
+    box-shadow: -12px 0 28px var(--shadow);
+  }
+
+  .drawer-fondo {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    background: var(--overlay-soft);
+  }
+
+  .cabecera {
+    gap: var(--s2);
+    padding: 10px var(--s3);
+    flex-wrap: wrap;
+    row-gap: var(--s1);
+  }
+
+  .cabecera .proyecto {
+    flex: 1 1 100%;
+  }
+
+  .pestanas {
+    gap: var(--s3);
+  }
+
+  .ajustes {
+    padding: 4vh var(--s2);
+  }
+
+  /* El editor usa todo el ancho; el índice pasa a fila y las rejillas a una columna: en
+   * ventanas estrechas el formulario no se aprieta y las acciones quedan siempre a la vista. */
+  .editor-cuerpo {
+    flex-direction: column;
+    gap: var(--s4);
+    padding: var(--s4);
+  }
+
+  .ajustes-grid,
+  .ajustes-pagina {
+    padding: var(--s4);
+  }
+
+  /* Una sola columna: en ventanas estrechas los swatches no se aprietan. */
+  .temas-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .editor-indice {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    width: 100%;
+    gap: var(--s1);
+  }
+
+  .editor-indice a {
+    flex: 1 1 auto;
+    border-left: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: var(--radio) var(--radio) 0 0;
+  }
+
+  .editor-secciones .rejilla {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  /* Inspector estrecho: las rejillas de sus formularios pasan a una columna. */
+  .panel.der .rejilla {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}
+
+/* ------------------------------------------------- icono de Satellite */
+/* Dos variantes del mismo arte (copias sin retocar): la oscura se usa en temas oscuros y
+   la clara en el tema claro. No se invierte ni recolorea nada. */
+.logo {
+  display: block;
+}
+
+.logo-claro {
+  display: none;
+}
+
+[data-theme="claro"] .logo-claro {
+  display: block;
+}
+
+[data-theme="claro"] .logo-oscuro {
+  display: none;
+}
+
+/* Icono junto a «Satellite» en la franja superior izquierda. */
+.barra-logo {
+  height: 16px;
+  width: auto;
+  align-self: center;
+  opacity: 0.95;
+}
+
+/* Marca de agua del chat: grande, centrada y detrás del contenido. No capta clics ni
+   selección ni altera el scroll (altura 0 y `pointer-events: none`). */
+.chat-marca {
+  position: sticky;
+  top: 50%;
+  height: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  pointer-events: none;
+  user-select: none;
+  z-index: -1;
+}
+
+.chat-marca-logo {
+  height: min(44vh, 420px);
+  width: auto;
+  transform: translateY(-50%);
+  /* Opacidad elegida en Apariencia; el mismo valor rige en temas claros y oscuros. */
+  opacity: var(--chat-marca-opacidad, 0.06);
+}
+
+/* Splash de carga: fondo difuminado y el icono pequeño centrado. */
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  backdrop-filter: blur(12px) saturate(120%);
+}
+
+.splash-caja {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s3);
+}
+
+.splash-logo {
+  height: 84px;
+  width: auto;
+  animation: splash-latido 1.6s ease-in-out infinite;
+}
+
+.splash-texto {
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+@keyframes splash-latido {
+  0%,
+  100% {
+    opacity: 0.75;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .splash-logo {
+    animation: none;
+  }
 }

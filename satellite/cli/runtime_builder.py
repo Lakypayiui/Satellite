@@ -28,6 +28,10 @@ from satellite.config import providers as provider_config
 from satellite.core.errors import ProviderError
 from satellite.core.events import EventType, ExecutionEvent
 from satellite.events.bus import EventBus
+from satellite.desktop_control.config import load_desktop_settings
+from satellite.desktop_control.policy import DesktopControlPolicy
+from satellite.desktop_control.vision import vision_fallback_for
+from satellite.kernel.audit import AuditLog
 from satellite.kernel.manifest import RESERVED_AGENT_IDS, verify_and_restore
 from satellite.kernel.migrations import migrate, migrate_agent_specs, migrate_prompt_files
 from satellite.kernel.paths import ensure_dirs, resolve_paths
@@ -36,6 +40,7 @@ from satellite.metrics.pricing import PriceBook
 from satellite.observability.call_log import CallRecorder, default_log_dir
 from satellite.observability.logger import ExecutionLogger
 from satellite.providers.metered import MeteredProvider
+from satellite.safe_proxy.interceptor import SanitizingProvider, sanitize_provider
 from satellite.skills.cache import SkillResultCache
 from satellite.orchestration.base import RuntimeServices
 from satellite.orchestration.delegation import DelegationManager
@@ -47,6 +52,7 @@ from satellite.persistence.store import FileStore
 from satellite.providers.base import LLMProvider
 from satellite.providers.factory import ProviderConfig, ProviderFactory
 from satellite.providers.caching import parse_cache_config
+from satellite.providers.capabilities import EFFORT_PARAM, param_for_control
 from satellite.sandbox.subprocess_sandbox import SubprocessSandbox
 from satellite.security.policy import DefaultSecurityPolicy
 from satellite.skills.registry import SkillRegistry
@@ -60,6 +66,7 @@ from satellite.tools.jobs import JobTool
 from satellite.tools.registry import DefaultToolRegistry
 from satellite.tools.skills import ProposeSkillTool, SearchSkillsTool
 from satellite.tools.terminal import RunCommandTool
+from satellite.tool_manifest import TOOL_IDS as DESKTOP_TOOL_IDS
 
 DEFAULT_ALLOWED_TOOLS: set[str] = {
     "read_file",
@@ -90,8 +97,17 @@ def set_safe_mode(enabled: bool) -> None:
     _SAFE_MODE = bool(enabled)
 
 
-def build_runtime(project_root: Path, *, approval: object | None = None):
-    """Construye (orchestrator, bus, store, registry) para un project root."""
+def build_runtime(
+    project_root: Path,
+    *,
+    approval: object | None = None,
+    allow_desktop: bool = False,
+):
+    """Construye (orchestrator, bus, store, registry) para un project root.
+
+    ``allow_desktop`` registra las tools de control de escritorio **sólo** en
+    superficies con humano (CLI/TUI/Desktop). MCP llama con ``False`` (default).
+    """
     project_root = Path(project_root).resolve()
     base_dir = Path(__file__).parent.parent / "agents"
     paths = ensure_dirs(resolve_paths(project_root))
@@ -115,15 +131,31 @@ def build_runtime(project_root: Path, *, approval: object | None = None):
     # (una vez / la sesión / rechazar): con allow_terminal=False sería un veto duro.
     # La allowlist sale de `terminal.allowed_commands` y vacía por defecto: sin ella todo
     # comando se pregunta.
+    allowed_tools = set(DEFAULT_ALLOWED_TOOLS)
+    if allow_desktop:
+        allowed_tools |= set(DESKTOP_TOOL_IDS)
     policy = DefaultSecurityPolicy(
-        allowed_tools=set(DEFAULT_ALLOWED_TOOLS),
+        allowed_tools=allowed_tools,
         allow_terminal=True,
         allowed_commands=settings.allowed_commands,
     )
-    tools = build_tool_registry(policy)
+    # Control de escritorio: política (config local deny-by-default) + auditoría.
+    # Sólo se construyen si la superficie tiene humano; MCP queda fuera.
+    desktop_policy = DesktopControlPolicy(load_desktop_settings()) if allow_desktop else None
+    desktop_audit = AuditLog(paths.audit_root) if allow_desktop else None
+    desktop_vision = vision_fallback_for(project_root) if allow_desktop else None
+    tools = build_tool_registry(
+        policy,
+        allow_desktop=allow_desktop,
+        desktop_policy=desktop_policy,
+        desktop_audit=desktop_audit,
+        desktop_vision=desktop_vision,
+    )
 
     bus = EventBus()
-    provider = _metered(_load_provider(project_root), project_root=project_root, settings=settings)
+    provider = _safe_proxy(
+        _metered(_load_provider(project_root), project_root=project_root, settings=settings)
+    )
 
     # Skills globales (carga tolerante) + sandbox N0.
     skill_registry = SkillRegistry(paths.skills_root, sink=None)
@@ -167,6 +199,9 @@ def build_runtime(project_root: Path, *, approval: object | None = None):
         policy=policy,
         context_engine=context,
         project_root=project_root,
+        # Worktree activo (si lo hay): las tools escriben y ejecutan ahí, no en el
+        # workspace original. ``None`` = el proyecto de siempre.
+        workdir=_active_workdir(project_root),
     )
     delegation = DelegationManager(
         factory,
@@ -177,11 +212,13 @@ def build_runtime(project_root: Path, *, approval: object | None = None):
     factory.delegation_manager = delegation
 
     # Creator + validador + expander (rol de modelo propio por config).
-    creator_provider = _metered(
-        _role_provider(project_root, "creator", provider),
-        project_root=project_root,
-        settings=settings,
-        role="creator",
+    creator_provider = _safe_proxy(
+        _metered(
+            _role_provider(project_root, "creator", provider),
+            project_root=project_root,
+            settings=settings,
+            role="creator",
+        )
     )
     validator = AgentProposalValidator(
         registry,
@@ -236,6 +273,17 @@ def build_runtime(project_root: Path, *, approval: object | None = None):
     return orchestrator, bus, store, registry
 
 
+def _safe_proxy(provider: LLMProvider) -> LLMProvider:
+    """Modo interno del Safe Proxy: sanea el ciclo del proveedor (idempotente).
+
+    Envuelve el proveedor (ya medido) con la política del Safe Proxy **en el mismo
+    proceso**: no hay listener, ni puerto, ni roundtrip HTTP. Si el modo interno no está
+    activo (o su interruptor está apagado) el decorador delega tal cual: bypass claro.
+    El modo servidor **no** se envuelve aquí, para no sanear dos veces.
+    """
+    return sanitize_provider(provider)
+
+
 def _default_approval(settings: Settings) -> object:
     """Puerto por defecto: pregunta en consola salvo en modos auto/unrestricted."""
     if settings.policy_mode is PolicyMode.ASK:
@@ -262,19 +310,44 @@ def _skill_cache_path(paths) -> Path | None:
     return Path(paths.project_data) / "state" / "skill_cache.json"
 
 
-def build_tool_registry(policy: DefaultSecurityPolicy | None = None) -> DefaultToolRegistry:
+def _active_workdir(project_root: Path) -> Path | None:
+    """Workdir de ejecución (worktree activo). Tolerante: ``None`` si no hay o falla.
+
+    No se deja que un problema de git impida armar el runtime: sin worktree se ejecuta en el
+    proyecto, que es exactamente el comportamiento de siempre.
+    """
+    try:
+        from satellite.gitops import active_workdir
+
+        return active_workdir(project_root)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def build_tool_registry(
+    policy: DefaultSecurityPolicy | None = None,
+    *,
+    allow_desktop: bool = False,
+    desktop_policy: DesktopControlPolicy | None = None,
+    desktop_audit: AuditLog | None = None,
+    desktop_vision: object | None = None,
+) -> DefaultToolRegistry:
     """Registro de herramientas del runtime (primitivas del kernel incluidas).
 
     Se expone aparte para poder listarlas desde el CLI sin levantar el runtime
     completo (y por tanto sin necesitar un proveedor configurado).
+
+    ``allow_desktop=False`` por defecto: las tools de control de escritorio sólo se
+    registran en superficies con humano (CLI/TUI/Desktop) y **nunca** en MCP.
     """
     if policy is None:
         # La misma política que el runtime: si aquí el terminal estuviera vetado, listar
         # las herramientas y ejecutarlas dirían cosas distintas.
-        policy = DefaultSecurityPolicy(
-            allowed_tools=set(DEFAULT_ALLOWED_TOOLS), allow_terminal=True
-        )
-    tools = DefaultToolRegistry(policy=policy)
+        allowed = set(DEFAULT_ALLOWED_TOOLS)
+        if allow_desktop:
+            allowed |= set(DESKTOP_TOOL_IDS)
+        policy = DefaultSecurityPolicy(allowed_tools=allowed, allow_terminal=True)
+    tools = DefaultToolRegistry(policy=policy, desktop_policy=desktop_policy)
     for tool in (
         ReadFileTool(),
         WriteFileTool(),
@@ -292,7 +365,50 @@ def build_tool_registry(policy: DefaultSecurityPolicy | None = None) -> DefaultT
         ProposeSkillTool(),
     ):
         tools.register(tool)
+    if allow_desktop:
+        # Import local: mantiene el paquete de tools ligero hasta que se usa.
+        from satellite.tools.desktop_control import (
+            DesktopActTool,
+            DesktopListWindowsTool,
+            DesktopObserveTool,
+        )
+
+        tools.register(
+            DesktopListWindowsTool(policy=desktop_policy, audit=desktop_audit)
+        )
+        tools.register(DesktopObserveTool(policy=desktop_policy, audit=desktop_audit, vision=desktop_vision))
+        tools.register(DesktopActTool(policy=desktop_policy, audit=desktop_audit))
     return tools
+
+
+def build_agent_catalog(project_root: Path):
+    """Registro/prompts/store/validator **sin LLM** (plantillas deterministas).
+
+    Crear una plantilla (`satellite agents --create desktop_operator`) no necesita
+    proveedor, pero sí el mismo validador determinista y el mismo catálogo global.
+    Devuelve ``(registry, prompts, catalog_store, validator)``.
+    """
+    project_root = Path(project_root).resolve()
+    paths = ensure_dirs(resolve_paths(project_root))
+    base_dir = Path(__file__).parent.parent / "agents"
+    verify_and_restore(base_dir / "specs", paths.agents_root, patterns=("*.json",))
+    verify_and_restore(base_dir / "prompts", paths.agents_root, patterns=("*.txt",))
+    migrate_prompt_files(paths.agents_root)
+    migrate_agent_specs(paths.agents_root)
+    catalog_store = AgentCatalogStore(paths.agents_root)
+    registry = DefaultAgentRegistry(
+        {spec.id: spec for spec in catalog_store.load_specs()}
+    )
+    prompts = DefaultPromptRegistry()
+    for prompt_id, (system, user) in catalog_store.load_prompts().items():
+        prompts.register_pair(prompt_id, system, user)
+    tools = build_tool_registry(allow_desktop=True)
+    validator = AgentProposalValidator(
+        registry,
+        tool_ids={tool.id for tool in tools.all()},
+        allowed_roles=("generated",),
+    )
+    return registry, prompts, catalog_store, validator
 
 
 def _metered(
@@ -307,7 +423,7 @@ def _metered(
     Registra hashes y contadores en ``.satellite/observability/calls.jsonl``,
     carga los precios de ``llm.pricing`` y aplica ``llm.max_tokens.<rol>``.
     """
-    if isinstance(provider, MeteredProvider):
+    if isinstance(provider, (MeteredProvider, SanitizingProvider)):
         return provider
     data = provider_config.load_config(project_root)
     cfg = _provider_config_from(data, role=role) or _provider_config_from(data)
@@ -397,6 +513,85 @@ def _model_overrides(llm: dict, provider: dict | None = None) -> dict:
     return result
 
 
+def _effort_from(*sections) -> str | None:
+    """Nivel de esfuerzo pedido: el primero que lo traiga y no sea ``auto``.
+
+    ``auto`` (y el vacío) significan «no indicar nada»: se deja al proveedor. El valor se
+    normaliza a minúsculas; si el modelo no lo admite, el provider no lo envía.
+    """
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        value = str(section.get("reasoning_effort") or "").strip().lower()
+        if value and value != "auto":
+            return value
+    return None
+
+
+def _think_from(*sections) -> bool | None:
+    """Interruptor Think pedido (el primero que lo traiga como booleano), o ``None``.
+
+    ``None`` = no tocar: el adapter no envía el canal Think. Un booleano explícito sí lo
+    envía, pero **sólo** si el modelo declara ese canal (lo decide ``resolve_think``).
+    """
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        value = section.get("think")
+        if isinstance(value, bool):
+            return value
+    return None
+
+
+def _role_overrides(llm: dict, provider: dict | None, role_cfg: dict | None, model: str) -> dict:
+    """Capacidades del modelo para ese rol, aisladas del resto.
+
+    A las capacidades generales (``llm.models`` + las del proveedor) se les suma, **sólo para
+    este rol**, los niveles que su endpoint anunció (``llm.<rol>.effort_levels``) y el canal
+    de esos niveles (``llm.<rol>.effort_control``): así el adapter usa el parámetro correcto
+    (p. ej. ``reasoning_effort``) y no manda uno ajeno al modelo.
+    """
+    overrides = _model_overrides(llm, provider)
+    levels = (role_cfg or {}).get("effort_levels")
+    control = str((role_cfg or {}).get("effort_control") or "").strip()
+    if isinstance(levels, (list, tuple)) and levels and model:
+        limpios = [str(level).strip() for level in levels if str(level).strip()]
+        if limpios:
+            entrada = dict(overrides.get(model) or {})
+            entrada["effort_levels"] = limpios
+            if control:
+                entrada["effort_control"] = control
+                entrada["effort_param"] = param_for_control(control) or EFFORT_PARAM
+            else:
+                entrada.setdefault("effort_param", EFFORT_PARAM)
+            overrides = {**overrides, model: entrada}
+    return overrides
+
+
+def _active_provider_entry(data: dict) -> dict:
+    """Entrada del proveedor guardado que el runtime usa por defecto (``llm.provider_id``).
+
+    Sirve para que el camino global (sin rol) lea sus ajustes por proveedor —tope de salida y
+    capacidades por modelo— en vez de mirar sólo el nivel superior. ``{}`` si no hay guardado.
+    """
+    providers = data.get("providers") if isinstance(data.get("providers"), list) else []
+    llm = data.get("llm") if isinstance(data.get("llm"), dict) else {}
+    provider_id = str(llm.get("provider_id") or "")
+    if provider_id:
+        for entry in providers:
+            if isinstance(entry, dict) and str(entry.get("id")) == provider_id:
+                return entry
+    name, model = str(data.get("name") or ""), str(data.get("model") or "")
+    for entry in providers:
+        if (
+            isinstance(entry, dict)
+            and entry.get("name") == name
+            and entry.get("model") == model
+        ):
+            return entry
+    return {}
+
+
 def _provider_config_from(data: dict, role: str | None = None) -> ProviderConfig | None:
     """Construye ProviderConfig desde el config, priorizando el rol indicado."""
     llm = data.get("llm", {}) if isinstance(data.get("llm"), dict) else {}
@@ -410,34 +605,45 @@ def _provider_config_from(data: dict, role: str | None = None) -> ProviderConfig
             (p for p in saved if isinstance(p, dict) and p.get("id") == ref), None
         )
         if saved_match is not None:
+            model = role_cfg.get("model") or saved_match.get("model", "")
             return ProviderConfig(
                 name=saved_match.get("name", "openai"),
-                model=role_cfg.get("model") or saved_match.get("model", ""),
+                model=model,
                 base_url=saved_match.get("base_url", ""),
                 api_key=saved_match.get("api_key"),
                 max_tokens=_max_tokens_for(llm, saved_match, role),
-                model_overrides=_model_overrides(llm, saved_match),
+                model_overrides=_role_overrides(llm, saved_match, role_cfg, model),
+                reasoning_effort=_effort_from(role_cfg, saved_match),
+                thinking=_think_from(role_cfg, saved_match),
                 cache_options=cache_options,
             )
         if role_cfg.get("base_url") or role_cfg.get("model") or role_cfg.get("provider"):
+            model = role_cfg.get("model", "gpt-4o-mini")
             return ProviderConfig(
                 name=role_cfg.get("provider", "openai"),
-                model=role_cfg.get("model", "gpt-4o-mini"),
+                model=model,
                 base_url=role_cfg.get("base_url"),
                 api_key=role_cfg.get("api_key"),
                 max_tokens=_max_tokens_for(llm, role_cfg, role),
-                model_overrides=_model_overrides(llm, role_cfg),
+                model_overrides=_role_overrides(llm, None, role_cfg, model),
+                reasoning_effort=_effort_from(role_cfg),
+                thinking=_think_from(role_cfg),
                 cache_options=cache_options,
             )
     if data.get("name") or data.get("model") or data.get("base_url"):
+        # Sin rol, el proveedor global es el guardado: se leen sus ajustes (tope de salida y
+        # capacidades por modelo) de su propia entrada, no del nivel superior.
+        entry = _active_provider_entry(data)
         return ProviderConfig(
             name=data.get("name", "fake"),
             model=data.get("model", "fake-model"),
             api_key=data.get("api_key"),
             base_url=data.get("base_url"),
             temperature=float(data.get("temperature", 0.0)),
-            max_tokens=_max_tokens_for(llm, data),
-            model_overrides=_model_overrides(llm, data),
+            max_tokens=_max_tokens_for(llm, entry or data),
+            model_overrides=_model_overrides(llm, entry or data),
+            reasoning_effort=_effort_from(llm, data),
+            thinking=_think_from(llm, entry or data, data),
             cache_options=cache_options,
         )
     return None

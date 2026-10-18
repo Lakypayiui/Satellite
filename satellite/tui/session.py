@@ -28,6 +28,7 @@ from satellite.kernel.paths import ensure_dirs, resolve_paths
 from satellite.kernel.policy import load_settings
 from satellite.metrics.stats import MetricsReport, build_report
 from satellite.orchestration.chat import ChatReply, ChatSession, Turn
+from satellite.orchestration.sessions import SessionStore
 from satellite.persistence.store import FileStore
 from satellite.sandbox.setup import detect_docker, record_decision
 from satellite.skills.models import SkillManifest
@@ -111,9 +112,17 @@ class Session:
         """Id del proveedor global activo."""
         return provider_config.active_id(self.project_root)
 
-    def load_models(self, base_url: str, family: str, api_key: str = "") -> ModelsResult:
-        """Lista los modelos de esa URL (fallo ruidoso: nunca lanza)."""
-        return fetch_models(base_url, family, api_key or None)
+    def load_models(
+        self, base_url: str, family: str, api_key: str = "", provider: str = "", account_id: str = ""
+    ) -> ModelsResult:
+        """Lista los modelos de esa URL (fallo ruidoso: nunca lanza).
+
+        ``provider`` es la clave del catálogo (p. ej. ``xai``) cuando se conoce: elige la
+        estrategia de listado (ruta, paginación, forma de la respuesta) de ese proveedor.
+        """
+        return fetch_models(
+            base_url, family, api_key or None, provider=provider, account_id=account_id
+        )
 
     def save_provider(
         self,
@@ -123,6 +132,11 @@ class Session:
         base_url: str,
         api_key: str = "",
         api_key_env: str = "",
+        account_id: str = "",
+        reasoning_effort: str | None = None,
+        think: bool | None = None,
+        max_tokens: int | None = None,
+        model_overrides: dict | None = None,
     ):
         """Guarda el proveedor, lo deja activo y fuerza a reconstruir el runtime."""
         previous = provider_config.active_id(self.project_root)
@@ -133,6 +147,11 @@ class Session:
             base_url=base_url,
             api_key=api_key,
             api_key_env=api_key_env,
+            account_id=account_id,
+            reasoning_effort=reasoning_effort,
+            think=think,
+            max_tokens=max_tokens,
+            model_overrides=model_overrides,
         )
         report = provider_config.activate(self.project_root, saved.id, previous_id=previous)
         # La ventana del modelo recién activado puede ser otra: se olvida la entrada para
@@ -150,7 +169,9 @@ class Session:
     def runtime(self, *, force: bool = False) -> tuple:
         """Construye (o reutiliza) el runtime completo."""
         if self._runtime is None or force:
-            self._runtime = runtime_builder.build_runtime(self.project_root)
+            self._runtime = runtime_builder.build_runtime(
+                self.project_root, allow_desktop=True
+            )
         return self._runtime
 
     def bus(self):
@@ -322,6 +343,53 @@ class Session:
     def rename_session(self, name: str) -> bool:
         """Renombra la sesión activa."""
         return self.chat().rename_session(name)
+
+    def pin_session(self, target: str, pinned: bool) -> str | None:
+        """Fija o deja de fijar una conversación por id o nombre (``None`` si no existe).
+
+        No cambia cuál está activa. Misma operación del almacén que usan la CLI y la app.
+        """
+        store = SessionStore(self.project_root)
+        session_id = store.find(target)
+        if session_id is None:
+            return None
+        store.set_pinned(session_id, pinned)
+        return session_id
+
+    def archive_session(self, target: str, archived: bool) -> str | None:
+        """Archiva o desarchiva una conversación (conserva sus turnos).
+
+        Si se archiva la activa, se pasa a otra sin archivar (misma elección que la app y la
+        CLI); si no queda ninguna, no hay conversación activa.
+        """
+        store = SessionStore(self.project_root)
+        session_id = store.find(target)
+        if session_id is None:
+            return None
+        store.set_archived(session_id, archived)
+        if archived and store.active_id() == session_id:
+            destino = store.next_active_after_archive(session_id)
+            if destino is not None:
+                try:
+                    if self.use_session(destino) is None:
+                        store.set_active(destino)
+                except Exception:  # noqa: BLE001 — sin runtime basta con mover el puntero
+                    store.set_active(destino)
+        return session_id
+
+    def use_workdir(self, path: str | None):
+        """Activa (``None``/``""`` = proyecto) el workdir de ejecución y rearma el runtime.
+
+        Reutiliza ``gitops.set_active_workdir`` (misma validación que la app y la CLI) y
+        olvida runtime/chat para que el siguiente turno se arme con ese workdir. No cambia
+        la conversación activa.
+        """
+        from satellite import gitops
+
+        efectivo = gitops.set_active_workdir(self.project_root, path)
+        self._runtime = None
+        self._chat = None
+        return efectivo
 
     def conversation(self) -> tuple[Turn, ...]:
         """Turnos de la conversación actual."""
