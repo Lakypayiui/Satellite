@@ -1855,6 +1855,9 @@ class DesktopBackend:
         root = self.resolve(project_root)
         self.session(project_root).paths()
         FileStore(root).migrate()
+        from satellite.context.project_index import ProjectIndex
+
+        ProjectIndex(root).ensure_persisted()
         return self.status(project_root)
 
     def remove_provider(self, provider_id: str, project_root=None) -> dict:

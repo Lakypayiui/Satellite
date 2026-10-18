@@ -83,6 +83,21 @@ def test_without_history_there_is_no_conversation_block(tmp_path: Path) -> None:
     assert "CONVERSACIÓN RECIENTE" not in _enviado(provider)
 
 
+def test_direct_answer_receives_project_index_context(tmp_path: Path) -> None:
+    provider = FakeLLM(script=[{"content": "Es una aplicación de ejemplo."}])
+    orch = _orchestrator(provider)
+    task = Task(
+        goal="¿De qué trata este proyecto?",
+        project_root=tmp_path,
+        metadata={"project_context": "README.md: aplicación de ejemplo"},
+    )
+
+    run(orch._answer_direct(task))
+
+    assert "CONTEXTO DEL PROYECTO" in _enviado(provider)
+    assert "aplicación de ejemplo" in _enviado(provider)
+
+
 # --- nodos del grafo ---
 
 

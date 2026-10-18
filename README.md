@@ -62,6 +62,26 @@ no web console.
   `ProviderConfig.model_overrides` stays out of equality/hashing to keep the
   configuration hashable (it is plumbing, not identity).
 
+### Project context index
+
+`satellite/context/project_index.py` keeps a lightweight **structural** index of the
+project at `.satellite/context/index.json`. Per file it stores the path, size, `mtime_ns`
+and the symbols and imports found by language (Python `def`/`class`/`import`, TS/JS, C/C++,
+Go, Rust, Java, …). It keeps **paths and structure only — never file contents**, and skips
+anything that looks like a secret (`.env*`, `*secret*`, `*credential*`, `*.pem`/`.key`/`.p12`/…)
+together with the ignored directories (`.git`, `.venv`, `node_modules`, `build`/`dist`/`out`
+and the tool caches `.pytest_cache`/`.mypy_cache`/`.ruff_cache`/…).
+
+The index is rebuilt **incrementally** — only files whose `mtime`/size changed are re-parsed,
+the rest reuse the structure already saved — on `satellite init`, when the desktop
+*initialize*s a project and at the start of every turn. A bounded view of it (a two-level
+tree plus the most relevant README/entry-point excerpts, capped at 12 000 chars) is then
+attached **automatically**, so a question like *"¿de qué trata este proyecto?"* is answered
+from the real README and entry points instead of being guessed: the planner receives it in
+its `{context}` slot, graph nodes as a `SUMMARY` section and the conversational reply as
+well. It always travels framed as **data, never instructions**, the same untrusted-data rule
+as every other retrieved excerpt.
+
 ## Sandbox and skill memoization
 
 - **N0 (default)** — subprocess with a clean environment and a timeout. It does not
@@ -169,7 +189,7 @@ satellite/
 ├── approval/         # approval port + policies (CLI, TUI, MCP)
 ├── cli/              # Typer CLI, provider configurator, runtime builder
 ├── config/           # provider catalog, saved-provider rules, model listing
-├── context/          # context engine + compaction (window, bar, summary)
+├── context/          # context engine + compaction + persisted structural project index
 ├── core/             # contracts: messages, usage, specs, plans, proposals
 ├── kernel/           # paths, policy, manifest verification, audit, migrations
 ├── mcp/              # MCP server

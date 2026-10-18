@@ -3,11 +3,27 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
 import re
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
-IGNORED_DIRS = {".git", ".venv", "node_modules", ".satellite", "__pycache__", "build", "dist"}
+IGNORED_DIRS = {
+    ".git", ".venv", "venv", "node_modules", ".satellite", ".agent",
+    "__pycache__", "build", "dist", "out",
+    ".pytest_cache", ".mypy_cache", ".ruff_cache", ".idea", ".vscode",
+}
+_MAX_INDEX_FILE_BYTES = 1_000_000
+_MAX_CONTEXT_CHARS = 12_000
+_SECRET_NAMES = {".env", "credentials", "secrets", "id_rsa", "id_ed25519"}
+_TEXT_SUFFIXES = {
+    ".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".json",
+    ".toml", ".yaml", ".yml", ".md", ".rst", ".txt", ".html", ".css",
+    ".scss", ".sql", ".sh", ".ps1", ".bat", ".c", ".h", ".cpp", ".hpp",
+    ".go", ".rs", ".java", ".kt", ".swift", ".xml", ".ini", ".cfg",
+}
 
 # Patrones por lenguaje para detectar funciones, clases e imports
 _LANG_PATTERNS: dict[str, dict[str, re.Pattern]] = {
@@ -52,10 +68,154 @@ class ProjectIndex:
     """Índice incremental ligero por mtime + análisis estructural bajo demanda."""
 
     def __init__(self, project_root: Path) -> None:
-        self.project_root = project_root
+        self.project_root = Path(project_root).resolve()
         self._stats: dict[str, dict] = {}  # relpath -> {size, mtime_ns}
         self._structure: dict[str, dict] = {}  # relpath -> {functions, classes, imports}
         self._dir_cache: dict[Path, list[Path]] = {}  # dir -> archivos listados
+        self._ensured = False  # el índice persistido ya se cargó/actualizó al menos una vez
+        self.index_path = self.project_root / ".satellite" / "context" / "index.json"
+
+    def ensure_persisted(self) -> None:
+        """Carga el índice estático guardado y lo actualiza si cambió el proyecto.
+
+        El JSON guarda únicamente rutas y metadatos estructurales; nunca contenido.
+        """
+        saved: dict[str, dict] = {}
+        payload: dict = {}
+        valid_snapshot = False
+        try:
+            loaded = json.loads(self.index_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                payload = loaded
+            if payload.get("schema") == 1 and payload.get("root") == str(self.project_root):
+                valid_snapshot = True
+                saved = {
+                    str(item["path"]): item
+                    for item in payload.get("files", [])
+                    if isinstance(item, dict) and isinstance(item.get("path"), str)
+                }
+        except (OSError, ValueError, TypeError):
+            pass
+
+        paths = self.list_project_files()
+        current: dict[str, dict] = {}
+        for path in paths:
+            rel = self._relpath(path)
+            stat = self.stat(path)
+            if stat is None:
+                continue
+            current[rel] = stat
+            previous = saved.get(rel, {})
+            if previous.get("mtime_ns") == stat["mtime_ns"] and previous.get("size") == stat["size"]:
+                self._stats[rel] = stat
+                self._structure[rel] = {
+                    key: previous.get(key, []) for key in ("functions", "classes", "imports")
+                }
+            else:
+                self.refresh(path)
+                self.structure(path)
+
+        # A partir de aquí el índice en memoria cubre TODO el proyecto, aunque la
+        # escritura a disco falle (p. ej. proyecto de solo lectura).
+        self._ensured = True
+
+        records = []
+        for rel in sorted(current):
+            stat = current[rel]
+            structure = self._structure.get(rel, {"functions": [], "classes": [], "imports": []})
+            records.append({"path": rel, **stat, **structure})
+        if valid_snapshot and payload.get("files", []) == records:
+            return
+        payload = {
+            "schema": 1,
+            "root": str(self.project_root),
+            "built_at": datetime.now(timezone.utc).isoformat(),
+            "files": records,
+        }
+        try:
+            self.index_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, temp_name = tempfile.mkstemp(prefix="index-", suffix=".tmp", dir=self.index_path.parent)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                    json.dump(payload, stream, ensure_ascii=False, indent=2)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temp_name, self.index_path)
+            finally:
+                if os.path.exists(temp_name):
+                    os.unlink(temp_name)
+        except OSError:
+            # El índice en memoria sigue siendo útil en proyectos de solo lectura.
+            return
+
+    def context_for_goal(self, goal: str, *, max_chars: int = _MAX_CONTEXT_CHARS) -> str:
+        """Crea una vista compacta del proyecto y añade archivos pertinentes al goal."""
+        if not self._ensured:
+            self.ensure_persisted()
+        rels = sorted(self._stats)
+        if not rels:
+            return ""
+
+        words = {word.lower() for word in re.findall(r"[\w.-]{3,}", goal)}
+        explain = bool(re.search(
+            r"\b(qué|que|trata|describe|explica|explique|resumen|resum|hace|overview|about|"
+            r"arquitectura|funciona|consiste)\b", goal, re.I
+        ))
+        ranked: list[tuple[int, str, Path]] = []
+        for rel in rels:
+            path = self.project_root / rel
+            name = Path(rel).name.lower()
+            score = sum(1 for word in words if word in rel.lower()) * 3
+            if name in {"readme.md", "readme.rst", "readme.txt"}:
+                score += 100 if explain else 12
+            if name in {"pyproject.toml", "package.json", "cargo.toml", "go.mod", "requirements.txt"}:
+                score += 15 if explain else 2
+            if explain and ("main." in name or name in {"app.py", "__main__.py", "index.ts", "index.js"}):
+                score += 8
+            ranked.append((score, rel, path))
+        if explain and not any(Path(rel).name.lower().startswith("readme") for rel in rels):
+            code_exts = set(_LANG_PATTERNS)
+            representatives = [item for item in ranked if item[2].suffix.lower() in code_exts]
+            representatives.sort(key=lambda item: (-self._stats.get(item[1], {}).get("size", 0), item[1]))
+            selected_reps = {item[1] for item in representatives[:5]}
+            ranked = [(score + (5 if rel in selected_reps else 0), rel, path) for score, rel, path in ranked]
+        ranked.sort(key=lambda item: (-item[0], item[1]))
+
+        lines = ["Índice estructural del proyecto (árbol hasta dos niveles):"]
+        tree = [rel for rel in rels if rel.count("/") <= 1]
+        lines.extend(f"- {rel}" for rel in tree[:100])
+        remaining = max(0, max_chars - sum(len(line) + 1 for line in lines))
+        selected = [item for item in ranked if item[0] > 0][:6]
+        for _, rel, path in selected:
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in _TEXT_SUFFIXES or not self._safe_index_file(path):
+                continue
+            try:
+                content = path.read_text(encoding="utf-8", errors="replace")[:4000]
+            except OSError:
+                continue
+            block = f"\n--- {rel} ---\n{content}"
+            if len(block) > remaining:
+                block = block[:remaining]
+            if block:
+                lines.append(block)
+                remaining -= len(block)
+            if remaining <= 0:
+                break
+        return "\n".join(lines)[:max_chars]
+
+    def _safe_index_file(self, path: Path) -> bool:
+        name = path.name.lower()
+        if name in _SECRET_NAMES or name.startswith(".env") or any(token in name for token in ("secret", "credential")):
+            return False
+        if path.suffix.lower() in {".pem", ".key", ".p12", ".pfx", ".keystore"}:
+            return False
+        try:
+            path.resolve().relative_to(self.project_root)
+            return path.stat().st_size <= _MAX_INDEX_FILE_BYTES
+        except (OSError, ValueError):
+            return False
 
     def stat(self, path: Path) -> dict | None:
         """Devuelve {size, mtime_ns} del path, o None si no existe."""
@@ -154,6 +314,9 @@ class ProjectIndex:
             root = Path(raw_root)
             dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
             for name in names:
+                candidate = root / name
+                if not self._safe_index_file(candidate):
+                    continue
                 rel = (root / name).relative_to(self.project_root)
                 rel_str = rel.as_posix()
                 if patterns and not any(fnmatch.fnmatch(rel_str, p) for p in patterns):

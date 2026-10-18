@@ -141,6 +141,74 @@ def test_index_all_imports(tmp_path: Path) -> None:
     assert any("os" in names for names in imports.values())
 
 
+def test_index_persists_structure_without_secret_files(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("Aplicación de ejemplo", encoding="utf-8")
+    (tmp_path / "app.py").write_text("def run():\n    pass\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("API_KEY=never-store", encoding="utf-8")
+
+    index = ProjectIndex(tmp_path)
+    index.ensure_persisted()
+
+    saved = (tmp_path / ".satellite" / "context" / "index.json").read_text(encoding="utf-8")
+    assert "app.py" in saved
+    assert "run" in saved
+    assert "never-store" not in saved
+    assert ".env" not in saved
+
+
+def test_index_context_includes_readme_for_project_questions(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("Satellite administra tareas locales.", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("def run():\n    pass\n", encoding="utf-8")
+    index = ProjectIndex(tmp_path)
+    index.ensure_persisted()
+
+    context = index.context_for_goal("¿De qué trata este proyecto?")
+
+    assert "README.md" in context
+    assert "Satellite administra tareas locales" in context
+    assert "src/app.py" in context
+
+
+def test_index_context_falls_back_to_entrypoints_without_readme(tmp_path: Path) -> None:
+    (tmp_path / "main.py").write_text("def main():\n    print('app')\n", encoding="utf-8")
+    index = ProjectIndex(tmp_path)
+    index.ensure_persisted()
+
+    context = index.context_for_goal("¿De qué trata el proyecto?")
+
+    assert "main.py" in context
+    assert "def main" in context
+
+
+def test_context_for_goal_builds_full_index_when_stats_are_partial(tmp_path: Path) -> None:
+    """Resolver una @mención deja `_stats` parcial: el contexto no puede salir a medias."""
+    (tmp_path / "README.md").write_text("Proyecto demo", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("def run():\n    pass\n", encoding="utf-8")
+
+    index = ProjectIndex(tmp_path)
+    index.refresh(tmp_path / "src" / "app.py")  # `_stats` con un solo archivo
+    context = index.context_for_goal("¿De qué trata este proyecto?")
+
+    assert "README.md" in context
+    assert "Proyecto demo" in context
+
+
+def test_index_ignores_cache_directories(tmp_path: Path) -> None:
+    """Las cachés de herramientas no son código del proyecto."""
+    (tmp_path / "app.py").write_text("def run():\n    pass\n", encoding="utf-8")
+    (tmp_path / ".pytest_cache").mkdir()
+    (tmp_path / ".pytest_cache" / "README.md").write_text("ruido", encoding="utf-8")
+
+    index = ProjectIndex(tmp_path)
+    index.ensure_persisted()
+
+    saved = (tmp_path / ".satellite" / "context" / "index.json").read_text(encoding="utf-8")
+    assert "app.py" in saved
+    assert ".pytest_cache" not in saved
+
+
 # ---------- Observability ----------
 
 def test_execution_logger_roundtrip(tmp_path: Path) -> None:

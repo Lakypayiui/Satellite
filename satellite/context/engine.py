@@ -27,6 +27,7 @@ class DefaultContextEngine(ContextEngine):
         self.project_root = project_root
         self.default_limits = limits
         self.resolver = resolver or ContextResolver(project_root, ProjectIndex(project_root))
+        self.resolver.index.ensure_persisted()
         self._snapshots: dict[str, ContextSnapshot] = {}
         self._last_bundle: ContextBundle | None = None
 
