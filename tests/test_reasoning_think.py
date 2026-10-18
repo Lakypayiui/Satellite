@@ -6,8 +6,14 @@ salen de su API oficial documentada (``thinking: {type: enabled|disabled}`` y
 """
 
 import asyncio
+import pytest
 
 from satellite.config import providers as pconfig
+
+
+@pytest.fixture(autouse=True)
+def isolate_global_providers(tmp_path, monkeypatch):
+    monkeypatch.setenv("SATELLITE_HOME", str(tmp_path / "global"))
 from satellite.core.messages import LLMRequest, Message, Role
 from satellite.providers.capabilities import (
     effort_metadata,
@@ -118,12 +124,12 @@ def test_explicit_override_declares_think_for_a_custom_model() -> None:
 def test_think_on_sends_thinking_enabled_and_effort() -> None:
     sent = _sent(reasoning_effort="high", thinking=True)
     assert sent["reasoning_effort"] == "high"
-    assert sent["thinking"] == {"type": "enabled"}
+    assert sent["extra_body"]["thinking"] == {"type": "enabled"}
 
 
 def test_think_off_sends_thinking_disabled_without_a_fake_effort() -> None:
     sent = _sent(reasoning_effort="high", thinking=False)
-    assert sent["thinking"] == {"type": "disabled"}
+    assert sent["extra_body"]["thinking"] == {"type": "disabled"}
     assert "reasoning_effort" not in sent
 
 
@@ -131,11 +137,11 @@ def test_auto_sends_no_parameters_and_unknown_effort_is_dropped() -> None:
     sent = _sent(reasoning_effort="auto", thinking=True)
     assert "reasoning_effort" not in sent
     # Think encendido sí viaja explícitamente (el modelo lo declara).
-    assert sent["thinking"] == {"type": "enabled"}
+    assert sent["extra_body"]["thinking"] == {"type": "enabled"}
 
     sent = _sent(reasoning_effort="inventado", thinking=None)
     assert "reasoning_effort" not in sent
-    assert "thinking" not in sent
+    assert "extra_body" not in sent
 
 
 def test_effort_off_uses_the_declared_off_value() -> None:
@@ -155,7 +161,7 @@ def test_non_reasoning_model_sends_nothing_extra() -> None:
     run(provider.complete(make_request()))
     sent = client.calls[-1]
     assert "reasoning_effort" not in sent
-    assert "thinking" not in sent
+    assert "extra_body" not in sent
 
 
 # --- persistencia por proveedor+modelo --------------------------------------
@@ -171,7 +177,7 @@ def test_provider_think_persists_per_provider_and_model(tmp_path) -> None:
         think=True,
     )
     assert saved.think is True
-    data = pconfig.load_config(tmp_path)
+    data = pconfig.runtime_config(tmp_path)
     entry = data["providers"][0]
     assert entry["think"] is True
     assert entry["reasoning_effort"] == "high"
@@ -194,11 +200,9 @@ def test_saved_think_reaches_the_provider_config(tmp_path) -> None:
         think=True,
     )
     # El camino global exige los campos de nivel superior (como el config real).
-    data = pconfig.load_config(tmp_path)
-    data["name"], data["model"] = "deepseek", "deepseek-flash"
-    pconfig.save_config(tmp_path, data)
+    data = pconfig.runtime_config(tmp_path)
 
-    cfg = _provider_config_from(pconfig.load_config(tmp_path))
+    cfg = _provider_config_from(data)
     assert cfg is not None
     assert cfg.thinking is True
     assert cfg.reasoning_effort == "max"
@@ -218,7 +222,7 @@ def test_role_think_is_stored_and_propagated(tmp_path) -> None:
         tmp_path,
         {"orchestrator": {"provider": saved.id, "think": False, "reasoning_effort": "high"}},
     )
-    data = pconfig.load_config(tmp_path)
+    data = pconfig.runtime_config(tmp_path)
     assert data["llm"]["orchestrator"]["think"] is False
     cfg = _provider_config_from(data, role="orchestrator")
     assert cfg is not None

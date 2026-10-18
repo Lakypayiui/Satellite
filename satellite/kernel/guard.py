@@ -6,8 +6,8 @@ Modelo de zonas:
   declaradas (``allowed_paths``) y los catálogos del runtime
   (``agents_root``/``skills_root``).
 - **Protegido, y gana**: el paquete (``satellite/``, resuelto en runtime), el
-  estado del framework (``<project_data>/state``), la auditoría y la
-  configuración (``<project_data>/config``, que guarda la clave del proveedor).
+  estado del framework (``<project_data>/state``), la auditoría, la configuración
+  del proyecto y la configuración global (``<global_root>/config``, que guarda claves).
 
 El veto se evalúa sobre la ruta **ya resuelta**, así que un symlink del workspace
 hacia una zona protegida cae solo. Control determinista (no depende del LLM).
@@ -55,6 +55,9 @@ def protected_zone(
     audit = Path(paths.audit_root).resolve()
     if _is_within(resolved, audit):
         return "audit"
+    global_config = (Path(paths.global_root) / "config").resolve()
+    if _is_within(resolved, global_config):
+        return "config"
     project_data = getattr(paths, "project_data", None)
     if project_data is not None:
         data = Path(project_data).resolve()

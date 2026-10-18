@@ -219,7 +219,11 @@ class Edge:
 
 @dataclass(frozen=True)
 class GraphLimits:
-    """Límites globales del grafo (acotan ciclos y trabajo)."""
+    """Límites globales del grafo (acotan ciclos, duración y llamadas).
+
+    ``token_budget`` se comprueba al terminar cada nodo, cuando el proveedor devuelve
+    métricas; no puede detener una llamada a mitad de respuesta.
+    """
 
     max_total_steps: int = 100
     max_node_visits: int = 10
@@ -236,6 +240,8 @@ class GraphLimits:
             raise ContractError("GraphLimits: max_retries_global debe ser >= 0")
         if self.timeout_s <= 0:
             raise ContractError("GraphLimits: timeout_s debe ser > 0")
+        if self.token_budget is not None and self.token_budget <= 0:
+            raise ContractError("GraphLimits: token_budget debe ser > 0 o None")
 
     def to_dict(self) -> dict:
         return {
@@ -336,7 +342,13 @@ class ExecutionGraph:
                 )
 
         if self.nodes and self.entry_node in self.nodes:
-            reachable = self._reachable_from(self.entry_node)
+            incoming = {edge.target for edge in self.edges if edge.target in self.nodes}
+            roots = [node_id for node_id in self.nodes if node_id not in incoming]
+            if not roots:
+                roots = [self.entry_node]
+            reachable: set[str] = set()
+            for root in roots:
+                reachable.update(self._reachable_from(root))
             for node_id in self.nodes:
                 if node_id not in reachable:
                     problems.append(

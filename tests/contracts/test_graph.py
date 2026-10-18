@@ -103,7 +103,10 @@ def test_validate_unreachable_node_raises() -> None:
     graph.add_node(Node(id="n1", spec_id="s"))
     graph.add_node(Node(id="n2", spec_id="s"))
     graph.add_edge(Edge(id="e1", source="n1", target="n2"))
-    graph.add_node(Node(id="n3", spec_id="s"))  # sin arista desde n1/n2
+    graph.add_node(Node(id="n3", spec_id="s"))
+    graph.add_node(Node(id="n4", spec_id="s"))
+    graph.add_edge(Edge(id="e2", source="n3", target="n4"))
+    graph.add_edge(Edge(id="e3", source="n4", target="n3"))  # componente cíclico aislado
     with pytest.raises(GraphValidationError):
         graph.validate()
 

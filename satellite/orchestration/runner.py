@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -86,11 +87,26 @@ class DefaultGraphRunner(GraphRunner):
         started = time.monotonic()
 
         # 4. Frontera inicial
-        entry = graph.entry_node
-        initial_task = dict(graph.nodes[entry].task) if graph.nodes[entry].task else {"goal": task.goal}
-        frontier: list[tuple[str, dict]] = [
-            (entry, {"task": initial_task, "feedback": None, "context_refs": list(graph.nodes[entry].context_refs)})
-        ]
+        # Graph plans may contain several independent roots. Start all of them;
+        # retain entry_node as the compatibility fallback for cyclic graphs.
+        incoming = {edge.target for edge in graph.edges}
+        roots = [node_id for node_id in graph.nodes if node_id not in incoming]
+        if not roots:
+            roots = [graph.entry_node]
+        # For acyclic plans, hold a shared downstream node until every incoming
+        # dependency has produced an active edge. Feedback cycles keep their
+        # existing event-driven scheduling semantics.
+        is_dag = _is_acyclic(graph)
+        join_sources: dict[str, set[str]] = {}
+        if is_dag:
+            for edge in graph.edges:
+                join_sources.setdefault(edge.target, set()).add(edge.source)
+            join_sources = {target: sources for target, sources in join_sources.items() if len(sources) > 1}
+        join_arrivals: dict[str, dict[str, dict]] = {}
+        frontier: list[tuple[str, dict]] = []
+        for entry in roots:
+            initial_task = dict(graph.nodes[entry].task) if graph.nodes[entry].task else {"goal": task.goal}
+            frontier.append((entry, {"task": initial_task, "feedback": None, "context_refs": list(graph.nodes[entry].context_refs)}))
 
         # 5. Bucle de trabajo
         while frontier:
@@ -104,6 +120,13 @@ class DefaultGraphRunner(GraphRunner):
             cancel = getattr(services, "cancel", None)
             if cancel is not None and getattr(cancel, "cancelled", False):
                 return self._cancelled(task, sink, node_id, cancel, results, attempts, started)
+
+            if time.monotonic() - started >= graph.limits.timeout_s:
+                return self._abort(
+                    task, sink, node_id,
+                    f"límite timeout_s={graph.limits.timeout_s} superado",
+                    results, attempts, started,
+                )
 
             # Límites
             if total_steps > graph.limits.max_total_steps:
@@ -137,7 +160,17 @@ class DefaultGraphRunner(GraphRunner):
             refs = tuple(refs) + user_refs(task) + instructions_ref(task)
             bundle = ContextBundle()
             if engine is not None and refs:
-                bundle = await engine.resolve(refs)
+                remaining = graph.limits.timeout_s - (time.monotonic() - started)
+                try:
+                    bundle = await asyncio.wait_for(
+                        engine.resolve(refs), timeout=max(0.001, remaining)
+                    )
+                except asyncio.TimeoutError:
+                    return self._abort(
+                        task, sink, node_id,
+                        f"límite timeout_s={graph.limits.timeout_s} superado al resolver contexto",
+                        results, attempts, started,
+                    )
             bundle = _with_conversation(bundle, task)
 
             # Agente
@@ -156,7 +189,17 @@ class DefaultGraphRunner(GraphRunner):
                 # Y el token, para que el agente pueda parar entre llamadas.
                 cancel=getattr(services, "cancel", None),
             )
-            result = await agent.execute(entrada["task"], agent_ctx)
+            remaining = graph.limits.timeout_s - (time.monotonic() - started)
+            try:
+                result = await asyncio.wait_for(
+                    agent.execute(entrada["task"], agent_ctx), timeout=max(0.001, remaining)
+                )
+            except asyncio.TimeoutError:
+                return self._abort(
+                    task, sink, node_id,
+                    f"límite timeout_s={graph.limits.timeout_s} superado durante '{node_id}'",
+                    results, attempts, started,
+                )
             results[node_id] = result
 
             # Un nodo cancelado no es una salida del grafo: la tarea se para aquí, y como
@@ -214,8 +257,10 @@ class DefaultGraphRunner(GraphRunner):
             # Sucesores
             edges = graph.successors(node_id, result)
             if not edges:
-                if len(frontier) == 0 and result.status is AgentStatus.OK:
-                    break  # fin normal
+                if result.status is AgentStatus.OK:
+                    if not frontier:
+                        break  # última hoja completada
+                    continue  # una rama puede acabar antes que sus hermanas
                 return self._abort(
                     task, sink, node_id,
                     f"dead-end: nodo '{node_id}' sin salida para estado {result.status.value}",
@@ -227,6 +272,12 @@ class DefaultGraphRunner(GraphRunner):
                 # Reintentos en ciclos
                 if target in results and results[target].status is not AgentStatus.OK:
                     attempts[target] = attempts.get(target, 0) + 1
+                    if sum(attempts.values()) > graph.limits.max_retries_global:
+                        return self._abort(
+                            task, sink, target,
+                            f"límite max_retries_global={graph.limits.max_retries_global} superado",
+                            results, attempts, started,
+                        )
                     if attempts[target] > graph.nodes[target].max_retries:
                         self._emit(
                             sink,
@@ -249,7 +300,15 @@ class DefaultGraphRunner(GraphRunner):
                     )
 
                 target_entrada = self._build_target_entry(graph, node, edge, result, entrada, bundle)
-                frontier.append((target, target_entrada))
+                required = join_sources.get(target)
+                if required:
+                    arrivals = join_arrivals.setdefault(target, {})
+                    arrivals[node_id] = target_entrada
+                    if required.issubset(arrivals):
+                        frontier.append((target, _merge_join_entries(arrivals, required)))
+                        join_arrivals.pop(target, None)
+                else:
+                    frontier.append((target, target_entrada))
 
         # 6. Fin normal
         duration = int((time.monotonic() - started) * 1000)
@@ -396,3 +455,38 @@ def _get_path(obj: Any, path: str | None) -> Any:
         else:
             return None
     return current
+
+
+def _is_acyclic(graph: ExecutionGraph) -> bool:
+    """Return whether the graph is a DAG (ignoring parallel edges)."""
+    indegree = {node_id: 0 for node_id in graph.nodes}
+    outgoing: dict[str, set[str]] = {node_id: set() for node_id in graph.nodes}
+    for edge in graph.edges:
+        if edge.target not in outgoing[edge.source]:
+            outgoing[edge.source].add(edge.target)
+            indegree[edge.target] += 1
+    ready = [node_id for node_id, count in indegree.items() if count == 0]
+    visited = 0
+    while ready:
+        current = ready.pop()
+        visited += 1
+        for target in outgoing[current]:
+            indegree[target] -= 1
+            if indegree[target] == 0:
+                ready.append(target)
+    return visited == len(graph.nodes)
+
+
+def _merge_join_entries(entries: dict[str, dict], required: set[str]) -> dict:
+    """Combine upstream task fields and feedback in stable node order."""
+    merged = {"task": {}, "feedback": [], "context_refs": []}
+    for source in sorted(required):
+        entry = entries[source]
+        merged["task"].update(entry.get("task", {}))
+        merged["feedback"].extend(entry.get("feedback") or ())
+        for ref in entry.get("context_refs", ()):
+            if ref not in merged["context_refs"]:
+                merged["context_refs"].append(ref)
+    if not merged["feedback"]:
+        merged["feedback"] = None
+    return merged

@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import pytest
 
 from typer.testing import CliRunner
 
@@ -18,7 +19,12 @@ runner = CliRunner(env={"COLUMNS": "200", "NO_COLOR": "1", "TERM": "dumb"})
 
 
 def read(root: Path) -> dict:
-    return json.loads((root / pconfig.CONFIG_PATH).read_text(encoding="utf-8"))
+    return pconfig.runtime_config(root)
+
+
+@pytest.fixture(autouse=True)
+def isolate_global_providers(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SATELLITE_HOME", str(tmp_path / "global"))
 
 
 def run(*args: str):

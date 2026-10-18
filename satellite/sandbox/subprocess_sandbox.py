@@ -16,7 +16,7 @@ from satellite.sandbox.base import (
 
 
 class SubprocessSandbox(SandboxRunner):
-    """Nivel N0: subproceso sin red por defecto y con allowlist de comandos."""
+    """Nivel N0: subproceso con entorno limpio y allowlist, sin aislamiento de red."""
 
     level = SandboxLevel.N0
 

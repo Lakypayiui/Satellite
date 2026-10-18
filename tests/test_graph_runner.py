@@ -30,6 +30,7 @@ class FakeAgent(Agent):
     async def execute(self, task: dict, ctx: AgentContext) -> AgentResult:
         self.calls += 1
         self.last_ctx = ctx
+        self.last_task = dict(task)
         return AgentResult(
             node_id=ctx.node_id,
             spec_id=self.spec_id,
@@ -111,6 +112,39 @@ def test_execution_order_A_B_C(tmp_path: Path) -> None:
     assert result.output["step"] == "C"
     assert factory.agents["sA"].calls == 1
     assert factory.agents["sB"].calls == 1
+    assert factory.agents["sC"].calls == 1
+
+
+def test_multiple_roots_join_after_both_predecessors(tmp_path: Path) -> None:
+    factory = FakeFactory({
+        "sA": {"output": {"from_a": 1}},
+        "sB": {"output": {"from_b": 2}},
+        "sC": {"output": {"joined": True}},
+    })
+    graph = ExecutionGraph(entry_node="a")
+    for node, spec in (("a", "sA"), ("b", "sB"), ("c", "sC")):
+        graph.add_node(Node(id=node, spec_id=spec))
+    graph.add_edge(Edge(id="ac", source="a", target="c", payload="result"))
+    graph.add_edge(Edge(id="bc", source="b", target="c", payload="result"))
+
+    result = run(DefaultGraphRunner(factory).run(graph, make_task(tmp_path), RuntimeServices(factory=factory)))
+
+    assert result.status.value == "ok"
+    assert factory.agents["sC"].calls == 1
+    assert factory.agents["sC"].last_task["from_a"] == 1
+    assert factory.agents["sC"].last_task["from_b"] == 2
+
+
+def test_terminal_branch_does_not_abort_sibling_branch(tmp_path: Path) -> None:
+    factory = FakeFactory({"sA": {}, "sB": {}, "sC": {"output": {"done": True}}})
+    graph = ExecutionGraph(entry_node="a")
+    for node, spec in (("a", "sA"), ("b", "sB"), ("c", "sC")):
+        graph.add_node(Node(id=node, spec_id=spec))
+    graph.add_edge(Edge(id="bc", source="b", target="c", payload="result"))
+
+    result = run(DefaultGraphRunner(factory).run(graph, make_task(tmp_path), RuntimeServices(factory=factory)))
+
+    assert result.status.value == "ok"
     assert factory.agents["sC"].calls == 1
 
 

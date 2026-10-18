@@ -383,7 +383,8 @@ def test_chat_uses_the_window_declared_by_the_provider(tmp_path: Path, monkeypat
     assert usage.window_tokens == 65_536
     assert usage.window_source == "proveedor"
     assert calls and calls[0]["base_url"] == "https://api.ejemplo/v1"
-    assert calls[0]["api_key"] == "k"
+    # Las claves que queden en el config del proyecto se ignoran.
+    assert calls[0]["api_key"] == ""
 
     # segunda sesión: tira de la cache en disco, sin consultar la red
     monkeypatch.setattr(

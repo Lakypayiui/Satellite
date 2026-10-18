@@ -319,6 +319,7 @@ export function ModelEditor(props: Props) {
       </header>
 
       <div className="editor-cuerpo">
+        <p className="nota" role="note">{t("editor.global.note")}</p>
         <nav className="editor-indice" aria-label={t("editor.sections.aria")}>
           {SECCIONES.map((seccion) => (
             <a

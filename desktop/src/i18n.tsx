@@ -754,8 +754,8 @@ export const TEXTOS = {
   },
   "settings.permissions.meta.safe": { es: " · modo seguro", en: " · safe mode" },
   "settings.permissions.sandbox.note.a": {
-    es: "Sandbox {nivel}. N0 es aislamiento de proceso (entorno limpio, sin red, con tiempo límite): ",
-    en: "Sandbox {nivel}. N0 is process isolation (clean environment, no network, with a time limit): ",
+    es: "Sandbox {nivel}. N0 usa un subproceso y un límite de tiempo; no bloquea el acceso a la red: ",
+    en: "Sandbox {nivel}. N0 uses a subprocess and a time limit; it does not block network access: ",
   },
   "settings.permissions.sandbox.note.no": { es: "no", en: "it does not" },
   "settings.permissions.sandbox.note.b": {
@@ -1129,6 +1129,10 @@ export const TEXTOS = {
   "editor.sections.aria": { es: "secciones del modelo", en: "model sections" },
   "editor.header.back": { es: "← Modelos", en: "← Models" },
   "editor.header.back.title": { es: "Esc · volver a Modelos", en: "Esc · back to Models" },
+  "editor.global.note": {
+    es: "Este proveedor y su clave quedan guardados en la configuración global y estarán disponibles para todos tus proyectos.",
+    en: "This provider and its key are saved in global settings and will be available to all your projects.",
+  },
   "editor.title.add": { es: "Agregar modelo", en: "Add model" },
   "editor.title.edit": { es: "Editar modelo", en: "Edit model" },
   "editor.model.none": { es: "sin modelo", en: "no model" },

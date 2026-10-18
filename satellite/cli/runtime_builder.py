@@ -449,7 +449,9 @@ def _load_provider(project_root: Path) -> LLMProvider:
     config_path = project_root / CONFIG_PATH
     if config_path.exists():
         try:
-            data = json.loads(config_path.read_text(encoding="utf-8"))
+            from satellite.config.providers import runtime_config
+
+            data = runtime_config(project_root)
             cfg = _provider_config_from(data, role="orchestrator") or _provider_config_from(data)
             if cfg is None:
                 raise ProviderError("config sin proveedor")
@@ -459,10 +461,17 @@ def _load_provider(project_root: Path) -> LLMProvider:
                 f"config de proveedor inválida en {config_path}: {exc}. "
                 "Configura un proveedor válido con 'satellite provider'."
             ) from exc
+    # A provider selected globally is usable even if the current project has no
+    # local config file yet.
+    from satellite.config.providers import runtime_config
+
+    data = runtime_config(project_root)
+    cfg = _provider_config_from(data, role="orchestrator") or _provider_config_from(data)
+    if cfg is not None:
+        return ProviderFactory.create(cfg)
     raise ProviderError(
-        f"no hay proveedor LLM configurado: falta {config_path}. "
-        "Configura un proveedor (p. ej. {'name': 'openai', 'model': '...', "
-        "'api_key': '...'}) o crea el archivo config.json para ejecutar tareas."
+        f"no hay proveedor global configurado: {config_path}. "
+        "Configura uno desde satellite provider o desde Ajustes globales."
     )
 
 
@@ -472,7 +481,9 @@ def _role_provider(project_root: Path, role: str, default: LLMProvider) -> LLMPr
     if not config_path.exists():
         return default
     try:
-        data = json.loads(config_path.read_text(encoding="utf-8"))
+        from satellite.config.providers import runtime_config
+
+        data = runtime_config(project_root)
         cfg = _provider_config_from(data, role=role)
         if cfg is None:
             return default

@@ -27,8 +27,9 @@ def make_app(tmp_path: Path, monkeypatch) -> SatelliteTUI:
 
 
 def read_config(tmp_path: Path) -> dict:
-    path = tmp_path / ".satellite" / "config" / "config.json"
-    return json.loads(path.read_text(encoding="utf-8"))
+    from satellite.config import providers as pconfig
+
+    return pconfig.runtime_config(tmp_path)
 
 
 def option(key: str) -> SimpleNamespace:

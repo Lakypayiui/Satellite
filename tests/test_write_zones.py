@@ -48,13 +48,15 @@ def test_every_protected_zone_is_refused_by_name(tmp_path: Path, monkeypatch) ->
         "state": Path(paths.project_data) / "state" / "skill_cache.json",
         "audit": Path(paths.audit_root) / "audit.jsonl",
         "config": Path(paths.project_data) / "config" / "config.json",
+        "global_config": Path(paths.global_root) / "config" / "providers.json",
     }
     for expected, target in cases.items():
-        assert protected_zone(target, paths) == expected, target
+        zone = "config" if expected == "global_config" else expected
+        assert protected_zone(target, paths) == zone, target
         assert is_write_allowed(target, paths, workspace=project) is False, target
         with pytest.raises(KernelWriteError) as excinfo:
             assert_write_allowed(target, paths, workspace=project)
-        assert expected in str(excinfo.value)  # el mensaje nombra la zona
+        assert zone in str(excinfo.value)  # el mensaje nombra la zona
 
 
 def test_a_symlink_from_the_workspace_into_state_is_refused(

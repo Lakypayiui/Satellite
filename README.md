@@ -64,8 +64,9 @@ no web console.
 
 ## Sandbox and skill memoization
 
-- **N0 (default)** — subprocess with a clean environment, no network and a timeout. This is
-  process isolation, **not** OS isolation: a script runs with your user's permissions.
+- **N0 (default)** — subprocess with a clean environment and a timeout. It does not
+  enforce network isolation: a script runs with your user's permissions and may reach the
+  network. This is process isolation, **not** OS isolation.
 - **N1** — Docker container with `--network none` and the workspace mounted **read-only**.
 - **N2** — no confinement, for trusted local work only.
 
@@ -73,7 +74,7 @@ Tools can only write inside the workspace (plus the extra roots you declare) and
 inside the runtime catalogs. Four zones are always off limits, for reading and for
 writing: the package itself (**kernel**), the framework's state (`state/`, where the
 conversation, the context window and the skill cache live), the **audit** log and
-the provider **config** (where the API key is stored). A symlink from the workspace
+the provider **config** (global keys and project preferences). A symlink from the workspace
 into any of them resolves to the protected zone and is refused.
 
 Note that only **N1** confines `run_command`/`run_python`: in N0 they are plain
@@ -187,14 +188,20 @@ satellite/
 
 ## Configuration and secrets
 
-- Providers live in `.satellite/config/config.json` of each project (kept out of
-  version control by `.gitignore`). Providers are saved by a unique `id`, so
+- Provider definitions and API keys live in the user-level
+  `~/.satellite/config/providers.json` store and are shared by projects. Project
+  `.satellite/config/config.json` files keep only the selected provider id and role
+  preferences. Providers are saved by a unique `id`, so
   several models can share a family and base URL without overwriting each other,
   and per-role overrides (`llm.orchestrator`, `llm.context`, `llm.agents`,
   `llm.creator`) point at a saved `id`.
-- **Never commit API keys.** Prefer `--api-key-env VAR` so the key stays in the
-  environment; if it must live in the file, it is only ever read back as
-  `api_key_set` and never printed.
+- **Never commit API keys.** Keys can be supplied by a global environment variable or
+  stored in the user-level provider store. Project-level key fields are ignored by the
+  runtime; keys are only ever returned as `api_key_set` and never printed.
+- Existing project keys are left untouched until migrated. Run
+  `satellite provider migrate-keys` to review the count, then repeat with
+  `satellite provider migrate-keys --confirm` to move them to the global store and remove
+  the credential fields from that project's config.
 - Other useful keys: `llm.compaction` (`window`, `compact_at`, `keep`),
   `llm.max_tokens.<role>`, `llm.pricing` (real cost reporting).
 - `terminal.allowed_commands`: binaries answered **without asking**, as a list of names (for
@@ -378,7 +385,8 @@ first call answers with the files and the full diff that would be discarded.
 Command permissions are unchanged and stay deny-by-default: with an empty allowlist every
 command is **asked** (once, for the session, or rejected) and nothing is granted silently.
 `allow_terminal=false` remains a hard veto, and the sandbox level `N0` is process
-isolation (clean env, no network, timeout) — it is **not** operating-system isolation.
+isolation (clean env and timeout; network access is still possible) — it is **not**
+operating-system isolation.
 
 ### Interface
 

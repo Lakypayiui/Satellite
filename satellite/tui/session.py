@@ -399,11 +399,8 @@ class Session:
 
     def window_source(self) -> tuple[str, str]:
         """``(modelo, base_url)`` configurados (para resolver la ventana)."""
-        config = self.config_data()
-        llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
-        model = str(llm.get("model") or config.get("model") or "")
-        base_url = str(llm.get("base_url") or config.get("base_url") or "")
-        return model, base_url
+        connection = provider_config.active_connection(self.project_root)
+        return str(connection.get("model", "")), str(connection.get("base_url", ""))
 
     def context_usage(self):
         """Uso de contexto actual (real de la última llamada + estimado)."""

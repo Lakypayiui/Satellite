@@ -19,6 +19,11 @@ from satellite.tui.session import Session  # noqa: E402
 TOKEN = "token-extra"
 
 
+@pytest.fixture(autouse=True)
+def isolate_global_providers(tmp_path, monkeypatch):
+    monkeypatch.setenv("SATELLITE_HOME", str(tmp_path / "global"))
+
+
 class RecordingStore:
     """Almacén mínimo para el puente."""
 

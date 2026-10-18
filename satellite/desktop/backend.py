@@ -1176,7 +1176,7 @@ class DesktopBackend:
         """Capacidades por modelo: ``llm.models`` + las del proveedor indicado."""
         from satellite.config import providers as pconfig
 
-        data = pconfig.load_config(root)
+        data = pconfig.runtime_config(root)
         llm = data.get("llm") if isinstance(data.get("llm"), dict) else {}
         merged: dict = {}
         source = llm.get("models")

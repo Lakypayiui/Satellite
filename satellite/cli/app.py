@@ -582,8 +582,8 @@ def doctor(
     else:
         say(f"✓ sandbox: {level} · política {mode}")
     if level == "N0":
-        say("    i N0 es aislamiento de PROCESO (entorno limpio, sin red, con timeout),")
-        say("      no del sistema de archivos: para confinarlo de verdad usa N1")
+        say("    i N0 usa un subproceso con entorno limpio y timeout; puede acceder a la red.")
+        say("      No es aislamiento del sistema operativo: para confinarlo usa N1")
     if settings.policy_mode is PolicyMode.AUTO:
         say("    i política auto: las acciones que exigen aprobación se aprueban solas")
 

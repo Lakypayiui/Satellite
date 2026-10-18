@@ -237,19 +237,11 @@ class ChatSession:
 
     def provider_window(self) -> tuple[str, str]:
         """``(modelo, base_url)`` configurados, para resolver la ventana."""
-        path = self.project_root / CONFIG_PATH
-        data: dict = {}
-        if path.exists():
-            try:
-                import json
+        from satellite.config import providers as provider_config
 
-                loaded = json.loads(path.read_text(encoding="utf-8"))
-                data = loaded if isinstance(loaded, dict) else {}
-            except (OSError, ValueError):
-                data = {}
-        llm = data.get("llm") if isinstance(data.get("llm"), dict) else {}
-        model = str(llm.get("model") or data.get("model") or "")
-        base_url = str(llm.get("base_url") or data.get("base_url") or "")
+        connection = provider_config.active_connection(self.project_root)
+        model = str(connection.get("model", ""))
+        base_url = str(connection.get("base_url", ""))
         if not model:
             provider = self.provider()
             model = str(getattr(provider, "model", "") or "")

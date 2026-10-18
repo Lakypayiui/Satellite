@@ -309,6 +309,34 @@ def list_cmd(ctx: typer.Context, project: Path | None = PROJECT) -> None:
     _print_providers(_project(ctx, project))
 
 
+@provider_app.command("migrate-keys")
+def migrate_keys_cmd(
+    ctx: typer.Context,
+    project: Path | None = PROJECT,
+    confirm: bool = typer.Option(
+        False,
+        "--confirm",
+        help="Confirma mover las credenciales de este proyecto al almacén global.",
+    ),
+) -> None:
+    """Migra credenciales antiguas del proyecto al almacén global del usuario."""
+    root = _project(ctx, project)
+    summary = pconfig.legacy_credentials_summary(root)
+    total = sum(summary.values())
+    if total == 0:
+        say("No se encontraron credenciales antiguas en este proyecto.")
+        return
+    say(
+        f"Se encontraron {total} origen(es) de credenciales locales "
+        f"(proveedores: {summary['providers']}, global: {summary['top_level']}, roles: {summary['roles']})."
+    )
+    if not confirm:
+        say("La migración necesita confirmación explícita. Revisa y vuelve a ejecutar con --confirm.")
+        return
+    pconfig.migrate_legacy_credentials(root, confirmed=True)
+    say(f"Credenciales migradas al almacén global: {pconfig.global_config_path()}")
+
+
 @provider_app.command("catalog")
 def catalog_cmd(
     query: str = typer.Argument("", help="Texto a buscar en el catálogo."),

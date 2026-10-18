@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from satellite.config.catalog import ANTHROPIC, OPENAI
+from satellite.kernel.paths import resolve_paths
 
 CONFIG_PATH = Path(".satellite") / "config" / "config.json"
 
@@ -52,6 +53,33 @@ def save_config(project_root: Path | str, data: dict) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+    return path
+
+
+def global_config_path() -> Path:
+    """Archivo de proveedores compartido por todos los proyectos del usuario."""
+    return resolve_paths().global_root / "config" / "providers.json"
+
+
+def _load_global() -> dict:
+    path = global_config_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_global(data: dict) -> Path:
+    path = global_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    if os.name != "nt":
+        tmp.chmod(0o600)
     tmp.replace(path)
     return path
 
@@ -156,11 +184,17 @@ def _to_saved(entry: dict, index: int) -> SavedProvider:
 
 
 def list_providers(project_root: Path | str) -> list[SavedProvider]:
-    """Proveedores guardados (sin ``api_key``)."""
-    return [
-        _to_saved(entry, index)
-        for index, entry in enumerate(_entries(load_config(project_root)))
-    ]
+    """Proveedores globales y referencias heredadas del proyecto (sin claves locales)."""
+    global_entries = _entries(_load_global())
+    by_id = {str(entry.get("id")): dict(entry) for entry in global_entries}
+    for entry in _entries(load_config(project_root)):
+        provider_id = str(entry.get("id") or "")
+        if provider_id not in by_id:
+            safe = dict(entry)
+            safe.pop("api_key", None)
+            safe.pop("api_key_env", None)
+            by_id[provider_id or f"local-{len(by_id)}"] = safe
+    return [_to_saved(entry, index) for index, entry in enumerate(by_id.values())]
 
 
 def find_provider(project_root: Path | str, provider_id: str) -> SavedProvider | None:
@@ -185,20 +219,21 @@ def active_id(project_root: Path | str) -> str:
     """``id`` del proveedor global activo (``llm.provider_id``)."""
     llm = load_config(project_root).get("llm")
     if not isinstance(llm, dict):
-        return ""
-    return str(llm.get("provider_id", ""))
+        llm = {}
+    return str(llm.get("provider_id") or _load_global().get("active_id", ""))
 
 
 def active_public(project_root: Path | str) -> dict:
     """Vista pública del proveedor global (contrato de la consola web)."""
     data = load_config(project_root)
     llm = data.get("llm") if isinstance(data.get("llm"), dict) else {}
+    provider = active_provider(project_root)
     return {
-        "name": llm.get("provider", ""),
-        "model": llm.get("model", ""),
-        "base_url": llm.get("base_url", ""),
-        "api_key_env": llm.get("api_key_env", ""),
-        "api_key_set": _api_key_set(llm),
+        "name": provider.name if provider else llm.get("provider", ""),
+        "model": provider.model if provider else llm.get("model", ""),
+        "base_url": provider.base_url if provider else "",
+        "api_key_env": provider.api_key_env if provider else "",
+        "api_key_set": provider.api_key_set if provider else False,
     }
 
 
@@ -207,7 +242,7 @@ def active_provider(project_root: Path | str) -> SavedProvider | None:
     data = load_config(project_root)
     llm = data.get("llm") if isinstance(data.get("llm"), dict) else {}
     saved = list_providers(project_root)
-    provider_id = str(llm.get("provider_id", ""))
+    provider_id = str(llm.get("provider_id") or _load_global().get("active_id", ""))
     if provider_id:
         for provider in saved:
             if provider.id == provider_id:
@@ -216,26 +251,6 @@ def active_provider(project_root: Path | str) -> SavedProvider | None:
     for provider in saved:
         if provider.name == name and provider.model == model:
             return provider
-    if name or model:
-        return SavedProvider(
-            id=provider_id,
-            name=name,
-            model=model,
-            base_url=str(llm.get("base_url", "")),
-            api_key_env=str(llm.get("api_key_env", "")),
-            api_key_set=_api_key_set(llm),
-        )
-    # Sin `llm`: el global efectivo del runtime son las claves top-level.
-    top_name, top_model = str(data.get("name", "")), str(data.get("model", ""))
-    if top_name or top_model:
-        return SavedProvider(
-            id="",
-            name=top_name,
-            model=top_model,
-            base_url=str(data.get("base_url", "")),
-            api_key_env=str(data.get("api_key_env", "")),
-            api_key_set=_api_key_set(data),
-        )
     return None
 
 
@@ -259,38 +274,227 @@ def active_connection(project_root: Path | str) -> dict:
     data = load_config(project_root)
     llm = data.get("llm") if isinstance(data.get("llm"), dict) else {}
     role = llm.get("orchestrator") if isinstance(llm.get("orchestrator"), dict) else {}
-    provider_id = str(role.get("provider") or llm.get("provider_id") or "")
-    entries = _entries(data)
-    entry = next((p for p in entries if str(p.get("id")) == provider_id), None) if provider_id else None
-    if isinstance(entry, dict):
-        key = str(entry.get("api_key") or "")
-        if not key:
-            env = str(entry.get("api_key_env") or "")
-            key = os.getenv(env, "") if env else ""
+    provider_id = str(role.get("provider") or llm.get("provider_id") or _load_global().get("active_id") or "")
+    conn = provider_connection(project_root, provider_id) if provider_id else None
+    if conn is not None:
+        return {
+            **conn,
+            "model": str(role.get("model") or conn.get("model", "")),
+        }
+    # Legacy project metadata can still identify a model/endpoint, but local
+    # credential fields are never consulted. A key is attached only from a
+    # matching global provider record.
+    legacy_name = str(llm.get("provider") or data.get("name", ""))
+    legacy_model = str(role.get("model") or llm.get("model") or data.get("model", ""))
+    legacy_url = str(llm.get("base_url") or data.get("base_url", ""))
+    global_entry = next(
+        (p for p in _entries(_load_global()) if p.get("name") == legacy_name and p.get("base_url") == legacy_url),
+        None,
+    )
+    if legacy_name or legacy_model or legacy_url:
         return {
             "id": provider_id,
-            "name": str(entry.get("name", "")),
-            "model": str(role.get("model") or entry.get("model", "")),
-            "base_url": str(entry.get("base_url", "")),
-            "account_id": str(entry.get("account_id") or ""),
-            "api_key": key,
+            "name": legacy_name,
+            "model": legacy_model,
+            "base_url": legacy_url,
+            "account_id": str(llm.get("account_id") or data.get("account_id") or ""),
+            "api_key": _entry_key(global_entry) if global_entry else "",
         }
     return {
         "id": provider_id,
-        "name": str(llm.get("provider") or data.get("name", "")),
-        "model": str(llm.get("model") or data.get("model", "")),
-        "base_url": str(llm.get("base_url") or data.get("base_url", "")),
-        "account_id": str(llm.get("account_id") or data.get("account_id") or ""),
-        "api_key": str(llm.get("api_key") or data.get("api_key") or ""),
+        "name": "",
+        "model": "",
+        "base_url": "",
+        "account_id": "",
+        "api_key": "",
     }
 
 
 def api_key_for_base_url(project_root: Path | str, base_url: str) -> str:
     """Clave guardada para esa ``base_url`` (uso interno del servidor)."""
-    for entry in _entries(load_config(project_root)):
+    for entry in _entries(_load_global()):
         if entry.get("base_url") == base_url:
-            return str(entry.get("api_key") or "")
+            return _entry_key(entry)
     return ""
+
+
+def _entry_key(entry: dict) -> str:
+    key = str(entry.get("api_key") or "")
+    if not key:
+        env = str(entry.get("api_key_env") or "")
+        key = os.getenv(env, "") if env else ""
+    return key
+
+
+def runtime_config(project_root: Path | str) -> dict:
+    """Config de ejecución con proveedores/claves del almacén global.
+
+    Los campos de clave que aún existan en un config.json de proyecto se omiten;
+    sólo una referencia a un proveedor global puede aportar credenciales al runtime.
+    """
+    data = load_config(project_root)
+    store = _load_global()
+    entries = []
+    for original in _entries(store):
+        entry = dict(original)
+        key = _entry_key(entry)
+        if key:
+            entry["api_key"] = key
+        else:
+            entry.pop("api_key", None)
+        entries.append(entry)
+    known_ids = {str(entry.get("id")) for entry in entries}
+    local_by_id: dict[str, dict] = {}
+    for original in _entries(data):
+        entry = dict(original)
+        provider_id = str(entry.get("id") or "")
+        if provider_id in known_ids:
+            continue
+        entry.pop("api_key", None)
+        entry.pop("api_key_env", None)
+        # A global credential is available only to the exact provider identity
+        # (name + endpoint), never to an endpoint supplied by a project alone.
+        shared = next((p for p in entries if p.get("name") == entry.get("name") and p.get("base_url") == entry.get("base_url")), None)
+        if shared and shared.get("api_key"):
+            entry["api_key"] = shared["api_key"]
+        entries.append(entry)
+        local_by_id[provider_id] = entry
+    data["providers"] = entries
+    llm = data.get("llm") if isinstance(data.get("llm"), dict) else {}
+    provider_id = str(llm.get("provider_id") or store.get("active_id") or "")
+    selected = next((p for p in entries if str(p.get("id")) == provider_id), None)
+    # Nunca aceptar credenciales o endpoints enviados desde la configuración de proyecto.
+    legacy_name = str(data.get("name") or "")
+    legacy_model = str(data.get("model") or "")
+    legacy_url = str(data.get("base_url") or "")
+    legacy_key = ""
+    matched_global = next((p for p in entries if p.get("name") == legacy_name and p.get("base_url") == legacy_url), None)
+    if matched_global:
+        legacy_key = str(matched_global.get("api_key") or "")
+    for field in ("api_key", "api_key_env", "base_url", "name", "model"):
+        data.pop(field, None)
+        llm.pop(field, None)
+    for role in ROLES:
+        role_cfg = llm.get(role)
+        if isinstance(role_cfg, dict):
+            role_cfg.pop("api_key", None)
+            role_cfg.pop("api_key_env", None)
+            ref = str(role_cfg.get("provider") or "")
+            if not ref and selected:
+                role_cfg["provider"] = provider_id
+            elif ref and not any(str(p.get("id")) == ref for p in entries):
+                if selected:
+                    role_cfg["provider"] = provider_id
+                else:
+                    llm.pop(role, None)
+    if selected:
+        llm["provider_id"] = provider_id
+        llm["provider"] = selected.get("name", "")
+        llm["model"] = selected.get("model", "")
+        llm["base_url"] = selected.get("base_url", "")
+        data["name"] = selected.get("name", "")
+        data["model"] = selected.get("model", "")
+        data["base_url"] = selected.get("base_url", "")
+        if selected.get("api_key"):
+            data["api_key"] = selected["api_key"]
+    elif legacy_name or legacy_model:
+        data["name"] = legacy_name
+        data["model"] = legacy_model
+        if legacy_url:
+            data["base_url"] = legacy_url
+        if legacy_key:
+            data["api_key"] = legacy_key
+    elif legacy_name.lower() == "fake":
+        # The fake provider needs no credential or network endpoint and remains
+        # useful for local development and tests without global provider setup.
+        data["name"] = legacy_name
+        data["model"] = legacy_model or "fake-model"
+    data["llm"] = llm
+    return data
+
+
+def legacy_credentials_summary(project_root: Path | str) -> dict[str, int]:
+    """Cantidad de credenciales antiguas en la config de proyecto, sin devolver valores."""
+    data = load_config(project_root)
+    providers = [p for p in _entries(data) if p.get("api_key") or p.get("api_key_env")]
+    llm = data.get("llm") if isinstance(data.get("llm"), dict) else {}
+    top_level = bool(data.get("api_key") or data.get("api_key_env"))
+    roles = sum(
+        1 for role in ROLES
+        if isinstance(llm.get(role), dict)
+        and (llm[role].get("api_key") or llm[role].get("api_key_env"))
+    )
+    return {"providers": len(providers), "top_level": int(top_level), "roles": roles}
+
+
+def migrate_legacy_credentials(project_root: Path | str, *, confirmed: bool = False) -> dict[str, int]:
+    """Mueve credenciales locales al almacén global sólo tras confirmación explícita."""
+    summary = legacy_credentials_summary(project_root)
+    if not confirmed or not any(summary.values()):
+        return summary
+    project = load_config(project_root)
+    store = _load_global()
+    global_entries = list(_entries(store))
+
+    def merge_credential(source: dict, *, fallback: dict | None = None) -> None:
+        provider_id = str(source.get("id") or (fallback or {}).get("provider_id") or "")
+        name = str(source.get("name") or (fallback or {}).get("provider") or "")
+        model = str(source.get("model") or (fallback or {}).get("model") or "")
+        base_url = str(source.get("base_url") or (fallback or {}).get("base_url") or "")
+        target = next((p for p in global_entries if provider_id and str(p.get("id")) == provider_id), None)
+        target = target or next((p for p in global_entries if p.get("name") == name and p.get("model") == model and p.get("base_url") == base_url), None)
+        if target is None:
+            target = {k: source[k] for k in ("id", "name", "model", "base_url", "account_id", "reasoning_effort", "think", "max_tokens", "models") if k in source}
+            target["id"] = provider_id or uuid.uuid4().hex[:10]
+            if any(str(p.get("id")) == target["id"] for p in global_entries):
+                target["id"] = uuid.uuid4().hex[:10]
+            global_entries.append(target)
+        if source.get("api_key"):
+            target["api_key"] = source["api_key"]
+        if source.get("api_key_env"):
+            target["api_key_env"] = source["api_key_env"]
+
+    for entry in _entries(project):
+        merge_credential(entry)
+    llm = project.get("llm") if isinstance(project.get("llm"), dict) else {}
+    global_id = str(llm.get("provider_id") or "")
+    if project.get("api_key") or project.get("api_key_env"):
+        merge_credential(project, fallback={"provider_id": global_id, "provider": project.get("name"), "model": project.get("model"), "base_url": project.get("base_url")})
+        if not global_id:
+            migrated = next((p for p in global_entries if p.get("name") == project.get("name") and p.get("model") == project.get("model") and p.get("base_url") == project.get("base_url")), None)
+            if migrated is not None:
+                global_id = str(migrated.get("id") or "")
+    for role in ROLES:
+        role_cfg = llm.get(role)
+        if isinstance(role_cfg, dict) and (role_cfg.get("api_key") or role_cfg.get("api_key_env")):
+            merge_credential(role_cfg, fallback={"provider_id": role_cfg.get("provider"), "provider": role_cfg.get("provider"), "model": role_cfg.get("model")})
+
+    store["providers"] = global_entries
+    if global_id and any(str(p.get("id")) == global_id for p in global_entries):
+        store.setdefault("active_id", global_id)
+        llm["provider_id"] = global_id
+        if global_id in {str(p.get("id")) for p in global_entries}:
+            active = next(p for p in global_entries if str(p.get("id")) == global_id)
+            llm["provider"] = active.get("name", "")
+            llm["model"] = active.get("model", "")
+            project["name"] = active.get("name", "")
+            project["model"] = active.get("model", "")
+            project["base_url"] = active.get("base_url", "")
+    _save_global(store)
+    for entry in _entries(project):
+        entry.pop("api_key", None)
+        entry.pop("api_key_env", None)
+    project.pop("api_key", None)
+    project.pop("api_key_env", None)
+    project.pop("providers", None)
+    for role in ROLES:
+        role_cfg = llm.get(role)
+        if isinstance(role_cfg, dict):
+            role_cfg.pop("api_key", None)
+            role_cfg.pop("api_key_env", None)
+    project["llm"] = llm
+    save_config(project_root, project)
+    return summary
 
 
 def provider_connection(project_root: Path | str, provider_id: str) -> dict | None:
@@ -301,17 +505,23 @@ def provider_connection(project_root: Path | str, provider_id: str) -> dict | No
     ``/models`` con las credenciales guardadas sin exponerlas a la interfaz. ``None`` si el
     ``id`` no existe.
     """
-    data = load_config(project_root)
-    entry = next(
-        (p for p in _entries(data) if str(p.get("id")) == str(provider_id)), None
-    )
+    data = _load_global()
+    entry = next((p for p in _entries(data) if str(p.get("id")) == str(provider_id)), None)
     if entry is None:
-        return None
+        local = next(
+            (p for p in _entries(load_config(project_root)) if str(p.get("id")) == str(provider_id)),
+            None,
+        )
+        if local is None:
+            return None
+        entry = dict(local)
+        entry.pop("api_key", None)
+        entry.pop("api_key_env", None)
+        shared = next((p for p in _entries(data) if p.get("name") == entry.get("name") and p.get("base_url") == entry.get("base_url")), None)
+        if shared is not None:
+            entry.update({k: shared[k] for k in ("api_key", "api_key_env") if k in shared})
     name = str(entry.get("name", ""))
-    api_key = str(entry.get("api_key") or "")
-    if not api_key:
-        env = str(entry.get("api_key_env") or "")
-        api_key = os.getenv(env, "") if env else ""
+    api_key = _entry_key(entry)
     from satellite.config import catalog as provider_catalog
 
     return {
@@ -388,7 +598,8 @@ def save_provider(
     estén (los usos viejos, CLI/TUI, no los pasan).
     """
     data = load_config(project_root)
-    providers = list(_entries(data))
+    store = _load_global()
+    providers = list(_entries(store))
     name, model = str(name), str(model)
     base_url, api_key, api_key_env = str(base_url), str(api_key or ""), str(api_key_env or "")
     account_id = str(account_id or "")
@@ -450,17 +661,18 @@ def save_provider(
         _apply_entry_settings(entry, reasoning_effort, max_tokens, model_overrides, think)
         providers.append(entry)
 
-    data["providers"] = providers
+    store["providers"] = providers
+    store["active_id"] = entry["id"]
+    _save_global(store)
+    data.pop("providers", None)
     llm = data.get("llm") if isinstance(data.get("llm"), dict) else {}
     llm["provider"] = name
     llm["model"] = model
     if base_url:
         llm["base_url"] = base_url
     llm["provider_id"] = entry["id"]
-    if api_key:
-        llm["api_key"] = api_key
-    if api_key_env:
-        llm["api_key_env"] = api_key_env
+    llm.pop("api_key", None)
+    llm.pop("api_key_env", None)
     effort = str(entry.get("reasoning_effort") or "")
     if effort:
         llm["reasoning_effort"] = effort
@@ -497,7 +709,8 @@ def update_provider(
 ) -> SavedProvider:
     """Actualiza un proveedor guardado (por ``id`` o ``name``); clave vacía = igual."""
     data = load_config(project_root)
-    providers = list(_entries(data))
+    store = _load_global()
+    providers = list(_entries(store))
     index = next(
         (
             i
@@ -507,8 +720,16 @@ def update_provider(
         None,
     )
     if index is None:
-        raise KeyError(f"proveedor no encontrado: '{provider_id}'")
-    entry = dict(providers[index])
+        local_entry = next(
+            (p for p in _entries(data) if str(p.get("id")) == str(provider_id)), None
+        )
+        if local_entry is None:
+            raise KeyError(f"proveedor no encontrado: '{provider_id}'")
+        entry = dict(local_entry)
+        index = len(providers)
+        providers.append(entry)
+    else:
+        entry = dict(providers[index])
     if name is not None:
         entry["name"] = str(name)
     if model is not None:
@@ -526,7 +747,9 @@ def update_provider(
             entry.pop("account_id", None)
     _apply_entry_settings(entry, reasoning_effort, max_tokens, model_overrides, think)
     providers[index] = entry
-    data["providers"] = providers
+    store["providers"] = providers
+    _save_global(store)
+    data.pop("providers", None)
 
     llm = data.get("llm") if isinstance(data.get("llm"), dict) else {}
     if llm.get("provider_id") == entry.get("id"):
@@ -534,8 +757,8 @@ def update_provider(
         llm["model"] = entry.get("model", "")
         if entry.get("base_url"):
             llm["base_url"] = entry["base_url"]
-        if api_key:
-            llm["api_key"] = str(api_key)
+        llm.pop("api_key", None)
+        llm.pop("api_key_env", None)
         if reasoning_effort is not None:
             if entry.get("reasoning_effort"):
                 llm["reasoning_effort"] = entry["reasoning_effort"]
@@ -557,8 +780,8 @@ def update_provider(
 
 def delete_provider(project_root: Path | str, provider_id: str) -> bool:
     """Elimina un proveedor guardado (por ``id`` o ``name``); ``False`` si no existía."""
-    data = load_config(project_root)
-    providers = list(_entries(data))
+    store = _load_global()
+    providers = list(_entries(store))
     remaining = [
         p
         for p in providers
@@ -566,8 +789,13 @@ def delete_provider(project_root: Path | str, provider_id: str) -> bool:
     ]
     if len(remaining) == len(providers):
         return False
-    data["providers"] = remaining
-    save_config(project_root, data)
+    store["providers"] = remaining
+    if store.get("active_id") == provider_id or any(
+        p.get("id") == store.get("active_id") and p.get("id") not in {x.get("id") for x in remaining}
+        for p in providers
+    ):
+        store.pop("active_id", None)
+    _save_global(store)
     return True
 
 
@@ -593,7 +821,7 @@ def activate(
     provider = find_provider(project_root, provider_id)
     if provider is None:
         raise KeyError(f"proveedor no encontrado: '{provider_id}'")
-    entries = list(_entries(data))
+    entries = list(_entries(_load_global()))
     entry = next(
         (p for p in entries if str(p.get("id")) == provider.id), None
     ) or {"id": provider.id, "name": provider.name, "model": provider.model}
@@ -606,17 +834,13 @@ def activate(
     data["model"] = provider.model
     if provider.base_url:
         data["base_url"] = provider.base_url
-    if entry.get("api_key"):
-        data["api_key"] = entry["api_key"]
     llm["provider"] = provider.name
     llm["model"] = provider.model
     if provider.base_url:
         llm["base_url"] = provider.base_url
     llm["provider_id"] = provider.id
-    if entry.get("api_key"):
-        llm["api_key"] = entry["api_key"]
-    if entry.get("api_key_env"):
-        llm["api_key_env"] = entry["api_key_env"]
+    llm.pop("api_key", None)
+    llm.pop("api_key_env", None)
     # El esfuerzo acompaña al proveedor que pasa a ser global (y no se hereda de otro).
     if entry.get("reasoning_effort"):
         data["reasoning_effort"] = entry["reasoning_effort"]
@@ -670,9 +894,6 @@ def set_roles(project_root: Path | str, roles: dict[str, dict]) -> None:
             and key in (
                 "provider",
                 "model",
-                "base_url",
-                "api_key",
-                "api_key_env",
                 "reasoning_effort",
                 "think",
                 "effort_levels",

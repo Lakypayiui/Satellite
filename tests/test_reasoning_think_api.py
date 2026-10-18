@@ -18,6 +18,11 @@ from satellite.tui.session import Session  # noqa: E402
 TOKEN = "token-think"
 
 
+@pytest.fixture(autouse=True)
+def isolate_global_providers(tmp_path, monkeypatch):
+    monkeypatch.setenv("SATELLITE_HOME", str(tmp_path / "global"))
+
+
 class RecordingStore:
     def __init__(self) -> None:
         self.events: list[tuple[str, object]] = []
@@ -57,7 +62,9 @@ def make_client(tmp_path: Path) -> TestClient:
 
 
 def _saved(tmp_path: Path) -> dict:
-    return json.loads((tmp_path / ".satellite/config/config.json").read_text("utf-8"))
+    from satellite.config import providers as pconfig
+
+    return pconfig.runtime_config(tmp_path)
 
 
 def test_save_provider_persists_think_per_provider_and_model(tmp_path) -> None:

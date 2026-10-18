@@ -103,7 +103,10 @@ class OpenAICompatProvider(LLMProvider):
             getattr(self.config, "thinking", None),
         )
         if think:
-            kwargs.update(think)
+            # El SDK OpenAI valida los argumentos nombrados de ``create`` y rechaza
+            # parámetros específicos de proveedores compatibles, como el de DeepSeek
+            # ``thinking``. ``extra_body`` los añade al JSON sin pasar por esa firma.
+            kwargs.setdefault("extra_body", {}).update(think)
         if request.tools is not None:
             kwargs["tools"] = [
                 {

@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 from satellite.context.engine import DefaultContextEngine
+from satellite.approval.base import AutoApprovalPort, DenyAllApprovalPort
 from satellite.core.tool_models import ToolResult
 from satellite.tools.base import ToolContext
 from satellite.tools.context_tool import RequestContextTool
@@ -48,3 +49,35 @@ def test_invalid_refs_error(tmp_path: Path) -> None:
         )
     )
     assert result.success is False
+
+
+def test_absolute_path_outside_project_requires_approval(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "private.txt"
+    outside.write_text("private", encoding="utf-8")
+    ctx = ToolContext(project_root=project, approval=DenyAllApprovalPort())
+    ctx.engine = DefaultContextEngine(project)
+
+    result = run(RequestContextTool().execute(
+        {"refs": [{"kind": "path", "value": str(outside)}]}, ctx
+    ))
+
+    assert result.success is False
+    assert "denegada" in (result.error or "")
+
+
+def test_approved_outside_context_is_read_once(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "private.txt"
+    outside.write_text("private", encoding="utf-8")
+    ctx = ToolContext(project_root=project, approval=AutoApprovalPort())
+    ctx.engine = DefaultContextEngine(project)
+
+    result = run(RequestContextTool().execute(
+        {"refs": [{"kind": "path", "value": str(outside)}]}, ctx
+    ))
+
+    assert result.success is True
+    assert result.output["sections"][0]["content"] == "private"
