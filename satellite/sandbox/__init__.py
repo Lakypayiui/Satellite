@@ -10,6 +10,19 @@ from satellite.sandbox.base import (
 )
 from satellite.sandbox.docker_sandbox import DockerSandbox
 from satellite.sandbox.host_sandbox import HostSandbox
+from satellite.sandbox.levels import (
+    CAPABILITIES,
+    DEFAULT_LEVEL,
+    FailClosedSandbox,
+    LevelCapabilities,
+    background_error,
+    capabilities_for,
+    describe as describe_level,
+    enforcement_error,
+    execution_sandbox,
+    normalize_level,
+    resolve_sandbox,
+)
 from satellite.sandbox.subprocess_sandbox import SubprocessSandbox
 from satellite.sandbox.setup import (
     DockerStatus,
@@ -34,4 +47,15 @@ __all__ = [
     "docker_decision_pending",
     "record_decision",
     "setup_instructions",
+    "DEFAULT_LEVEL",
+    "CAPABILITIES",
+    "LevelCapabilities",
+    "FailClosedSandbox",
+    "normalize_level",
+    "capabilities_for",
+    "describe_level",
+    "enforcement_error",
+    "resolve_sandbox",
+    "execution_sandbox",
+    "background_error",
 ]

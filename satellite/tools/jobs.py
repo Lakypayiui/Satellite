@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from satellite.core.tool_models import ToolResult
 from satellite.kernel.paths import resolve_paths
+from satellite.sandbox.process import group_kwargs, terminate_tree_sync
 from satellite.tools.base import Tool, ToolContext
 
 JOB_DIR = "jobs"
@@ -100,6 +101,7 @@ class JobRegistry:
                 stdin=subprocess.DEVNULL,
                 stdout=handle,
                 stderr=subprocess.STDOUT,
+                **group_kwargs(),
             )
         info = JobInfo(
             id=job_id,
@@ -194,11 +196,9 @@ class JobRegistry:
         if proc.poll() is not None:
             # ya había terminado solo: no se «para» nada, y no se dice que sí
             return self.status(job_id)
-        proc.terminate()
-        try:
-            proc.wait(timeout=STOP_TIMEOUT_S)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        # Parar un comando largo debe terminar también a sus descendientes: si no, lo que
+        # bloqueaba (un servidor, un watcher hijo) sigue vivo aunque el job diga "stopped".
+        terminate_tree_sync(proc, grace=STOP_TIMEOUT_S)
         info = replace(self.status(job_id) or JobInfo(id=job_id, command=""), status="stopped")
         self._write(info)
         return info

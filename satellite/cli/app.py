@@ -584,6 +584,14 @@ def doctor(
     if level == "N0":
         say("    i N0 usa un subproceso con entorno limpio y timeout; puede acceder a la red.")
         say("      No es aislamiento del sistema operativo: para confinarlo usa N1")
+    # El nivel solo vale si su backend está: N1 sin Docker falla cerrado (no ejecuta en el
+    # host), así que el doctor lo marca como fallo en vez de dar por bueno el aislamiento.
+    from satellite.sandbox.levels import enforcement_error
+
+    bloqueo = enforcement_error(level)
+    if bloqueo:
+        say(f"    ✗ {bloqueo}")
+        ok = False
     if settings.policy_mode is PolicyMode.AUTO:
         say("    i política auto: las acciones que exigen aprobación se aprueban solas")
 

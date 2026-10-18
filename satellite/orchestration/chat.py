@@ -11,7 +11,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from satellite.approval.base import ApprovalPort
+from satellite.approval.base import ApprovalContext, ApprovalPort
+from satellite.core.context_models import ApprovedExternalContext
 from satellite.context.compaction import (
     CompactionResult,
     ContextUsage,
@@ -26,6 +27,9 @@ from satellite.retrieval.sanitize import sanitize
 MAX_RECAP_TURNS = 8
 MAX_TURN_CHARS = 1200
 CONVERSATION_FILE = "conversation.json"
+# Claves de contexto que sólo fija el flujo de chat (tras aprobación); la metadata libre
+# no puede aportarlas.
+_RESERVED_CONTEXT_KEYS = ("context_refs", "context_missing", "context_external")
 
 _ROLE_LABEL = {"user": "usuario", "assistant": "asistente"}
 
@@ -80,6 +84,8 @@ class ChatReply:
     compaction: dict | None = None
     # Métricas de la ejecución (tokens/duración) para el pie de la respuesta en la TUI.
     metrics: dict = field(default_factory=dict)
+    # @menciones del mensaje: qué se adjuntó, qué está fuera y qué no existía (para la UI).
+    context: dict = field(default_factory=dict)
 
 
 class ChatSession:
@@ -360,14 +366,44 @@ class ChatSession:
         from satellite.context.mentions import parse as parse_mentions
 
         menciones = parse_mentions(text, self.project_root)
-        if menciones.refs:
-            metadata["context_refs"] = [ref.to_dict() for ref in menciones.refs]
-        if menciones.missing:
-            metadata["context_missing"] = list(menciones.missing)
+        # Una mención a una ruta de FUERA del proyecto exige aprobación puntual: se
+        # pide aquí (que es donde hay puerto), se lee una sola vez si la dan y el
+        # contenido viaja como dato no confiable. La autorización no se persiste.
+        bloque_externo, informe_externo, notas = await self._resolve_external_mentions(
+            menciones.external, approval
+        )
+        # Una mención ambigua no se adjunta (no se elige una al azar): se dice y se pide
+        # la ruta completa, para que el usuario sepa que no se leyó nada.
+        notas = list(notas)
+        for amb in menciones.ambiguous:
+            candidatas = ", ".join(amb.candidates[:8])
+            notas.append(
+                f"@{amb.value} es ambiguo: coincide con {candidatas}. "
+                "Escribe la ruta completa para adjuntarlo."
+            )
+        # Un archivo sensible/excluido no se lee como contexto: se dice, no se ofrece.
+        for valor in menciones.ignored:
+            notas.append(
+                f"No adjunté @{valor}: es un archivo sensible o excluido del índice "
+                "y no se lee como contexto."
+            )
+        contexto = self._mention_report(menciones, informe_externo)
         if plan_mode:
             metadata["plan_mode"] = True
         if extra_metadata:
             metadata.update(extra_metadata)
+        # Las claves de contexto las fija SÓLO este flujo, y el contenido externo va
+        # envuelto como ``ApprovedExternalContext``: descartar las que vengan por
+        # metadata libre impide que ``extra_metadata`` (u otra vía interna) inyecte
+        # contexto externo y se salte la aprobación explícita.
+        for clave in _RESERVED_CONTEXT_KEYS:
+            metadata.pop(clave, None)
+        if menciones.refs:
+            metadata["context_refs"] = [ref.to_dict() for ref in menciones.refs]
+        if menciones.missing:
+            metadata["context_missing"] = list(menciones.missing)
+        if bloque_externo:
+            metadata["context_external"] = ApprovedExternalContext(bloque_externo)
 
         task = Task(goal=text, project_root=self.project_root, metadata=metadata)
         services = getattr(self.orchestrator, "services", None)
@@ -384,9 +420,23 @@ class ChatSession:
                 status="failed",
                 error=str(exc),
                 compaction=compaction.to_dict() if compaction else None,
+                context=contexto,
+            )
+
+        # El índice persistente lo adjunta el orquestador en cada turno. Si un turno que
+        # pregunta por el proyecto se queda sin ese contexto, se dice en vez de dejar que la
+        # respuesta parezca basada en archivos que no se leyeron.
+        if _missing_project_context(task) and _is_explanatory(text):
+            notas.append(
+                "No hay contexto de proyecto que adjuntar "
+                "(el índice está vacío o no está disponible)."
             )
 
         reply_text = reply_from_result(result)
+        if notas:
+            # El aviso va delante para que no se pierda: si una ruta externa se denegó,
+            # el usuario tiene que saberlo aunque la respuesta sea correcta.
+            reply_text = "\n\n".join([*notas, reply_text])
         self.add(
             "assistant",
             reply_text,
@@ -401,7 +451,120 @@ class ChatSession:
             output=dict(result.output or {}),
             compaction=compaction.to_dict() if compaction else None,
             metrics=result.metrics.to_dict() if result.metrics else {},
+            context=contexto,
         )
+
+    def _mention_report(self, menciones, externo: list[dict]) -> dict:
+        """Resumen de las menciones para la UI (mismo parseo que la TUI/escritorio)."""
+        return {
+            "refs": [{"value": ref.value, "kind": ref.kind.value} for ref in menciones.refs],
+            "missing": list(menciones.missing),
+            "ambiguous": [amb.to_dict() for amb in menciones.ambiguous],
+            "ignored": list(menciones.ignored),
+            "external": list(externo),
+            "summary": menciones.summary(),
+        }
+
+    async def _resolve_external_mentions(
+        self, externas, approval: ApprovalPort | None
+    ) -> tuple[str, list[dict], list[str]]:
+        """Pide aprobación por cada @mención de fuera y lee (una vez) lo autorizado.
+
+        Devuelve ``(bloque, informe, notas)``:
+
+        - ``bloque``: contenido externo ya leído, como DATO no confiable, para este turno.
+        - ``informe``: estado por mención (para la UI).
+        - ``notas``: avisos en texto que se anteponen a la respuesta.
+
+        No se guarda ninguna autorización: vale para esta petición y se descarta, así
+        que no se reutiliza en turnos siguientes ni entre peticiones concurrentes.
+        """
+        if not externas:
+            return "", [], []
+        from satellite.context.paths import canonical
+        from satellite.core.context_models import ContextRef
+
+        services = getattr(self.orchestrator, "services", None)
+        engine = getattr(services, "context", None)
+        root = canonical(self.project_root) or Path(self.project_root)
+        if engine is None:
+            informe = [
+                {"value": em.value, "path": str(em.path), "status": "no_engine"}
+                for em in externas
+            ]
+            notas = [
+                f"No leí {em.path}: este runtime no tiene motor de contexto para "
+                "rutas externas." for em in externas
+            ]
+            return "", informe, notas
+
+        aprobadas: list = []
+        informe: list[dict] = []
+        notas: list[str] = []
+        for em in externas:
+            estado = await self._approve_external(em, approval, root)
+            informe.append({"value": em.value, "path": str(em.path), "status": estado})
+            if estado == "approved":
+                aprobadas.append(em)
+                notas.append(
+                    f"Adjunté {em.path} (fuera del proyecto) solo para este turno."
+                )
+            elif estado == "denied":
+                notas.append(
+                    f"No leí {em.path}: está fuera del proyecto y no se autorizó."
+                )
+            else:  # no_port
+                notas.append(
+                    f"No leí {em.path}: está fuera del proyecto y esta interfaz no "
+                    "puede pedir confirmación."
+                )
+
+        bloque = ""
+        if aprobadas:
+            # Una sola lectura por petición: se resuelven todas las aprobadas de golpe y
+            # el resolver confina cada ruta contra la raíz o contra la autorización puntual.
+            refs = [ContextRef(kind=em.kind, value=str(em.path)) for em in aprobadas]
+            bundle = await engine.resolve(
+                refs, allowed_paths=tuple(em.path for em in aprobadas)
+            )
+            bloque = "\n\n".join(
+                f"--- {section.ref.value} (fuera del proyecto, autorizado este turno) ---\n"
+                f"{section.content}"
+                for section in bundle.sections
+            )
+        return bloque, informe, notas
+
+    async def _approve_external(self, mencion, approval: ApprovalPort | None, root) -> str:
+        """Pide aprobación para UNA mención externa; devuelve approved/denied/no_port."""
+        if approval is None:
+            return "no_port"
+        from uuid import uuid4
+
+        from satellite.core.proposal import ApprovalStatus
+
+        summary = (
+            f"adjuntar {mencion.path} por una @mención "
+            "(fuera del proyecto, solo este turno)"
+        )
+        decision = await approval.request(
+            {"kind": "context_path", "path": str(mencion.path), "summary": summary},
+            ApprovalContext(
+                kind="context_path",
+                # Id único por petición: dos turnos iguales no comparten decisión.
+                proposal_id=f"ctxext-{uuid4().hex}",
+                summary=summary,
+                details={
+                    "tool": "mention",
+                    "path": str(mencion.path),
+                    "project_root": str(root),
+                    "requested": mencion.value,
+                    "consequence": "lectura de contexto (solo este turno)",
+                },
+            ),
+        )
+        if decision is not None and decision.status is ApprovalStatus.APPROVED:
+            return "approved"
+        return "denied"
 
     async def choose(self, option, *, approval: ApprovalPort | None = None) -> ChatReply:
         """Elige una alternativa del modo plan y continúa con ella."""
@@ -417,6 +580,22 @@ class ChatSession:
             # orquestador no debe atajarla con el catálogo ni con respuesta directa.
             extra_metadata={"allow_plan_options": False, "execute_choice": True},
         )
+
+
+def _missing_project_context(task: Task) -> bool:
+    """True si el orquestador no pudo adjuntar contexto de proyecto en este turno.
+
+    El propio orquestador deja ``project_context_status`` cuando arma el turno; un
+    orquestador que no lo haga (dobles de test, runtimes de terceros) no dispara el aviso.
+    """
+    return str(task.metadata.get("project_context_status") or "") in ("empty", "unavailable")
+
+
+def _is_explanatory(goal: str) -> bool:
+    """True si el goal pregunta por el proyecto (overview/README), no por una acción."""
+    from satellite.context.project_index import explain_goal
+
+    return explain_goal(goal)
 
 
 _OUTPUT_TEXT_KEYS = ("content", "answer", "text", "summary", "result", "output")

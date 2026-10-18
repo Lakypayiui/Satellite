@@ -100,6 +100,25 @@ class ContextBundle:
 
 
 @dataclass(frozen=True)
+class ApprovedExternalContext:
+    """Contenido externo leído TRAS una aprobación explícita en el turno actual.
+
+    Es el único envoltorio que el orquestador acepta para adjuntar contexto de fuera
+    del proyecto. Un texto suelto puesto en ``metadata['context_external']`` (p. ej. vía
+    ``extra_metadata`` o cualquier otra vía interna) se **ignora**: así la aprobación del
+    usuario es la única fuente del contexto externo que se usa en el turno.
+    """
+
+    text: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.text, str):
+            raise ContractError(
+                f"ApprovedExternalContext: text debe ser str, recibido {type(self.text).__name__}"
+            )
+
+
+@dataclass(frozen=True)
 class ContextLimits:
     """Límites de tamaño/volumen del contexto de un nodo."""
 

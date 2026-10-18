@@ -18,6 +18,8 @@ FEEDBACK = ("once", "session")
 OPTIONS_BY_KIND = {
     "command": ("once", "session", "reject"),
     "path": ("once", "session", "reject"),
+    # La lectura de contexto externo es de un solo turno: no se ofrece «session».
+    "context_path": ("once", "reject"),
     # El grant de control de escritorio es siempre por sesión+app (no hay "una vez"
     # para observar/controlar una app); se revoca desde la política.
     "desktop_control": ("approve", "reject"),

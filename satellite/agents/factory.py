@@ -27,6 +27,7 @@ class DefaultAgentFactory(AgentFactory):
         context_engine=None,
         project_root: Path | None = None,
         workdir: Path | None = None,
+        sandbox=None,
         delegation_manager=None,
     ) -> None:
         self.registry = registry
@@ -39,6 +40,8 @@ class DefaultAgentFactory(AgentFactory):
         # Workdir de ejecución (worktree activo) que hereda cada agente; ``None`` = el
         # proyecto. Se resuelve por tarea al armar el runtime (ver ``build_runtime``).
         self.workdir = workdir
+        # Sandbox del nivel configurado que hereda cada agente (procesos y filesystem).
+        self.sandbox = sandbox
         self.delegation_manager = delegation_manager
         # request_context siempre disponible; la registra si no existe
         try:
@@ -77,5 +80,6 @@ class DefaultAgentFactory(AgentFactory):
             context_engine=self.context_engine,
             project_root=self.project_root,
             workdir=self.workdir,
+            sandbox=self.sandbox,
             delegation_manager=self.delegation_manager,
         )

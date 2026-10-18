@@ -42,6 +42,7 @@ def test_the_known_window_is_used_without_a_conversation(tmp_path: Path, monkeyp
 
 def test_a_failed_query_is_not_remembered(tmp_path: Path, monkeypatch) -> None:
     """Si el proveedor no contesta, no se guarda 0: se reintentará en otra sesión."""
+    monkeypatch.setenv("SATELLITE_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(compaction, "_ASKED", set())
     _config(tmp_path, model="m", base_url="https://ejemplo/v1")
     monkeypatch.setattr(compaction, "discover_window_result", lambda **kw: (None, False))
@@ -54,6 +55,7 @@ def test_a_failed_query_is_not_remembered(tmp_path: Path, monkeypatch) -> None:
 
 def test_an_answer_without_a_window_is_remembered(tmp_path: Path, monkeypatch) -> None:
     """Si responde pero no la publica, se recuerda 0 y no se repite la consulta."""
+    monkeypatch.setenv("SATELLITE_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(compaction, "_ASKED", set())
     _config(tmp_path, model="m2", base_url="https://ejemplo/v1")
     monkeypatch.setattr(compaction, "discover_window_result", lambda **kw: (None, True))

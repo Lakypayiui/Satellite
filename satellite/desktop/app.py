@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from satellite.desktop import require_dependencies
 from satellite.desktop.api import build_router
 from satellite.desktop.auth import make_dependency
-from satellite.desktop.backend import BackendError, DesktopBackend
+from satellite.desktop.backend import BackendError, DesktopBackend, redact_text
 
 
 def create_app(backend: DesktopBackend) -> FastAPI:
@@ -30,10 +30,14 @@ def create_app(backend: DesktopBackend) -> FastAPI:
 
     @app.exception_handler(BackendError)
     async def backend_error(_request: Request, exc: BackendError) -> JSONResponse:
-        """Un error del backend se cuenta con código y mensaje, nunca como 500 mudo."""
+        """Un error del backend se cuenta con código y mensaje, nunca como 500 mudo.
+
+        El mensaje sale redactado: un secreto que se colara en el texto de la excepción
+        no viaja al cliente (ni al log) con su valor.
+        """
         return JSONResponse(
             status_code=exc.status,
-            content={"error": {"code": exc.code, "message": exc.message}},
+            content={"error": {"code": exc.code, "message": redact_text(exc.message)}},
         )
 
     @app.exception_handler(RequestValidationError)
@@ -48,7 +52,7 @@ def create_app(backend: DesktopBackend) -> FastAPI:
             content={
                 "error": {
                     "code": "invalid_request",
-                    "message": problemas or "petición inválida",
+                    "message": redact_text(problemas) or "petición inválida",
                 }
             },
         )

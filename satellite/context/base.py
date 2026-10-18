@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 from satellite.core.context_models import (
     ContextBundle,
@@ -24,8 +25,13 @@ class ContextEngine(ABC):
         self,
         refs: list[ContextRef] | tuple[ContextRef, ...],
         limits: ContextLimits | None = None,
+        allowed_paths: tuple[Path, ...] | list[Path] = (),
     ) -> ContextBundle:
-        """Resuelve las referencias pedidas dentro de los límites."""
+        """Resuelve las referencias pedidas dentro de los límites.
+
+        ``allowed_paths`` son las rutas de fuera del proyecto que el usuario
+        autorizó **para esta petición**; sin ellas, una ruta externa se omite.
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -33,6 +39,7 @@ class ContextEngine(ABC):
         self,
         node_id: str,
         new_refs: list[ContextRef] | tuple[ContextRef, ...],
+        allowed_paths: tuple[Path, ...] | list[Path] = (),
     ) -> ContextBundle:
         """Pide contexto adicional en caliente para un nodo."""
         raise NotImplementedError

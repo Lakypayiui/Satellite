@@ -716,6 +716,7 @@ def event_text(event: ExecutionEvent):
 
 _APPROVAL_TITLES = {
     "path": "acceso fuera del proyecto",
+    "context_path": "leer fuera del proyecto (una vez)",
     "delegation": "permiso de delegación",
     "permission_escalation": "escalado de permisos",
 }

@@ -12,7 +12,10 @@ from satellite.core.context_models import (
     ContextRefKind,
     ContextSection,
 )
+from satellite.context.lookup import lookup
+from satellite.context.paths import canonical, confine, is_within
 from satellite.context.project_index import ProjectIndex
+from satellite.context.sensitive import is_sensitive_path
 
 TEXT_EXTENSIONS = {".py", ".js", ".ts", ".tsx", ".jsx", ".html", ".css", ".md", ".txt",
                    ".json", ".toml", ".yaml", ".yml", ".xml", ".sql", ".sh", ".bat",
@@ -24,20 +27,28 @@ class ContextResolver:
     """Resuelve referencias de contexto leyendo solo lo pedido."""
 
     def __init__(self, project_root: Path, index: ProjectIndex | None = None) -> None:
-        self.project_root = project_root
-        self.index = index or ProjectIndex(project_root)
+        # La raíz se canoniza una vez: todas las comprobaciones de confinamiento
+        # comparan contra esta forma, así que `..` y symlinks no pueden colarla.
+        root = canonical(project_root) or Path(project_root)
+        self.project_root = root
+        self.index = index or ProjectIndex(root)
 
     async def resolve_ref(
         self,
         ref: ContextRef,
         limits: ContextLimits | None = None,
+        allowed_paths: tuple[Path, ...] | list[Path] = (),
     ) -> ContextSection | None:
-        """Resuelve UN ref; devuelve None si no se puede resolver (se omite)."""
+        """Resuelve UN ref; devuelve None si no se puede resolver (se omite).
+
+        ``allowed_paths`` son las rutas de fuera del proyecto autorizadas para
+        esta petición concreta; sin ellas, cualquier ruta externa se omite.
+        """
         kind = ref.kind
         if kind is ContextRefKind.PATH:
-            return self._resolve_path(ref, limits)
+            return self._resolve_path(ref, limits, allowed_paths)
         if kind is ContextRefKind.DIR:
-            return self._resolve_dir(ref, limits)
+            return self._resolve_dir(ref, limits, allowed_paths)
         if kind is ContextRefKind.PATTERN:
             return self._resolve_pattern(ref, limits)
         if kind is ContextRefKind.SYMBOL:
@@ -52,11 +63,12 @@ class ContextResolver:
         self,
         refs: list[ContextRef] | tuple[ContextRef, ...],
         limits: ContextLimits | None = None,
+        allowed_paths: tuple[Path, ...] | list[Path] = (),
     ) -> ContextBundle:
         """Resuelve en orden y recorta si excede los límites (nunca fabrica)."""
         sections: list[ContextSection] = []
         for ref in refs:
-            section = await self.resolve_ref(ref, limits)
+            section = await self.resolve_ref(ref, limits, allowed_paths)
             if section is not None:
                 sections.append(section)
         bundle = ContextBundle(tuple(sections))
@@ -64,24 +76,43 @@ class ContextResolver:
 
     # --- helpers por kind ---
 
-    def _resolve_path(self, ref: ContextRef, limits: ContextLimits | None) -> ContextSection | None:
-        path = self._resolve_path_absolute(ref.value)
+    def _resolve_path(
+        self,
+        ref: ContextRef,
+        limits: ContextLimits | None,
+        allowed_paths: tuple[Path, ...] | list[Path] = (),
+    ) -> ContextSection | None:
+        path = self._locate_or_lookup(ref.value, allowed_paths)
         if path is None or not path.is_file():
+            return None
+        # Exclusión segura por defecto: un archivo sensible no entra al contexto
+        # aunque se mencione (``@.env``); así no se filtra a los prompts.
+        if is_sensitive_path(path):
             return None
         try:
             content = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return None
-        self.index.refresh(path)
+        # Sólo se indexa lo que vive dentro del proyecto: una ruta externa autorizada se
+        # lee para este turno y no debe quedar en el índice (ni en memoria ni en disco).
+        if is_within(path, self.project_root):
+            self.index.refresh(path)
         content = self._cap_section(content, limits)
         return ContextSection(ref=ref, content=content)
 
-    def _resolve_dir(self, ref: ContextRef, limits: ContextLimits | None) -> ContextSection | None:
-        path = self._resolve_path_absolute(ref.value)
+    def _resolve_dir(
+        self,
+        ref: ContextRef,
+        limits: ContextLimits | None,
+        allowed_paths: tuple[Path, ...] | list[Path] = (),
+    ) -> ContextSection | None:
+        path = self._locate_or_lookup(ref.value, allowed_paths)
         if path is None or not path.is_dir():
             return None
         lines: list[str] = []
         for child in sorted(path.iterdir(), key=lambda p: p.name):
+            if is_sensitive_path(child):
+                continue  # ni el nombre de un archivo sensible se ofrece en el listado
             if child.is_file():
                 lines.append(f"{child.name} ({child.stat().st_size} bytes)")
             elif child.is_dir():
@@ -197,13 +228,41 @@ class ContextResolver:
 
     # --- utilidades ---
 
-    def _resolve_path_absolute(self, value: str) -> Path | None:
+    def _locate(
+        self,
+        value: str,
+        allowed_paths: tuple[Path, ...] | list[Path] = (),
+    ) -> Path | None:
+        """Ruta canónica permitida para ``value``, o ``None`` si escapa del proyecto.
+
+        Un PATH/DIR sólo se lee si su forma canónica cae dentro de la raíz o de
+        una ruta autorizada para esta petición; si no, se omite (deny-by-default).
+        """
         if not value or not value.strip():
             return None
-        raw = Path(value)
-        if raw.is_absolute():
-            return raw
-        return self.project_root / raw
+        raw = Path(value).expanduser()
+        candidate = raw if raw.is_absolute() else self.project_root / raw
+        return confine(candidate, self.project_root, allowed_paths)
+
+    def _locate_or_lookup(
+        self,
+        value: str,
+        allowed_paths: tuple[Path, ...] | list[Path] = (),
+    ) -> Path | None:
+        """Como :meth:`_locate`, pero si la ruta exacta no existe la busca por nombre.
+
+        La búsqueda por nombre es determinista (ruta exacta > nombre exacto > difusa) y
+        confinada: si hay varias coincidencias exactas el resultado es **ambiguo** y se
+        omite (nunca se lee una al azar). No relaja la frontera: el ganador pasa otra vez
+        por ``confine``, así que una ruta que escape sigue sin resolverse.
+        """
+        located = self._locate(value, allowed_paths)
+        if located is not None and located.exists():
+            return located
+        found = lookup(self.project_root, value).winner
+        if found is None:
+            return None
+        return confine(self.project_root / found.relpath, self.project_root, allowed_paths)
 
     @staticmethod
     def _cap_section(content: str, limits: ContextLimits | None) -> str:

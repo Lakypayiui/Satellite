@@ -35,10 +35,15 @@ class DefaultContextEngine(ContextEngine):
         self,
         refs: list[ContextRef] | tuple[ContextRef, ...],
         limits: ContextLimits | None = None,
+        allowed_paths: tuple[Path, ...] | list[Path] = (),
     ) -> ContextBundle:
-        """Delega en el resolver dentro de los límites."""
+        """Delega en el resolver dentro de los límites.
+
+        ``allowed_paths`` viaja como argumento (no como estado del engine), así
+        que una autorización puntual no se filtra a otra petición concurrente.
+        """
         effective = limits or self.default_limits
-        bundle = await self.resolver.resolve_many(refs, effective)
+        bundle = await self.resolver.resolve_many(refs, effective, allowed_paths)
         self._last_bundle = bundle
         return bundle
 
@@ -46,9 +51,10 @@ class DefaultContextEngine(ContextEngine):
         self,
         node_id: str,
         new_refs: list[ContextRef] | tuple[ContextRef, ...],
+        allowed_paths: tuple[Path, ...] | list[Path] = (),
     ) -> ContextBundle:
         """Resuelve SOLO los refs nuevos; el runner decide cómo fusionar."""
-        return await self.resolve(new_refs)
+        return await self.resolve(new_refs, allowed_paths=allowed_paths)
 
     async def invalidate(self, paths: list[str]) -> None:
         """Marca los paths como desactualizados en el índice."""

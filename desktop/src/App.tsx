@@ -535,9 +535,14 @@ export function App() {
       if (respuesta.error) setAviso(respuesta.error);
       else if (
         respuesta.context &&
-        (respuesta.context.refs.length > 0 || respuesta.context.missing.length > 0)
+        (respuesta.context.refs.length > 0 ||
+          (respuesta.context.external?.length ?? 0) > 0 ||
+          (respuesta.context.ambiguous?.length ?? 0) > 0 ||
+          (respuesta.context.ignored?.length ?? 0) > 0 ||
+          respuesta.context.missing.length > 0)
       ) {
-        // Igual que la TUI: se dice qué @contexto se adjuntó y qué no se encontró.
+        // Igual que la TUI: se dice qué @contexto se adjuntó (o quedó fuera y no se
+        // autorizó), qué es ambiguo, qué es sensible/excluido y qué no se encontró.
         setAviso(t("app.context.summary", { resumen: respuesta.context.summary }));
       }
       await cargarTodo();

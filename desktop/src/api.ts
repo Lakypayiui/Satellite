@@ -90,9 +90,18 @@ export interface PlanOptionsView {
   recommendation: string;
 }
 
+/** Referencia externa de una @mención y en qué quedó su aprobación. */
+export type ExternalMentionStatus = "approved" | "denied" | "no_port" | "no_engine" | "cancelled";
+
 /** Resumen de las @menciones de un mensaje (mismo parseo que la TUI). */
 export interface MentionSummary {
   refs: { value: string; kind: string }[];
+  /** @menciones a rutas fuera del proyecto, con el estado de su aprobación puntual. */
+  external?: { value: string; path: string; status: ExternalMentionStatus }[];
+  /** @menciones que coinciden con varias rutas: no se lee ninguna, se pide la completa. */
+  ambiguous?: { value: string; candidates: string[] }[];
+  /** @menciones a archivos sensibles/excluidos: no se adjuntan, pero se dicen. */
+  ignored?: string[];
   missing: string[];
   summary: string;
 }

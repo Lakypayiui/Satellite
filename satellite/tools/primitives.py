@@ -26,6 +26,20 @@ __all__ = [
 ]
 
 
+def _python_argv(code: str, sandbox) -> list[str]:
+    """Intérprete para ``run_python``: el de la imagen en niveles de contenedor.
+
+    En N1 el proceso corre dentro del contenedor (``python:3.12-slim``), donde ``python``
+    existe; la ruta de ``sys.executable`` es la del host y no vale dentro. En N0/N2 (y
+    sin sandbox) se usa el intérprete actual, como siempre.
+    """
+    from satellite.sandbox.base import SandboxLevel
+
+    if sandbox is not None and getattr(sandbox, "level", None) is SandboxLevel.N1:
+        return ["python", "-c", code]
+    return [sys.executable, "-c", code]
+
+
 @dataclass
 class RunArgvTool(RunCommandTool):
     """Primitivo ``run_argv``: alias de ``run_command`` (misma política).
@@ -82,9 +96,18 @@ class RunPythonTool(Tool):
         if not isinstance(code, str) or not code.strip():
             return ToolResult(success=False, error="se requiere el argumento 'code'")
         timeout_s = int(arguments.get("timeout_s", 30))
-        argv = [sys.executable, "-c", code]
+        from satellite.sandbox.levels import execution_sandbox
         from satellite.tools.base import granted_for_this_call
 
+        sandbox, motivo = execution_sandbox(tool_ctx)
+        if motivo is not None:
+            return ToolResult(
+                success=False,
+                error=motivo,
+                error_code="sandbox_unavailable",
+                output={"command": code},
+            )
+        argv = _python_argv(code, sandbox)
         policy = tool_ctx.policy
         if (
             policy is not None
@@ -105,6 +128,7 @@ class RunPythonTool(Tool):
             env=env,
             timeout_s=timeout_s,
             cancel=getattr(tool_ctx, "cancel", None),
+            sandbox=sandbox,
         )
 
 

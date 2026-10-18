@@ -61,7 +61,10 @@ class ApprovalScreen(ModalScreen[ApprovalDecision]):
         self.kind = kind or "agent"
 
     def compose(self) -> ComposeResult:
-        pide_permiso = self.kind in ("path", "command")
+        pide_permiso = self.kind in ("path", "command", "context_path")
+        # La lectura de contexto externo es SIEMPRE de un solo turno: no se ofrece
+        # «Permitir la sesión» (sería prometer una persistencia que no existe).
+        ofrece_sesion = self.kind in ("path", "command")
         with Container(id="approval-box"):
             with VerticalScroll(id="approval-scroll"):
                 yield Static(
@@ -74,9 +77,9 @@ class ApprovalScreen(ModalScreen[ApprovalDecision]):
                     variant="success",
                     id="approve",
                 )
-                if pide_permiso:
+                if ofrece_sesion:
                     yield Button("Permitir la sesión", variant="primary", id="approve-session")
-                else:
+                elif not pide_permiso:
                     yield Button("Cambios", variant="warning", id="changes")
                 yield Button("Rechazar", variant="error", id="reject")
 
@@ -507,7 +510,15 @@ class SatelliteTUI(App):
         from satellite.context.mentions import parse as parse_mentions
 
         mencionadas = parse_mentions(text, self.session.project_root)
-        if mencionadas.refs or mencionadas.missing:
+        # La misma condición que el escritorio: se dice cualquier mención que no acabe
+        # adjuntada tal cual (externa, ambigua, sensible/excluida o inexistente).
+        if (
+            mencionadas.refs
+            or mencionadas.external
+            or mencionadas.missing
+            or mencionadas.ambiguous
+            or mencionadas.ignored
+        ):
             resumen = mencionadas.summary()
             self._log(
                 Text(f"contexto: {resumen}", style="dim"), plain=f"contexto: {resumen}"

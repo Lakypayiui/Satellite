@@ -131,6 +131,7 @@ class LLMAgent(Agent):
         context_engine=None,
         project_root: Path | None = None,
         workdir: Path | None = None,
+        sandbox=None,
         delegation_manager=None,
         delegation_ctx=None,
     ) -> None:
@@ -147,6 +148,10 @@ class LLMAgent(Agent):
         # Raíz donde las tools escriben/ejecutan (worktree activo). Si es None, el
         # ``ToolContext`` cae a ``project_root``: el comportamiento de siempre.
         self.workdir = workdir
+        # Sandbox efectivo del nivel configurado. Viaja al ``ToolContext`` para que
+        # ``run_command``/``run_argv``/``run_python`` ejecuten por él (y fallen cerrado
+        # si su backend no está disponible) en vez de correr sin confinamiento.
+        self.sandbox = sandbox
         self.delegation_manager = delegation_manager
         self.delegation_ctx = delegation_ctx
         if self.delegation_ctx is None and delegation_manager is not None:
@@ -484,6 +489,8 @@ class LLMAgent(Agent):
             approval=getattr(ctx, "approval", None),
             # Y el token, para que una tool que lanza un proceso pueda terminarlo.
             cancel=getattr(ctx, "cancel", None),
+            # El sandbox del nivel configurado: los procesos del agente corren por él.
+            sandbox=self.sandbox,
         )
         result = await self.tool_registry.execute(call, tool_ctx)
         if result.error_code == "path_outside_project" and tool_ctx.approval is not None:

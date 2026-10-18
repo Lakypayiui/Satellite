@@ -71,6 +71,8 @@ class DockerSandbox(SandboxRunner):
         # docker: matar el cliente deja el contenedor corriendo, que es el fallo clásico.
         from uuid import uuid4
 
+        from satellite.sandbox.process import group_kwargs, terminate_process_tree
+
         nombre = f"satellite-sandbox-{uuid4().hex[:8]}"
         docker_argv = self.named_argv(self.build_argv(argv, spec), nombre)
         try:
@@ -80,6 +82,7 @@ class DockerSandbox(SandboxRunner):
                 stdin=asyncio.subprocess.PIPE if spec.stdin is not None else None,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                **group_kwargs(),
             )
             payload = spec.stdin.encode("utf-8") if spec.stdin is not None else None
             from satellite.orchestration.cancel import race_cancel
@@ -90,9 +93,10 @@ class DockerSandbox(SandboxRunner):
                     asyncio.wait_for(proc.communicate(input=payload), timeout=spec.timeout_s),
                 )
             except asyncio.TimeoutError:
+                # Primero se **para el contenedor** (matar al cliente no lo haría) y luego
+                # se termina el árbol del cliente de docker, que puede tener descendientes.
                 await self._stop(nombre)
-                proc.kill()
-                await proc.wait()
+                await terminate_process_tree(proc)
                 return SandboxResult(
                     exit_code=-1,
                     timed_out=True,
@@ -100,8 +104,7 @@ class DockerSandbox(SandboxRunner):
                 )
             if cancelado:
                 parado = await self._stop(nombre)
-                proc.kill()
-                await proc.wait()
+                await terminate_process_tree(proc)
                 motivo = str(getattr(spec.cancel, "reason", "") or "cancelado por el usuario")
                 return SandboxResult(
                     exit_code=-1,

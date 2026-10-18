@@ -76,11 +76,23 @@ The index is rebuilt **incrementally** — only files whose `mtime`/size changed
 the rest reuse the structure already saved — on `satellite init`, when the desktop
 *initialize*s a project and at the start of every turn. A bounded view of it (a two-level
 tree plus the most relevant README/entry-point excerpts, capped at 12 000 chars) is then
-attached **automatically**, so a question like *"¿de qué trata este proyecto?"* is answered
-from the real README and entry points instead of being guessed: the planner receives it in
-its `{context}` slot, graph nodes as a `SUMMARY` section and the conversational reply as
-well. It always travels framed as **data, never instructions**, the same untrusted-data rule
-as every other retrieved excerpt.
+attached **automatically** to the same turn on **every flow** — the conversational (direct)
+reply, the planner, the plan-mode alternatives and each graph node — so a question like
+*"¿de qué trata este proyecto?"* is answered from the real README and entry points instead
+of being guessed, and a normal question still brings the files the index ranks as relevant.
+Only that bounded view travels; the contents are read on demand, never the whole repository.
+It always travels framed as **data, never instructions**, the same untrusted-data rule as
+every other retrieved excerpt.
+
+When a turn asks about the project but there is nothing to attach (an empty project, or an
+index that could not be built), the reply **says so** instead of implying it read files it
+did not. The same honesty applies to `@` mentions: a mention to a **sensitive/excluded** file
+is never read as context (the resolver vetoes it) and is reported as *ignored* rather than
+offered as attached; an **ambiguous** mention (a bare name that matches several paths) and a
+**missing** one are likewise reported, and a path **outside** the project is only read after
+a per-turn approval. TUI, desktop and the CLI `plan`/`queue` paths all share this report
+(same parser, same wording); the one-shot `satellite run` relies on the automatic index alone,
+since `@` mentions are a composer feature of the interactive surfaces.
 
 ## Sandbox and skill memoization
 
@@ -88,6 +100,7 @@ as every other retrieved excerpt.
   enforce network isolation: a script runs with your user's permissions and may reach the
   network. This is process isolation, **not** OS isolation.
 - **N1** — Docker container with `--network none` and the workspace mounted **read-only**.
+  This is the only level that confines the filesystem **and** the network.
 - **N2** — no confinement, for trusted local work only.
 
 Tools can only write inside the workspace (plus the extra roots you declare) and
@@ -97,9 +110,17 @@ conversation, the context window and the skill cache live), the **audit** log an
 the provider **config** (global keys and project preferences). A symlink from the workspace
 into any of them resolves to the protected zone and is refused.
 
-Note that only **N1** confines `run_command`/`run_python`: in N0 they are plain
-subprocesses running with your user's permissions, so the zones above protect the
-framework's own files, not the machine.
+The level applies to the **free-form processes the agent runs** — `run_command`,
+`run_argv`, `run_python` and skills all go through the runner the level selects. The one
+exception is the fixed, read-only `git_status` tool, which always runs on the host (its
+argv is a constant, so there is no prompt-controlled command to confine). In **N0** those
+processes are plain subprocesses running with your user's permissions (the network is still
+reachable), so the protected zones above guard the framework's own files, not the machine. In
+**N1** they run inside the container (no network, workspace read-only). If a level is
+configured but cannot be enforced — **N1 selected without Docker** — the runtime **fails
+closed**: the process is refused with an explicit error instead of silently running on the
+host. Background jobs (`run_command` with `background: true`) are refused under **N1** for the
+same reason: they would run without the confinement the level promises.
 
 A skill's result is memoized only when its manifest declares `deterministic: true` **and** a
 static audit of the script and its local modules finds nothing non-deterministic (randomness,

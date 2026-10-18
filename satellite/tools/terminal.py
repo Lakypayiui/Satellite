@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
 from satellite.core.tool_models import ToolResult
-from satellite.sandbox.base import sanitize_env
+from satellite.sandbox.base import SandboxLevel, SandboxSpec, sanitize_env
 from satellite.tools.base import Tool, ToolContext
 
 OUTPUT_LIMIT_CHARS = 64_000
@@ -20,6 +19,71 @@ def _truncate(text: str, limit: int = OUTPUT_LIMIT_CHARS) -> str:
     return text[:limit] + f"\n\n[truncado: {len(text) - limit} caracteres omitidos]"
 
 
+def _tool_result_from_sandbox(raw, argv: list[str], timeout_s: int) -> ToolResult:
+    """Normaliza un ``SandboxResult`` a ``ToolResult`` sin ocultar el fallo cerrado.
+
+    Un error interno del sandbox (p. ej. Docker no disponible) se marca con
+    ``error_code="sandbox_unavailable"``: quien lo lea sabe que **no** se ejecutó en el
+    host, en vez de confundirlo con un comando que falló por su cuenta.
+    """
+    output = {
+        "exit_code": raw.exit_code,
+        "stdout": raw.stdout,
+        "stderr": raw.stderr,
+    }
+    if raw.timed_out:
+        output["timed_out"] = True
+        return ToolResult(
+            success=False,
+            error=raw.error or f"timeout de {timeout_s}s alcanzado",
+            output=output,
+        )
+    if raw.cancelled:
+        output["cancelled"] = True
+        output["argv"] = list(argv)
+        return ToolResult(
+            success=False,
+            error=raw.error or "cancelado por el usuario",
+            error_code="cancelled",
+            output=output,
+        )
+    if raw.error is not None:
+        return ToolResult(
+            success=False,
+            error=raw.error,
+            error_code="sandbox_unavailable",
+            output=output,
+        )
+    return ToolResult(success=raw.exit_code == 0, output=output)
+
+
+async def _run_in_sandbox(
+    sandbox,
+    argv: list[str],
+    *,
+    cwd: Path,
+    env: dict,
+    timeout_s: int,
+    stdin: str | None,
+    cancel,
+) -> ToolResult:
+    """Ejecuta ``argv`` por el sandbox configurado (N0/N1/N2), sin shell."""
+    spec = SandboxSpec(
+        project_root=Path(cwd),
+        level=getattr(sandbox, "level", SandboxLevel.N0),
+        workdir=Path(cwd),
+        # El aislamiento del nivel manda: N1 corta la red (--network none). N0/N2 no
+        # confinan la red de todas formas, así que el valor no cambia su comportamiento.
+        allow_network=False,
+        timeout_s=timeout_s,
+        env=dict(env or {}),
+        stdin=stdin,
+        cancel=cancel,
+    )
+    raw = await sandbox.run(argv, spec)
+    return _tool_result_from_sandbox(raw, argv, timeout_s)
+
+
 async def execute_argv(
     argv: list[str],
     *,
@@ -29,40 +93,42 @@ async def execute_argv(
     stdin: str | None = None,
     output_limit: int = OUTPUT_LIMIT_CHARS,
     cancel=None,
+    sandbox=None,
 ) -> ToolResult:
     """Ejecuta un ``argv`` sin shell y devuelve un ``ToolResult`` normalizado.
 
     ``cancel`` es el token de la ejecución: si alguien pide cancelar mientras el proceso
     corre, se le **termina** (no se espera a que acabe, que es lo único que hace útil
     poder cancelar un comando largo).
+
+    ``sandbox`` (``SandboxRunner``) es el aislamiento efectivo del nivel configurado: si
+    se pasa, el proceso corre **por él** (N0 subproceso / N1 Docker / N2 host) y un
+    backend no disponible devuelve un error en lugar de ejecutar en el host.
     """
-    from satellite.orchestration.cancel import race_cancel
+    if sandbox is not None:
+        return await _run_in_sandbox(
+            sandbox,
+            argv,
+            cwd=cwd,
+            env=env,
+            timeout_s=timeout_s,
+            stdin=stdin,
+            cancel=cancel,
+        )
+
+    from satellite.sandbox.process import run_process
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            cwd=str(cwd),
-            env=env,
-            stdin=asyncio.subprocess.PIPE if stdin is not None else None,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        outcome = await run_process(
+            argv, cwd=cwd, env=env, timeout_s=timeout_s, stdin=stdin, cancel=cancel
         )
     except (OSError, ValueError) as exc:
         return ToolResult(success=False, error=f"no se pudo ejecutar: {exc}")
 
-    payload = stdin.encode("utf-8") if stdin is not None else None
-    try:
-        salida, cancelado = await race_cancel(
-            cancel, asyncio.wait_for(proc.communicate(input=payload), timeout=timeout_s)
-        )
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
+    if outcome.timed_out:
         return ToolResult(success=False, error=f"timeout de {timeout_s}s alcanzado")
 
-    if cancelado:
-        proc.kill()
-        await proc.wait()
+    if outcome.cancelled:
         motivo = str(getattr(cancel, "reason", "") or "cancelado por el usuario")
         return ToolResult(
             success=False,
@@ -71,13 +137,12 @@ async def execute_argv(
             output={"cancelled": True, "argv": list(argv)},
         )
 
-    stdout, stderr = salida
     return ToolResult(
-        success=proc.returncode == 0,
+        success=outcome.exit_code == 0,
         output={
-            "exit_code": proc.returncode,
-            "stdout": _truncate(stdout.decode(errors="replace"), output_limit),
-            "stderr": _truncate(stderr.decode(errors="replace"), output_limit),
+            "exit_code": outcome.exit_code,
+            "stdout": _truncate(outcome.stdout.decode(errors="replace"), output_limit),
+            "stderr": _truncate(outcome.stderr.decode(errors="replace"), output_limit),
         },
     )
 
@@ -127,6 +192,7 @@ class RunCommandTool(Tool):
         if not isinstance(cmd_raw, str) or not cmd_raw.strip():
             return ToolResult(success=False, error="se requiere el argumento 'command'")
         argv = shlex.split(cmd_raw)
+        from satellite.sandbox.levels import background_error, execution_sandbox
         from satellite.tools.base import granted_for_this_call
 
         policy = tool_ctx.policy
@@ -145,7 +211,18 @@ class RunCommandTool(Tool):
             if policy is not None and not policy.check_path(cwd, tool_ctx.project_root):
                 return ToolResult(success=False, error=f"permiso denegado: {cwd}")
         env = sanitize_env(tool_ctx.env)
+        sandbox, motivo = execution_sandbox(tool_ctx)
+        if motivo is not None:
+            return ToolResult(
+                success=False,
+                error=motivo,
+                error_code="sandbox_unavailable",
+                output={"command": cmd_raw, "binary": argv[0], "argv": list(argv)},
+            )
         if bool(arguments.get("background", False)):
+            segundo = background_error(tool_ctx)
+            if segundo is not None:
+                return ToolResult(success=False, error=segundo, error_code="sandbox_unavailable")
             from satellite.tools.jobs import start_background
 
             return start_background(
@@ -157,4 +234,5 @@ class RunCommandTool(Tool):
             env=env,
             timeout_s=timeout_s,
             cancel=getattr(tool_ctx, "cancel", None),
+            sandbox=sandbox,
         )

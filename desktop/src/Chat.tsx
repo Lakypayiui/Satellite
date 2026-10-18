@@ -531,7 +531,9 @@ export function Chat(props: Props) {
               ? t("chat.permission.command")
               : permiso.kind === "path"
                 ? t("chat.permission.path")
-                : t("chat.permission.other", { tipo: permiso.kind })}
+                : permiso.kind === "context_path"
+                  ? t("chat.permission.contextPath")
+                  : t("chat.permission.other", { tipo: permiso.kind })}
           </h3>
           <div className="porque">{permiso.summary}</div>
           {permiso.reason && (

@@ -5,10 +5,22 @@ from __future__ import annotations
 from pathlib import Path
 
 from satellite.approval.base import ApprovalContext
+from satellite.context.paths import canonical, is_within
 from satellite.core.context_models import ContextRef, ContextRefKind
 from satellite.core.proposal import ApprovalStatus
 from satellite.core.tool_models import ToolResult
 from satellite.tools.base import Tool, ToolContext
+
+
+def _resolver_root(engine: object, tool_ctx: ToolContext) -> Path:
+    """Raíz canónica del engine (la misma que usa el resolver para confinar)."""
+    resolver = getattr(engine, "resolver", None)
+    source = (
+        getattr(resolver, "project_root", None)
+        or getattr(engine, "project_root", None)
+        or tool_ctx.project_root
+    )
+    return canonical(source) or Path(source)
 
 
 class RequestContextTool(Tool):
@@ -72,39 +84,37 @@ class RequestContextTool(Tool):
                 error=f"refs inválidos: {exc}",
             )
 
-        # ContextResolver accepts absolute paths. Do not let request_context bypass
-        # the same per-request approval used by filesystem tools for outside paths.
-        root = Path(getattr(engine, "project_root", tool_ctx.project_root)).resolve()
+        # El cierre real vive en el resolver (deny-by-default sobre la ruta
+        # canónica). Aquí sólo se pide la aprobación puntual por cada ruta de
+        # fuera y se reenvía al engine como `allowed_paths` de ESTA petición: la
+        # autorización no se persiste ni se recuerda entre solicitudes.
+        root = _resolver_root(engine, tool_ctx)
+        approved: list[Path] = []
         for ref in refs:
             if ref.kind not in (ContextRefKind.PATH, ContextRefKind.DIR):
                 continue
-            candidate = Path(ref.value)
-            if not candidate.is_absolute():
-                candidate = root / candidate
-            try:
-                canonical = candidate.resolve(strict=False)
-                canonical.relative_to(root)
-                outside = False
-            except (OSError, ValueError):
-                outside = True
-            if not outside:
+            raw = Path(ref.value).expanduser()
+            candidate = raw if raw.is_absolute() else root / raw
+            resolved = canonical(candidate)
+            # Interna válida (o irresoluble): no se pregunta nada.
+            if resolved is None or is_within(resolved, root):
                 continue
             approval = getattr(tool_ctx, "approval", None)
             if approval is None:
                 return ToolResult(
                     success=False,
-                    error=f"permiso requerido para leer fuera del proyecto: {canonical}",
+                    error=f"permiso requerido para leer fuera del proyecto: {resolved}",
                 )
-            summary = f"request_context solicita leer fuera del proyecto: {canonical}"
+            summary = f"request_context solicita leer fuera del proyecto: {resolved}"
             decision = await approval.request(
-                {"kind": "context_path", "path": str(canonical), "summary": summary},
+                {"kind": "context_path", "path": str(resolved), "summary": summary},
                 ApprovalContext(
                     kind="path",
                     task_id=tool_ctx.task_id,
                     summary=summary,
                     details={
                         "tool": self.id,
-                        "path": str(canonical),
+                        "path": str(resolved),
                         "project_root": str(root),
                         "requested": ref.value,
                         "consequence": "lectura de contexto",
@@ -114,10 +124,16 @@ class RequestContextTool(Tool):
             if decision is None or decision.status is not ApprovalStatus.APPROVED:
                 return ToolResult(
                     success=False,
-                    error=f"lectura fuera del proyecto denegada: {canonical}",
+                    error=f"lectura fuera del proyecto denegada: {resolved}",
                 )
+            approved.append(resolved)
 
-        bundle = await engine.resolve(refs)
+        # Sin rutas externas aprobadas se usa la firma de siempre, para no exigir
+        # `allowed_paths` a implementaciones/fakes de ContextEngine que no lo tengan.
+        if approved:
+            bundle = await engine.resolve(refs, allowed_paths=tuple(approved))
+        else:
+            bundle = await engine.resolve(refs)
         sections = []
         for section in bundle.sections:
             sections.append(

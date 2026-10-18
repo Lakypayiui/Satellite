@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import re
 from dataclasses import asdict, is_dataclass
 from enum import Enum
 from pathlib import Path
@@ -24,7 +25,43 @@ from satellite.tools.jobs import registry_for
 from satellite.tui.session import Session
 
 RECENTS_LIMIT = 12
-SECRET_KEYS = {"api_key", "apikey", "api_key_value", "token", "password", "secret"}
+# Campos que son secreto por su nombre: nunca salen con su valor (sólo ``<clave>_set``).
+SECRET_KEYS = {
+    "api_key",
+    "apikey",
+    "api_key_value",
+    "token",
+    "access_token",
+    "refresh_token",
+    "session_token",
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "client_secret",
+    "private_key",
+    "authorization",
+    "bearer",
+    "credential",
+    "credentials",
+}
+# Familias de credenciales conocidas: se enmascaran también dentro de textos (errores,
+# mensajes). Sólo patrones de clave real, para no tocar valores legítimos.
+_SECRET_VALUE_PATTERNS = (
+    re.compile(r"sk-(?:proj-|live-|test-)?[A-Za-z0-9_\-]{16,}"),
+    re.compile(r"(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}"),
+    re.compile(r"xai-[A-Za-z0-9]{16,}"),
+    re.compile(r"hf_[A-Za-z0-9]{20,}"),
+    re.compile(r"gsk_[A-Za-z0-9]{20,}"),
+    re.compile(r"r8_[A-Za-z0-9]{20,}"),
+    re.compile(r"pplx-[A-Za-z0-9]{20,}"),
+    re.compile(r"nvapi-[A-Za-z0-9_\-]{16,}"),
+    re.compile(r"AIza[0-9A-Za-z_\-]{35}"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+"),
+    re.compile(r"-----BEGIN[^-]*PRIVATE KEY-----.*?-----END[^-]*PRIVATE KEY-----", re.S),
+)
+REDACTED = "[REDACTED]"
 # Autocompletado de @menciones del compositor: tope de sugerencias y vida de la caché
 # del listado (evita recorrer el árbol en cada tecla sin quedarse con datos viejos).
 MENTION_LIMIT = 20
@@ -59,8 +96,28 @@ def to_jsonable(value: Any) -> Any:
     return str(value)
 
 
+def redact_text(text: Any) -> str:
+    """Enmascara claves con forma conocida dentro de un texto (errores, mensajes).
+
+    Sólo actúa sobre patrones de credencial reales: no toca URLs, modelos ni otras
+    cadenas legítimas. Se usa para que un secreto no salga por un mensaje de error ni
+    quede en un log, sin recortar el texto útil.
+    """
+    if text is None:
+        return ""
+    value = text if isinstance(text, str) else str(text)
+    for pattern in _SECRET_VALUE_PATTERNS:
+        value = pattern.sub(REDACTED, value)
+    return value
+
+
 def redact(data: Any) -> Any:
-    """Quita secretos de una configuración: la clave del proveedor no sale de aquí."""
+    """Quita secretos de una configuración: la clave del proveedor no sale de aquí.
+
+    Actúa en dos frentes: por **nombre** de campo (``api_key`` → ``api_key_set``) y por
+    **valor** con forma de credencial, también dentro de cadenas anidadas. La
+    configuración interna que usa el runtime no pasa por aquí: sólo las vistas al exterior.
+    """
     if isinstance(data, dict):
         out: dict = {}
         for key, value in data.items():
@@ -71,6 +128,8 @@ def redact(data: Any) -> Any:
         return out
     if isinstance(data, list):
         return [redact(item) for item in data]
+    if isinstance(data, str):
+        return redact_text(data)
     return data
 
 
@@ -140,7 +199,9 @@ class DesktopBackend:
             self.session().paths()  # crea .satellite/ de forma idempotente
         except Exception as exc:  # noqa: BLE001 — se informa, no se finge que está listo
             raise BackendError(
-                "project_unavailable", f"no se pudo preparar el proyecto: {exc}", 503
+                "project_unavailable",
+                f"no se pudo preparar el proyecto: {redact_text(str(exc))}",
+                503,
             ) from exc
         self.remember(self.project_root)
         return self.status()
@@ -181,7 +242,7 @@ class DesktopBackend:
                 _orchestrator, bus, store, _registry = self.session(project_root).runtime()
                 bridge.attach(bus, store)
             except Exception as exc:  # noqa: BLE001 — sin proveedor no hay runtime: se dice
-                self._runtime_errors[key] = str(exc)
+                self._runtime_errors[key] = redact_text(str(exc))
         return bridge
 
     def require_runtime(self, project_root=None) -> EventBridge:
@@ -232,8 +293,8 @@ class DesktopBackend:
         try:
             _orchestrator, bus, store, _registry = self._force_runtime(self.session(project_root))
         except Exception as exc:  # noqa: BLE001 — queda guardado y se informa aparte
-            self._runtime_errors[key] = str(exc)
-            return str(exc)
+            self._runtime_errors[key] = redact_text(str(exc))
+            return redact_text(str(exc))
         bridge = self._bridges.get(key)
         if bridge is not None:
             bridge.attach(bus, store)
@@ -248,7 +309,7 @@ class DesktopBackend:
             data = to_jsonable(session.status())
         except Exception as exc:  # noqa: BLE001
             raise BackendError(
-                "status_unavailable", f"no se pudo leer el estado: {exc}", 503
+                "status_unavailable", f"no se pudo leer el estado: {redact_text(str(exc))}", 503
             ) from exc
         data["runtime_ready"] = self.bridge(project_root).attached
         # Para el onboarding: si el proyecto lo eligió una persona y si hay proveedor,
@@ -530,6 +591,10 @@ class DesktopBackend:
         # El modo plan devuelve alternativas: se guardan para poder elegir después (incluso
         # tras recargar la app). Cualquier otra respuesta olvida las anteriores.
         plan = self._remember_plan(reply, project_root)
+        # ChatSession resolvió las aprobaciones de @menciones externas: su ``context`` trae
+        # el estado real (adjuntada/denegada/sin puerto). Se prefiere sobre el parseo previo,
+        # que no puede conocer la decisión del usuario.
+        contexto = getattr(reply, "context", None) or contexto
         return {**to_jsonable(reply), "context": contexto, "plan": plan}
 
     CANCEL_GRACE_S = 2.5
@@ -1630,7 +1695,7 @@ class DesktopBackend:
         root = self.resolve(project_root)
         return {
             "roles": list(pconfig.ROLES),
-            "configured": to_jsonable(pconfig.role_config(root)),
+            "configured": redact(to_jsonable(pconfig.role_config(root))),
             "active": pconfig.active_id(root),
             "providers": self._providers_payload(root),
         }
@@ -1846,7 +1911,16 @@ class DesktopBackend:
         menciones = parse_mentions(text, self.resolve(project_root))
         return {
             "refs": [{"value": ref.value, "kind": ref.kind.value} for ref in menciones.refs],
+            # Las externas sólo se leen tras aprobación; si el turno se corta antes, no hay
+            # decisión y el estado queda como «cancelada» en vez de fingir que se adjuntó.
+            "external": [
+                {"value": em.value, "path": str(em.path), "status": "cancelled"}
+                for em in menciones.external
+            ],
             "missing": list(menciones.missing),
+            "ambiguous": [amb.to_dict() for amb in menciones.ambiguous],
+            # Archivos sensibles/excluidos: no se adjuntan, pero se dicen (no se finge).
+            "ignored": list(menciones.ignored),
             "summary": menciones.summary(),
         }
 

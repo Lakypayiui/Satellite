@@ -53,7 +53,7 @@ from satellite.providers.base import LLMProvider
 from satellite.providers.factory import ProviderConfig, ProviderFactory
 from satellite.providers.caching import parse_cache_config
 from satellite.providers.capabilities import EFFORT_PARAM, param_for_control
-from satellite.sandbox.subprocess_sandbox import SubprocessSandbox
+from satellite.sandbox.levels import resolve_sandbox
 from satellite.security.policy import DefaultSecurityPolicy
 from satellite.skills.registry import SkillRegistry
 from satellite.skills.runner import SkillRunner
@@ -157,10 +157,12 @@ def build_runtime(
         _metered(_load_provider(project_root), project_root=project_root, settings=settings)
     )
 
-    # Skills globales (carga tolerante) + sandbox N0.
+    # Skills globales (carga tolerante) + sandbox del nivel configurado.
+    # El nivel manda para skills Y para los procesos del agente (``run_command``/
+    # ``run_python``): N0 subproceso, N1 Docker (falla cerrado si no está), N2 host.
     skill_registry = SkillRegistry(paths.skills_root, sink=None)
     skill_registry.load_all()
-    sandbox = SubprocessSandbox()
+    sandbox = resolve_sandbox(settings.sandbox_level)
     skill_runner = SkillRunner(
         skill_registry,
         sandbox,
@@ -202,6 +204,8 @@ def build_runtime(
         # Worktree activo (si lo hay): las tools escriben y ejecutan ahí, no en el
         # workspace original. ``None`` = el proyecto de siempre.
         workdir=_active_workdir(project_root),
+        # Sandbox del nivel configurado: los agentes ejecutan sus procesos por él.
+        sandbox=sandbox,
     )
     delegation = DelegationManager(
         factory,

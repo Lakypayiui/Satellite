@@ -44,6 +44,14 @@ class ToolContext:
     cancel: object | None = None
     # Comandos concedidos por una aprobación puntual, solo para esta llamada.
     allowed_commands: tuple[str, ...] = ()
+    # Sandbox efectivo (``SandboxRunner``) con el que se ejecutan los procesos que lanza
+    # el agente. Si está presente, ``run_command``/``run_argv``/``run_python`` ejecutan
+    # SIEMPRE por él (y él falla cerrado si su backend no está disponible). ``None`` +
+    # ``sandbox_level`` vacío/N0 = subproceso directo de siempre.
+    sandbox: object | None = None
+    # Nivel de sandbox anunciado. Se usa para fallar cerrado cuando un nivel aislado
+    # (N1) fue declarado pero no se inyectó ningún runner.
+    sandbox_level: str = ""
 
 
 def granted_for_this_call(argv: list[str] | tuple[str, ...], tool_ctx) -> bool:

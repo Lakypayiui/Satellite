@@ -10,6 +10,8 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from satellite.context.sensitive import is_index_excluded
+
 IGNORED_DIRS = {
     ".git", ".venv", "venv", "node_modules", ".satellite", ".agent",
     "__pycache__", "build", "dist", "out",
@@ -17,7 +19,6 @@ IGNORED_DIRS = {
 }
 _MAX_INDEX_FILE_BYTES = 1_000_000
 _MAX_CONTEXT_CHARS = 12_000
-_SECRET_NAMES = {".env", "credentials", "secrets", "id_rsa", "id_ed25519"}
 _TEXT_SUFFIXES = {
     ".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".json",
     ".toml", ".yaml", ".yml", ".md", ".rst", ".txt", ".html", ".css",
@@ -62,6 +63,18 @@ _LANG_PATTERNS: dict[str, dict[str, re.Pattern]] = {
 }
 
 _SKIP_SYMBOLS = {"", "if", "for", "while", "return", "switch", "catch", "new"}
+
+# Preguntas por el proyecto (overview/README): piden una explicación, no una acción.
+_EXPLAIN_RE = re.compile(
+    r"\b(qué|que|trata|describe|explica|explique|resumen|resum|hace|overview|about|"
+    r"arquitectura|funciona|consiste)\b",
+    re.IGNORECASE,
+)
+
+
+def explain_goal(goal: str) -> bool:
+    """True si el goal pregunta por el proyecto (overview/README) y no por una acción."""
+    return bool(_EXPLAIN_RE.search(str(goal or "")))
 
 
 class ProjectIndex:
@@ -157,10 +170,7 @@ class ProjectIndex:
             return ""
 
         words = {word.lower() for word in re.findall(r"[\w.-]{3,}", goal)}
-        explain = bool(re.search(
-            r"\b(qué|que|trata|describe|explica|explique|resumen|resum|hace|overview|about|"
-            r"arquitectura|funciona|consiste)\b", goal, re.I
-        ))
+        explain = explain_goal(goal)
         ranked: list[tuple[int, str, Path]] = []
         for rel in rels:
             path = self.project_root / rel
@@ -206,10 +216,7 @@ class ProjectIndex:
         return "\n".join(lines)[:max_chars]
 
     def _safe_index_file(self, path: Path) -> bool:
-        name = path.name.lower()
-        if name in _SECRET_NAMES or name.startswith(".env") or any(token in name for token in ("secret", "credential")):
-            return False
-        if path.suffix.lower() in {".pem", ".key", ".p12", ".pfx", ".keystore"}:
+        if is_index_excluded(path):
             return False
         try:
             path.resolve().relative_to(self.project_root)

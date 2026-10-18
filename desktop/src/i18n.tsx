@@ -227,6 +227,10 @@ export const TEXTOS = {
     es: "Permiso para acceder a una ruta",
     en: "Permission to access a path",
   },
+  "chat.permission.contextPath": {
+    es: "Leer fuera del proyecto (una vez)",
+    en: "Read outside the project (once)",
+  },
   "chat.permission.other": { es: "Permiso: {tipo}", en: "Permission: {tipo}" },
   "chat.permission.reason": { es: "motivo: {motivo}", en: "reason: {motivo}" },
   "chat.permission.once": { es: "permitir una vez", en: "allow once" },
@@ -759,8 +763,8 @@ export const TEXTOS = {
   },
   "settings.permissions.sandbox.note.no": { es: "no", en: "it does not" },
   "settings.permissions.sandbox.note.b": {
-    es: " aísla del sistema operativo. Sólo N1 (Docker, sin red, espacio de trabajo en sólo lectura) confina de verdad.",
-    en: " isolate it from the operating system. Only N1 (Docker, no network, read-only workspace) truly confines it.",
+    es: " aísla del sistema operativo. Sólo N1 (Docker, sin red, espacio de trabajo en sólo lectura) confina de verdad; si el sandbox elegido no puede aplicarse (por ejemplo N1 sin Docker), los comandos del agente y las skills fallan cerrado en vez de correr en el host.",
+    en: " isolate it from the operating system. Only N1 (Docker, no network, read-only workspace) truly confines it; if the chosen sandbox cannot be enforced (for example N1 without Docker), the agent's commands and skills fail closed instead of running on the host.",
   },
   "settings.permissions.setup": { es: "Detectar Docker (setup)", en: "Detect Docker (setup)" },
 

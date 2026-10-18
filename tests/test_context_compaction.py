@@ -362,6 +362,7 @@ def test_window_cache_roundtrip(tmp_path: Path) -> None:
 
 def test_chat_uses_the_window_declared_by_the_provider(tmp_path: Path, monkeypatch) -> None:
     """La ventana sale de la data del proveedor y se recuerda (sin red extra)."""
+    monkeypatch.setenv("SATELLITE_HOME", str(tmp_path / "home"))
     cfg = tmp_path / ".satellite" / "config"
     cfg.mkdir(parents=True, exist_ok=True)
     (cfg / "config.json").write_text(
@@ -396,6 +397,7 @@ def test_chat_uses_the_window_declared_by_the_provider(tmp_path: Path, monkeypat
 
 
 def test_chat_falls_back_when_the_provider_has_no_data(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SATELLITE_HOME", str(tmp_path / "home"))
     cfg = tmp_path / ".satellite" / "config"
     cfg.mkdir(parents=True, exist_ok=True)
     (cfg / "config.json").write_text(
