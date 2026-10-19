@@ -50,11 +50,14 @@ def _accepts_recommendation(text: str) -> bool:
 
 
 def _option_instruction(option) -> str:
-    """Orden de ejecución derivada de una alternativa del modo plan."""
-    steps = "; ".join(getattr(option, "approach", ()) or ()) or "sin pasos detallados"
+    """Execution instruction derived from a plan-mode option (internal, English)."""
+    steps = (
+        "; ".join(getattr(option, "approach", ()) or ())
+        or "no detailed steps were provided"
+    )
     return (
-        f"Opción elegida: {getattr(option, 'title', '')}. "
-        f"{getattr(option, 'summary', '')} Pasos: {steps}. Procede con esta opción."
+        f"Chosen option: {getattr(option, 'title', '')}. "
+        f"{getattr(option, 'summary', '')} Steps: {steps}. Proceed with this option."
     )
 
 
@@ -389,13 +392,23 @@ class ChatSession:
         approval: ApprovalPort | None = None,
         plan_mode: bool = False,
         extra_metadata: dict | None = None,
+        record_text: str | None = None,
     ) -> ChatReply:
-        """Envía un mensaje: compacta si hace falta, planifica/ejecuta y guarda."""
+        """Envía un mensaje: compacta si hace falta, planifica/ejecuta y guarda.
+
+        ``record_text`` is what the conversation stores for this user turn when the
+        execution goal carries an internal instruction (e.g. an explicit plan choice).
+        The goal itself is always ``text``.
+        """
+        # What the user actually wrote is what the conversation stores (and what
+        # decides the reply language); the execution goal may additionally carry an
+        # internal instruction (plan choice).
+        turn_text = text if record_text is None else record_text
         compaction = await self.maybe_compact(text)
         history = [turn.to_dict() for turn in self.recent()]
         # Idioma de los avisos/respuesta: manda el mensaje actual; si es ambiguo, el
         # turno de usuario más reciente (nunca el del asistente).
-        language = detect_user_language(text, history)
+        language = detect_user_language(turn_text, history)
 
         # Las alternativas del modo plan se consumen en este turno. Si el mensaje
         # acepta la recomendada ("la recomendada pero crea el agente…"), se convierte
@@ -409,14 +422,14 @@ class ChatSession:
             text = f"{text.rstrip()}\n{_option_instruction(recommended)}".strip()
             extra["allow_plan_options"] = False
             extra["execute_choice"] = True
-        self.add("user", text)
+        self.add("user", turn_text)
 
         metadata: dict = {"history": history, "conversation": True}
         # Las menciones (@archivo, @símbolo) viajan con la tarea para que el runner las
         # resuelva como contexto de los nodos, igual que el historial.
         from satellite.context.mentions import parse as parse_mentions
 
-        menciones = parse_mentions(text, self.project_root)
+        menciones = parse_mentions(turn_text, self.project_root)
         # Una mención a una ruta de FUERA del proyecto exige aprobación puntual: se
         # pide aquí (que es donde hay puerto), se lee una sola vez si la dan y el
         # contenido viaja como dato no confiable. La autorización no se persiste.
@@ -493,7 +506,7 @@ class ChatSession:
         # respuesta parezca basada en archivos que no se leyeron.
         if (
             _missing_project_context(task)
-            and _is_explanatory(text)
+            and _is_explanatory(turn_text)
             and not _result_reports_missing_context(result)
         ):
             notas.append(reply_fallback("no_project_context", language))
@@ -675,12 +688,18 @@ class ChatSession:
         """Elige una alternativa del modo plan y continúa con ella."""
         # La elección explícita consume las alternativas pendientes.
         self._pending_plan = None
+        # The conversation stores the user-visible choice, not the internal English
+        # instruction (which would otherwise skew later language detection).
+        record = str(getattr(option, "title", "") or "").strip() or _option_instruction(
+            option
+        )
         return await self.send(
             _option_instruction(option),
             approval=approval,
             # execute_choice: es una orden de ejecución, no una pregunta, así que el
             # orquestador no debe atajarla con el catálogo ni con respuesta directa.
             extra_metadata={"allow_plan_options": False, "execute_choice": True},
+            record_text=record,
         )
 
 

@@ -40,6 +40,57 @@ OUTPUT_LANGUAGE_RULE = (
 )
 
 
+# Display names for the language codes the detector can return. The model already
+# gets the common rule; this hint makes the expected answer language explicit even
+# when the internal task text is English.
+LANGUAGE_NAMES: dict[str, str] = {
+    "en": "English",
+    "es": "Spanish",
+    "pt": "Portuguese",
+    "fr": "French",
+    "de": "German",
+    "it": "Italian",
+    "nl": "Dutch",
+    "ru": "Russian",
+    "ar": "Arabic",
+    "hi": "Hindi",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "zh": "Chinese",
+}
+
+
+def language_name(code: str) -> str:
+    """Human-readable name for a language code (``""`` when unknown)."""
+    return LANGUAGE_NAMES.get(str(code or "").strip().lower(), "")
+
+
+def output_language_hint(code: str) -> str:
+    """Instruction appended to a user turn: which language the visible answer uses.
+
+    When the language is known, it names it explicitly. When it is unknown (a short
+    or ambiguous message, or a language the cheap detector does not cover), it
+    delegates to the common rule instead of forcing a default language.
+    """
+    normalized = str(code or "").strip().lower()
+    name = language_name(normalized)
+    if name:
+        return (
+            f"END USER RESPONSE LANGUAGE: {name} ({normalized}). "
+            "The task below is an internal instruction and may be in English; do not use "
+            "its language to infer the end user's language. Write user-facing prose in the "
+            "specified language and preserve the declared JSON schema."
+        )
+    return (
+        "END USER RESPONSE LANGUAGE: match the language of the user's latest message "
+        "(detect it; if the message is too short or ambiguous, use the recent "
+        "conversation). The task below is an internal instruction and may be in "
+        "English; do not use its language to infer the end user's language. Write "
+        "user-facing prose in the detected language and preserve the declared JSON "
+        "schema."
+    )
+
+
 def with_output_language(text: str) -> str:
     """Return ``text`` with the output-language rule appended (idempotent).
 
@@ -187,6 +238,10 @@ REPLY_FALLBACKS: dict[str, dict[str, str]] = {
         "en": "I propose {n} alternatives. Pick one or describe your own approach.",
     },
     "no_answer": {"es": "(sin respuesta)", "en": "(no answer)"},
+    "clarification": {
+        "es": "Necesito más información para continuar.",
+        "en": "I need more information to continue.",
+    },
     "empty_response": {
         "es": "No obtuve respuesta del modelo. Inténtalo de nuevo o reformula tu pregunta.",
         "en": "I didn't get a response from the model. Please try again or rephrase your question.",
@@ -211,12 +266,15 @@ def reply_fallback(key: str, language: str = "") -> str:
 
 
 __all__ = [
+    "LANGUAGE_NAMES",
     "OUTPUT_LANGUAGE_MARKER",
     "OUTPUT_LANGUAGE_RULE",
     "REPLY_FALLBACKS",
     "detect_language",
     "detect_user_language",
     "is_standalone_greeting",
+    "language_name",
+    "output_language_hint",
     "reply_fallback",
     "with_output_language",
 ]

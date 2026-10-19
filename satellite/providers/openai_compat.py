@@ -107,7 +107,10 @@ class OpenAICompatProvider(LLMProvider):
             # parámetros específicos de proveedores compatibles, como el de DeepSeek
             # ``thinking``. ``extra_body`` los añade al JSON sin pasar por esa firma.
             kwargs.setdefault("extra_body", {}).update(think)
-        if request.tools is not None:
+        # Only send `tools` when there is at least one: several compatible providers
+        # reject an empty array ("tools must not be empty"), which looked like a model
+        # failure during synthesis (no tools) and aborted the node.
+        if request.tools:
             kwargs["tools"] = [
                 {
                     "type": "function",

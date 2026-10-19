@@ -72,7 +72,7 @@ class AgentProposalGenerator:
             )
             for tool in tools
         ]
-        return "\n".join(lines) or "(sin tools)"
+        return "\n".join(lines) or "(no tools)"
 
     def _context_text(self) -> str:
         lines = [
@@ -88,7 +88,9 @@ class AgentProposalGenerator:
             + "\nmodel_role allowed: generated."
         )
 
-    async def propose(self, need: str, *, extra_context: str = "") -> CreatorOutcome:
+    async def propose(
+        self, need: str, *, extra_context: str = "", user_language: str | None = None
+    ) -> CreatorOutcome:
         """Pide una propuesta; reintenta con los errores de validación."""
         system_prompt = self.prompts.get_system(self.prompt_id)
         user_template = self.prompts.get_user(self.prompt_id)
@@ -107,6 +109,7 @@ class AgentProposalGenerator:
                 task=need,
                 context=extra_context,
                 feedback=feedback,
+                user_language=user_language,
             )
             request = LLMRequest(
                 messages=messages,

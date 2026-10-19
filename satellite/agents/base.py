@@ -25,6 +25,9 @@ class AgentContext:
     task_id: str = ""
     node_id: str = ""
     project_root: Path | None = None
+    # Idioma del mensaje original de la persona, no del brief interno del planificador.
+    # Vacío = desconocido: la instrucción de idioma pide detectarlo del mensaje.
+    user_language: str = ""
     # Puerto de aprobación de la sesión: el runtime lo usa para pedir permiso cuando
     # una tool pide una ruta fuera del proyecto.
     approval: object | None = None

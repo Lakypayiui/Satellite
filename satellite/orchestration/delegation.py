@@ -33,6 +33,7 @@ class DelegationContext:
     chain: tuple[str, ...] = ()
     token_budget: int | None = None
     tokens_used: int = 0
+    user_language: str = ""
 
     def child(
         self, agent_id: str, *, tokens_used: int = 0
@@ -45,6 +46,7 @@ class DelegationContext:
             chain=self.chain + (agent_id,),
             token_budget=self.token_budget,
             tokens_used=self.tokens_used + tokens_used,
+            user_language=self.user_language,
         )
 
     def remaining_tokens(self) -> int | None:
@@ -113,6 +115,8 @@ class DelegationManager:
         parent_ctx: DelegationContext,
         project_root: Path,
         caller_spec: AgentSpec | None = None,
+        approval: ApprovalPort | None = None,
+        cancel: object | None = None,
     ) -> DelegationResult:
         """Delega en ``agent_id`` con contexto limpio y devuelve su resumen."""
         allowed, reason = parent_ctx.can_delegate(agent_id)
@@ -181,6 +185,11 @@ class DelegationManager:
                 task_id=parent_ctx.task_id,
                 node_id=agent_id,
                 project_root=project_root,
+                user_language=parent_ctx.user_language,
+                # The child runs inside the same session: without these it cannot ask
+                # for an out-of-project path/command and cannot be cancelled.
+                approval=approval if approval is not None else self.approval,
+                cancel=cancel,
             ),
         )
         tokens_used = result.metrics.tokens_in + result.metrics.tokens_out

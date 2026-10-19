@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 from satellite.agents.base import Agent, AgentFactory, AgentRegistry
 from satellite.agents.prompts import DefaultPromptRegistry
@@ -13,6 +14,27 @@ from satellite.providers.base import LLMProvider
 from satellite.security.base import SecurityPolicy
 from satellite.tools.base import Tool, ToolRegistry
 from satellite.tools.context_tool import RequestContextTool
+
+# Roles configured in ``config.json`` are "orchestrator", "context", "agents" and
+# "creator". Agent specs use broader labels; map them so a per-role provider is
+# actually used at execution time instead of silently falling back to the global one.
+_ROLE_ALIASES: dict[str, str] = {
+    "orchestrator": "orchestrator",
+    "planner": "orchestrator",
+    "plan": "orchestrator",
+    "context": "context",
+    "preprocessor": "context",
+    "creator": "creator",
+    "curator": "agents",
+    "agent": "agents",
+    "agents": "agents",
+    "generated": "agents",
+}
+
+
+def role_key(model_role: str | None) -> str:
+    """Configured role that corresponds to an agent's ``model_role``."""
+    return _ROLE_ALIASES.get(str(model_role or "").strip().lower(), "agents")
 
 
 class DefaultAgentFactory(AgentFactory):
@@ -30,11 +52,15 @@ class DefaultAgentFactory(AgentFactory):
         workdir: Path | None = None,
         sandbox=None,
         delegation_manager=None,
+        provider_resolver: Callable[[str], LLMProvider | None] | None = None,
     ) -> None:
         self.registry = registry
         self.prompts = prompts
         self.tools = tools
         self.provider = provider
+        # Optional per-role provider lookup. ``None`` keeps the single-provider
+        # behavior used by tests and embedders.
+        self.provider_resolver = provider_resolver
         self.policy = policy
         self.context_engine = context_engine
         self.project_root = project_root
@@ -71,6 +97,16 @@ class DefaultAgentFactory(AgentFactory):
             tool_ids = [tid for tid in tool_ids if tid in allowed]
         return spec, system_prompt, user_template, self.tools.list_for(tool_ids)
 
+    def _provider_for(self, role: str | None) -> LLMProvider:
+        """Provider configured for that role, falling back to the global one."""
+        if self.provider_resolver is None:
+            return self.provider
+        try:
+            resolved = self.provider_resolver(role_key(role))
+        except Exception:  # noqa: BLE001 — a resolver failure must not break creation
+            return self.provider
+        return resolved or self.provider
+
     def create(self, spec_id: str, *, model_role: str | None = None) -> Agent:
         """Crea un LLMAgent para el spec; tools = spec.tools + request_context."""
         spec, system_prompt, user_template, tools_list = self._resolve(spec_id)
@@ -79,7 +115,7 @@ class DefaultAgentFactory(AgentFactory):
             system_prompt=system_prompt,
             user_template=user_template,
             tools=tools_list,
-            provider=self.provider,
+            provider=self._provider_for(model_role or spec.model_role),
             tool_registry=self.tools,
             policy=self.policy,
             context_engine=self.context_engine,

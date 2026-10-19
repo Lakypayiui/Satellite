@@ -85,6 +85,14 @@ def test_system_extracted_and_messages_translated() -> None:
     assert resp.usage.completion_tokens == 7
 
 
+def test_empty_tools_are_not_sent() -> None:
+    """An empty tools tuple must omit `tools`, which the API rejects as empty."""
+    provider, client = make_provider()
+    client.response = FakeAnthropicResponse(content=[FakeBlock("text", "ok")])
+    run(provider.complete(make_request(tools=())))
+    assert "tools" not in client.calls[-1]
+
+
 def test_tool_use_normalized() -> None:
     provider, client = make_provider()
     client.response = FakeAnthropicResponse(

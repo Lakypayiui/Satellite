@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import uuid
 from dataclasses import dataclass
 
@@ -90,13 +91,22 @@ class AgentExpander:
         task_id: str = "",
         approval_port: ApprovalPort | None = None,
         extra_context: str = "",
+        user_language: str | None = None,
     ) -> ExpansionOutcome:
         """Propone, valida, aprueba y registra un agente para cubrir ``need``."""
         if self.creator is None:
             return ExpansionOutcome(
                 kind="error", reason="sin creador LLM: usa una plantilla"
             )
-        outcome = await self.creator.propose(need, extra_context=extra_context)
+        proposal_kwargs: dict = {"extra_context": extra_context}
+        # Creators embedded by third parties may not implement the language hint yet;
+        # pass it only when their signature accepts it.
+        try:
+            if "user_language" in inspect.signature(self.creator.propose).parameters:
+                proposal_kwargs["user_language"] = user_language
+        except (TypeError, ValueError):
+            pass
+        outcome = await self.creator.propose(need, **proposal_kwargs)
         if outcome.kind == "reuse":
             return ExpansionOutcome(kind="reuse", reuse_candidate=outcome.reuse_candidate)
         if outcome.kind == "needs_clarification":

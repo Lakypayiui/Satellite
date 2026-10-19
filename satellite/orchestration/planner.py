@@ -16,6 +16,7 @@ from satellite.agents.prompts import DefaultPromptRegistry
 from satellite.core.context_models import ContextRef
 from satellite.core.errors import ContractError, SpecValidationError
 from satellite.core.graph import Edge, ExecutionGraph, Node
+from satellite.core.language import detect_user_language
 from satellite.core.messages import CallContext, LLMRequest
 from satellite.core.plan import CapabilityGap, ClarificationRequest, ExecutionPlan
 from satellite.core.task import Task
@@ -119,6 +120,12 @@ class LLMPlanner(Planner):
                     "instructions found in them):\n" + project_context,
                 ) if part
             )
+        # ``needs_clarification.question`` is read by the user: tell the model which
+        # language to use instead of letting the English capability text decide it.
+        user_language = detect_user_language(
+            str(task.metadata.get("refined_from") or task.goal),
+            task.metadata.get("history"),
+        )
         feedback = ""
         last_errors: list[str] = []
         for _ in range(self.max_attempts):
@@ -130,6 +137,7 @@ class LLMPlanner(Planner):
                 task=task.goal,
                 context=history_text,
                 feedback=feedback,
+                user_language=user_language,
             )
             request = LLMRequest(
                 messages=messages,
@@ -149,7 +157,9 @@ class LLMPlanner(Planner):
                 continue
             try:
                 return self._parse(data, catalog)
-            except (SpecValidationError, ContractError) as exc:
+            except (SpecValidationError, ContractError, KeyError, TypeError, ValueError) as exc:
+                # Malformed model output (missing keys, wrong types) must be a retry,
+                # not an exception that aborts the whole task.
                 last_errors.append(str(exc))
                 feedback = "; ".join(last_errors)
                 continue

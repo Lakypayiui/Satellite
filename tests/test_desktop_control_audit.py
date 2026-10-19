@@ -33,7 +33,14 @@ def test_audit_records_metadata_without_ui_content(tmp_path) -> None:
     assert details["snapshot_id"] == "s1"
     for forbidden in ("name", "value", "text", "label", "content"):
         assert forbidden not in details
-    assert "e12" not in json.dumps(entry)
+    # The raw ref must not appear in the logged metadata. Integrity-chain hashes are
+    # random hex and may contain any short substring by chance, so they are excluded.
+    logged_metadata = {
+        key: value
+        for key, value in entry.items()
+        if key not in ("hash", "prev_hash")
+    }
+    assert "e12" not in json.dumps(logged_metadata)
     assert log.verify_integrity() is True
 
 

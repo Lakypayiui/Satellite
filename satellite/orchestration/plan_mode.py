@@ -47,6 +47,7 @@ class PlanOptionGenerator:
         context: str = "",
         history: str = "",
         feedback: str = "",
+        user_language: str | None = None,
     ) -> PlanOptions | None:
         """Devuelve alternativas válidas, o ``None`` si el LLM no colabora.
 
@@ -65,6 +66,7 @@ class PlanOptionGenerator:
                 context=history,
                 task=task,
                 feedback=errors,
+                user_language=user_language,
             )
             response = await self.provider.complete(
                 LLMRequest(

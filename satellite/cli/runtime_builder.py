@@ -196,6 +196,15 @@ def build_runtime(
     # Modo plan: alternativas desarrolladas por el LLM.
     plan_advisor = PlanOptionGenerator(provider, prompt_reg)
 
+    # Providers per role, built lazily and cached: every node creation asks for one.
+    role_providers: dict[str, LLMProvider] = {}
+
+    def provider_for_role(role: str) -> LLMProvider:
+        key = role or "agents"
+        if key not in role_providers:
+            role_providers[key] = _role_provider(project_root, key, provider)
+        return role_providers[key]
+
     factory = DefaultAgentFactory(
         registry=registry,
         prompts=prompt_reg,
@@ -209,6 +218,9 @@ def build_runtime(
         workdir=_active_workdir(project_root),
         # Sandbox del nivel configurado: los agentes ejecutan sus procesos por él.
         sandbox=sandbox,
+        # A node with ``model_role`` uses the provider configured for that role
+        # (``llm.agents`` by default) instead of always the global one.
+        provider_resolver=provider_for_role,
     )
     delegation = DelegationManager(
         factory,
@@ -275,7 +287,11 @@ def build_runtime(
         plan_advisor=plan_advisor,
         allow_chat_direct=settings.direct_reply,
     )
-    orchestrator.preprocessor = _build_preprocessor(project_root, provider, settings)
+    orchestrator.preprocessor = _build_preprocessor(
+        project_root,
+        provider_for_role("context") if settings.refine_goal else provider,
+        settings,
+    )
     orchestrator.skill_runner = skill_runner
     # Capacidad condicional: diagramas/arquitecturas se enrutan al agente de diagrama
     # (pele_diagram_agent). El flujo sólo delega; el agente diseña el Mermaid y lo

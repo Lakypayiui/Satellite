@@ -97,6 +97,25 @@ def test_render_template_only_touches_allowed_placeholders() -> None:
     assert render_template("A={task} B={otro}", task="1") == "A=1 B={otro}"
 
 
+def test_render_template_does_not_expand_placeholders_inside_values() -> None:
+    """Un `{context}` dentro de la tarea no debe arrastrar el contexto real."""
+    rendered = render_template(
+        "Task={task} Context={context}",
+        task="literal {context} stays",
+        context="SECRET",
+    )
+    assert "literal {context} stays" in rendered
+    assert rendered.endswith("Context=SECRET")
+
+
+def test_render_system_does_not_expand_placeholders_inside_tools() -> None:
+    rendered = render_system(
+        "T={tools} S={output_schema}", tools="tool {output_schema}", output_schema="SCHEMA"
+    )
+    assert "tool {output_schema}" in rendered
+    assert rendered.endswith("S=SCHEMA")
+
+
 # --- migración del layout antiguo ---
 
 def test_split_legacy_prompt_cuts_at_entradas() -> None:

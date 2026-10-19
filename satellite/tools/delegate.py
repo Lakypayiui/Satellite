@@ -63,6 +63,8 @@ class DelegateTool(Tool):
             parent_ctx=ctx,
             project_root=tool_ctx.project_root,
             caller_spec=caller_spec,
+            approval=getattr(tool_ctx, "approval", None),
+            cancel=getattr(tool_ctx, "cancel", None),
         )
         if not result.ok:
             return ToolResult(success=False, error=result.error or "delegación fallida")

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from satellite.agents.base import Agent, AgentContext
 from satellite.agents.prompts import render_system, render_template
 from satellite.core.context_models import ContextBundle
 from satellite.core.events import EventType, ExecutionEvent
-from satellite.core.language import with_output_language
+from satellite.core.language import output_language_hint, with_output_language
 from satellite.core.messages import CallContext, LLMRequest, Message, Role, Usage
 from satellite.core.result import (
     AgentResult,
@@ -91,8 +92,13 @@ def build_user_prompt(
     task: dict,
     context: ContextBundle,
     feedback=None,
+    user_language: str = "",
 ) -> str:
-    """Parte **dinámica**: ``{task}``, ``{context}`` y ``{feedback}``."""
+    """Parte **dinámica**: ``{task}``, ``{context}`` y ``{feedback}``.
+
+    The language hint is an internal instruction and stays in English; only the
+    language it names/is detected follows the user.
+    """
     context_text = _context_to_text(context)
     feedback_text = "\n".join(
         f"- [{f.severity.value}] {sanitize(f.message)}"
@@ -100,10 +106,16 @@ def build_user_prompt(
         for f in (feedback or [])
     ) or "(no feedback)"
     task_json = json.dumps(task, ensure_ascii=False, indent=2, sort_keys=True)
-    return render_template(
+    language_hint = output_language_hint(user_language) + "\n\n"
+    rendered = render_template(
         user_template,
-        {"task": task_json, "context": context_text, "feedback": feedback_text},
+        {
+            "task": task_json,
+            "context": context_text,
+            "feedback": feedback_text,
+        },
     )
+    return language_hint + rendered
 
 
 # Qué implica cada tool, para que el modal lo diga en una palabra.
@@ -166,6 +178,10 @@ class LLMAgent(Agent):
         """Ejecuta el flujo completo de un nodo."""
         node_id = str(task.get("node_id", ""))
         self._emit(ctx, EventType.NODE_STARTED, {"agent_id": self.spec.id, "task": task})
+        if self.delegation_ctx is not None and hasattr(self.delegation_ctx, "user_language"):
+            self.delegation_ctx = replace(
+                self.delegation_ctx, user_language=ctx.user_language
+            )
         started = time.monotonic()
         tool_records: list[ToolRecord] = []
         usage_total = Usage()
@@ -180,7 +196,11 @@ class LLMAgent(Agent):
             can_call=self.spec.can_call,
         )
         user = build_user_prompt(
-            self.user_template, task=task, context=ctx.context, feedback=ctx.feedback
+            self.user_template,
+            task=task,
+            context=ctx.context,
+            feedback=ctx.feedback,
+            user_language=ctx.user_language,
         )
         messages: list[Message] = [
             Message(role=Role.SYSTEM, content=system),
@@ -303,7 +323,7 @@ class LLMAgent(Agent):
                         final_output = salvado
                         dropped = _prune_to_schema(self.spec.output_schema, salvado)[1]
                     else:
-                        error = f"respuesta no cumple output_schema: {parsed}"
+                        error = f"response does not match output_schema: {parsed}"
                         final_output = {"content": retry.content or ""}
                         dropped = []
                 else:

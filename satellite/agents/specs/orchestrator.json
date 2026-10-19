@@ -1,7 +1,7 @@
 {
   "id": "orchestrator",
   "name": "Orchestrator",
-  "description": "Planifica tareas usando el catalogo de agentes y detecta capacidades faltantes",
+  "description": "Plans tasks using the agent catalog and detects missing capabilities",
   "capabilities": ["plan_tasks", "orchestrate"],
   "prompt_ref": "orchestrator",
   "tools": [],

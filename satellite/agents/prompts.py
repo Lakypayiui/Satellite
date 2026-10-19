@@ -116,6 +116,13 @@ SYSTEM_PLACEHOLDERS: tuple[str, ...] = ("tools", "output_schema")
 USER_PLACEHOLDERS: tuple[str, ...] = ("task", "context", "feedback")
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+# Only the allowed names are replaced, and in a SINGLE pass: a value that itself
+# contains another placeholder (e.g. a user task with "{context}") must stay literal
+# instead of pulling unrelated context into the task text.
+_TEMPLATE_PLACEHOLDER_RE = re.compile(
+    r"\{(" + "|".join(ALLOWED_PLACEHOLDERS) + r")\}"
+)
+_SYSTEM_PLACEHOLDER_RE = re.compile(r"\{(tools|output_schema)\}")
 
 
 def find_placeholders(template: str) -> list[str]:
@@ -127,14 +134,15 @@ def render_template(template: str, values: dict | None = None, **kwargs) -> str:
     """Sustituye SOLO los placeholders permitidos y deja el resto intacto.
 
     A diferencia de ``str.format_map``, los literales con llaves (p. ej. los
-    ejemplos JSON dentro de un prompt) no rompen la renderización.
+    ejemplos JSON dentro de un prompt) no rompen la renderización. La sustitución
+    es de una sola pasada: los placeholders que aparezcan *dentro* de un valor no
+    se vuelven a expandir.
     """
     merged: dict = dict(values or {})
     merged.update(kwargs)
-    rendered = template
-    for name in ALLOWED_PLACEHOLDERS:
-        rendered = rendered.replace("{" + name + "}", str(merged.get(name, "")))
-    return rendered
+    return _TEMPLATE_PLACEHOLDER_RE.sub(
+        lambda match: str(merged.get(match.group(1), "")), template
+    )
 
 
 def render_system(system_prompt: str, *, tools: str = "", output_schema: str = "") -> str:
@@ -142,9 +150,10 @@ def render_system(system_prompt: str, *, tools: str = "", output_schema: str = "
 
     Deja intactas las menciones a ``{task}``/``{context}``/``{feedback}``: en el
     system son documentación, no valores a sustituir. Así el system es estable
-    entre llamadas (cacheable) y nunca recibe contenido dinámico.
+    entre llamadas (cacheable) y nunca recibe contenido dinámico. Igual que en el
+    user template, la sustitución es de una sola pasada.
     """
-    rendered = system_prompt
-    rendered = rendered.replace("{tools}", str(tools))
-    rendered = rendered.replace("{output_schema}", str(output_schema))
-    return rendered
+    values = {"tools": str(tools), "output_schema": str(output_schema)}
+    return _SYSTEM_PLACEHOLDER_RE.sub(
+        lambda match: values[match.group(1)], system_prompt
+    )

@@ -125,6 +125,21 @@ def test_corrupt_json_retries_then_ok(tmp_path: Path) -> None:
     assert "JSON" in fake.requests[1].messages[-1].content
 
 
+def test_malformed_plan_retries_instead_of_crashing(tmp_path: Path) -> None:
+    """A model response missing required keys is a retry, not a task-wide crash."""
+    catalog = make_catalog()
+    malformed = {"type": "plan", "steps": [{"id": "s1"}]}
+    fake = FakeLLM(
+        script=[{"content": _json(malformed)}, {"content": _json(VALID_PLAN)}]
+    )
+    planner = LLMPlanner(fake, catalog, prompts=make_prompts())
+
+    result = run(planner.plan(make_task(tmp_path), catalog))
+
+    assert result.kind == "plan"
+    assert len(fake.requests) == 2
+
+
 def test_corrupt_json_exhausted_raises(tmp_path: Path) -> None:
     catalog = make_catalog()
     fake = FakeLLM(script=[{"content": "nada"}, {"content": "nada"}], default_content="nada")

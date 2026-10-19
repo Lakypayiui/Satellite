@@ -54,9 +54,12 @@ class DiagramFlow:
         """Produce el TaskResult del diagrama; ``None`` si no hay con qué hacerlo."""
         if self.factory is None:
             return None
-        language = detect_user_language(task.goal, task.metadata.get("history")) or _DEFAULT_LANGUAGE
+        detected_language = detect_user_language(
+            task.goal, task.metadata.get("history")
+        )
+        language = detected_language or _DEFAULT_LANGUAGE
         source = extract_mermaid(task.goal) or ""
-        output = await self._delegate(task, source)
+        output = await self._delegate(task, source, detected_language)
         if output is None:
             return None
 
@@ -130,7 +133,9 @@ class DiagramFlow:
             },
         )
 
-    async def _delegate(self, task: Task, source: str) -> dict | None:
+    async def _delegate(
+        self, task: Task, source: str, user_language: str = ""
+    ) -> dict | None:
         """Ejecuta el agente de diagrama; ``None`` si no se puede construir/ejecutar."""
         try:
             agent = self.factory.create(self.agent_id)
@@ -149,6 +154,7 @@ class DiagramFlow:
             task_id=task.task_id,
             node_id="diagram",
             project_root=task.project_root or self.project_root,
+            user_language=user_language,
             approval=getattr(self.services, "approval", None),
             cancel=getattr(self.services, "cancel", None),
         )

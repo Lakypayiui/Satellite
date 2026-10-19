@@ -1,7 +1,7 @@
 {
   "id": "agent_creator",
   "name": "Agent Creator",
-  "description": "Produce especificaciones declarativas de agentes (ProposedAgent) a partir de una necesidad de capacidad",
+  "description": "Produces declarative agent specifications (ProposedAgent) from a capability need",
   "capabilities": ["create_agent", "design_agent"],
   "prompt_ref": "agent_creator",
   "tools": [],

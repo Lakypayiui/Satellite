@@ -10,6 +10,7 @@ from satellite.agents.base import AgentContext, AgentFactory
 from satellite.core.context_models import ContextBundle, ContextRef
 from satellite.core.errors import ContractError, GraphValidationError
 from satellite.core.events import EventType, ExecutionEvent
+from satellite.core.language import detect_user_language
 from satellite.core.graph import ExecutionGraph
 from satellite.core.result import AgentResult, AgentStatus, ExecutionMetrics, Finding
 from satellite.core.task import Task, TaskResult, TaskStatus
@@ -194,6 +195,10 @@ class DefaultGraphRunner(GraphRunner):
                 task_id=task.task_id,
                 node_id=node_id,
                 project_root=task.project_root,
+                user_language=detect_user_language(
+                    str(task.metadata.get("refined_from") or task.goal),
+                    task.metadata.get("history"),
+                ),
                 # El puerto de la sesión: sin esto, una tool que pide una ruta de
                 # fuera del proyecto no tenía a quién preguntar.
                 approval=getattr(services, "approval", None),
@@ -376,7 +381,12 @@ class DefaultGraphRunner(GraphRunner):
             destino["task"].update(result.output or {})
             destino["task"].setdefault("goal", entrada.get("task", {}).get("goal", ""))
         elif edge.payload == "context":
-            destino["context_refs"] = list(bundle.sections) if bundle else []
+            # ``context_refs`` holds refs, not resolved sections: the next node resolves
+            # them again through the engine. Passing ContextSection objects crashed
+            # ``engine.resolve`` as soon as a plan used payload="context".
+            destino["context_refs"] = (
+                [section.ref for section in bundle.sections] if bundle else []
+            )
             destino["task"].update(result.output or {})
             destino["task"].setdefault("goal", entrada.get("task", {}).get("goal", ""))
         elif edge.payload == "none":

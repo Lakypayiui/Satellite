@@ -157,6 +157,18 @@ def test_translates_request() -> None:
     assert resp.stop_reason == "stop"
 
 
+def test_empty_tools_are_not_sent() -> None:
+    """An empty tools tuple (synthesis without tools) must omit the field.
+
+    Several compatible providers reject `tools: []` with HTTP 400, which made a
+    plain synthesis call look like a model failure.
+    """
+    provider, client = make_provider()
+    client.response = FakeOpenAIResponse(content="ok")
+    run(provider.complete(make_request(tools=())))
+    assert "tools" not in client.calls[-1]
+
+
 def test_assistant_with_tool_calls_normalized() -> None:
     provider, client = make_provider()
     client.response = FakeOpenAIResponse(

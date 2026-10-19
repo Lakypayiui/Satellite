@@ -1,7 +1,7 @@
 {
   "id": "skill_curator",
   "name": "Skill Curator",
-  "description": "Mantiene el catalogo de skills: deduplica, fusiona, generaliza, edita y da de baja",
+  "description": "Maintains the skill catalog: deduplicates, merges, generalizes, edits and deprecates skills",
   "capabilities": ["curate_skills", "dedupe_skills"],
   "prompt_ref": "skill_curator",
   "tools": ["search_skills"],

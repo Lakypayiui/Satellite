@@ -113,5 +113,5 @@ class LocalPreprocessor:
                 except OSError:
                     continue
         for sym in symbols[:20]:
-            parts.append(f"[símbolo solicitado: {sym}]")
+            parts.append(f"[requested symbol: {sym}]")
         return "\n\n".join(parts)

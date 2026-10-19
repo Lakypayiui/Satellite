@@ -124,7 +124,9 @@ class AnthropicProvider(LLMProvider):
             kwargs["system"] = _system_blocks(
                 system_texts, marker if plan.mark_system else None
             )
-        if request.tools is not None:
+        # Same as the OpenAI-compatible adapter: an empty `tools` array is invalid for
+        # this API, so only send the field when there is something to send.
+        if request.tools:
             tools = [
                 {"name": t.name, "description": t.description, "input_schema": t.parameters}
                 for t in request.tools

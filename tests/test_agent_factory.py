@@ -74,6 +74,44 @@ def test_create_adds_request_context_always(tmp_path: Path) -> None:
     assert "request_context" in ids
 
 
+def test_create_uses_the_provider_configured_for_the_agent_role(tmp_path: Path) -> None:
+    """A node agent must use `llm.agents`, not always the global provider."""
+    reg = DefaultAgentRegistry()
+    prompt_reg = DefaultPromptRegistry()
+    spec = {
+        "id": "special",
+        "name": "Special",
+        "description": "x",
+        "capabilities": ["x"],
+        "prompt_ref": "special",
+        "tools": [],
+        "model_role": "agent",
+    }
+    reg.load_dir(_write_spec(tmp_path, spec))
+    prompt_reg.register_pair("special", "P", "Task: {task}")
+    tools_reg = DefaultToolRegistry()
+    default = FakeLLM(default_content="global")
+    role = FakeLLM(default_content="role")
+    seen: list[str] = []
+
+    def resolver(role_key: str):
+        seen.append(role_key)
+        return role if role_key == "agents" else default
+
+    factory = DefaultAgentFactory(
+        registry=reg,
+        prompts=prompt_reg,
+        tools=tools_reg,
+        provider=default,
+        project_root=tmp_path,
+        provider_resolver=resolver,
+    )
+
+    agent = factory.create("special")
+    assert seen == ["agents"]
+    assert agent.provider is role
+
+
 def _write_spec(tmp_path: Path, spec: dict) -> Path:
     d = tmp_path / "specs"
     d.mkdir(exist_ok=True)
