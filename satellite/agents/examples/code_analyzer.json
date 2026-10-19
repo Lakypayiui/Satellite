@@ -1,7 +1,7 @@
 {
   "id": "code_analyzer",
   "name": "Code Analyzer",
-  "description": "Analiza el código del proyecto y explica su estructura",
+  "description": "Analyzes the project code and explains its structure",
   "capabilities": ["analyze_code", "explain_code"],
   "prompt_ref": "code_analyzer",
   "tools": ["read_file", "list_dir"],

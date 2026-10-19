@@ -20,8 +20,8 @@ class DelegateTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Delega un trabajo concreto en otro agente de tu lista can_call y "
-            "devuelve su resumen."
+            "Delegates a concrete piece of work to another agent in your can_call "
+            "list and returns its summary."
         )
 
     @property
@@ -33,10 +33,10 @@ class DelegateTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "agent_id": {"type": "string", "description": "Agente en el que delegar."},
+                "agent_id": {"type": "string", "description": "Agent to delegate to."},
                 "task": {
                     "type": "object",
-                    "description": "Trabajo concreto a delegar (goal + params).",
+                    "description": "Concrete work to delegate (goal + params).",
                 },
             },
             "required": ["agent_id"],

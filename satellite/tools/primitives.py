@@ -55,9 +55,9 @@ class RunArgvTool(RunCommandTool):
     @property
     def description(self) -> str:
         return (
-            "Alias de run_command, con la misma política y el mismo motor: "
-            "NO abre un intérprete de shell (ni tuberías, ni redirecciones, "
-            "ni &&, ni variables de shell)."
+            "Alias of run_command, with the same policy and the same engine: it "
+            "does NOT open a shell (no pipes, no redirections, no &&, no shell "
+            "variables)."
         )
 
 
@@ -71,9 +71,9 @@ class RunPythonTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Ejecuta código Python en un subproceso aislado (sin shell) con entorno "
-            "limpio y captura stdout/stderr; el código puede leer y escribir lo que "
-            "permita el sistema."
+            "Runs Python code in an isolated subprocess (no shell) with a clean "
+            "environment and captures stdout/stderr; the code can read and write "
+            "whatever the system allows."
         )
 
     @property
@@ -85,8 +85,8 @@ class RunPythonTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "code": {"type": "string", "description": "Código Python a ejecutar."},
-                "timeout_s": {"type": "integer", "description": "Timeout en segundos (default 30)."},
+                "code": {"type": "string", "description": "Python code to run."},
+                "timeout_s": {"type": "integer", "description": "Timeout in seconds (default 30)."},
             },
             "required": ["code"],
         }
@@ -141,7 +141,7 @@ class SearchFilesTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Busca archivos por patrón glob (p. ej. '**/*.py') dentro del proyecto."
+        return "Finds files by glob pattern (e.g. '**/*.py') inside the project."
 
     @property
     def categories(self) -> tuple[str, ...]:
@@ -152,8 +152,8 @@ class SearchFilesTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "pattern": {"type": "string", "description": "Patrón glob relativo."},
-                "path": {"type": "string", "description": "Subdirectorio base (default '.')."},
+                "pattern": {"type": "string", "description": "Relative glob pattern."},
+                "path": {"type": "string", "description": "Base subdirectory (default '.')."},
             },
             "required": ["pattern"],
         }

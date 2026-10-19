@@ -96,23 +96,23 @@ class AgentProposalValidator:
             return ValidationReport(ok=True)
 
         errors: list[str] = []
-        owner = f"agente '{proposal.id}'"
+        owner = f"agent '{proposal.id}'"
 
         if not ID_PATTERN.match(proposal.id):
-            errors.append(f"{owner}: id debe cumplir ^[a-z][a-z0-9_]{{2,40}}$")
+            errors.append(f"{owner}: id must match ^[a-z][a-z0-9_]{{2,40}}$")
         if is_reserved_id(proposal.id):
-            errors.append(f"{owner}: id reservado (kernel o manifiesto de tools)")
+            errors.append(f"{owner}: reserved id (kernel or tool manifest)")
 
         existing = {spec.id for spec in self.registry.all()}
         if proposal.id in existing:
-            errors.append(f"{owner}: ya existe un agente con ese id")
+            errors.append(f"{owner}: an agent with that id already exists")
 
         for tool in proposal.tools:
             if tool not in self.tool_ids:
-                errors.append(f"{owner}: tool desconocida '{tool}'")
+                errors.append(f"{owner}: unknown tool '{tool}'")
         if len(proposal.tools) > MAX_TOOLS:
             errors.append(
-                f"{owner}: demasiadas tools ({len(proposal.tools)}); máximo {MAX_TOOLS}"
+                f"{owner}: too many tools ({len(proposal.tools)}); max {MAX_TOOLS}"
             )
 
         # Control de escritorio + shell/red en el mismo agente: rechazo conservador.
@@ -128,42 +128,42 @@ class AgentProposalValidator:
             if shell_hit or net_hit:
                 motivo = "shell" if shell_hit else ""
                 if net_hit:
-                    motivo = f"{motivo}+red" if motivo else "red"
+                    motivo = f"{motivo}+network" if motivo else "network"
                 errors.append(
-                    f"{owner}: control de escritorio no combinable con {motivo} "
-                    "(regla de conjunto conservadora)"
+                    f"{owner}: desktop control cannot be combined with {motivo} "
+                    "(conservative set rule)"
                 )
 
         count = len(proposal.capabilities)
         if count < MIN_CAPABILITIES or count > MAX_CAPABILITIES:
             errors.append(
-                f"{owner}: capabilities debe tener entre {MIN_CAPABILITIES} y "
-                f"{MAX_CAPABILITIES} (recibidas {count})"
+                f"{owner}: capabilities must have between {MIN_CAPABILITIES} and "
+                f"{MAX_CAPABILITIES} (received {count})"
             )
 
         examples = list(proposal.example_tasks)
         if len(examples) < MIN_EXAMPLE_TASKS:
             errors.append(
-                f"{owner}: example_tasks debe incluir al menos {MIN_EXAMPLE_TASKS} "
-                f"tareas distintas (recibidas {len(examples)})"
+                f"{owner}: example_tasks must include at least {MIN_EXAMPLE_TASKS} "
+                f"distinct tasks (received {len(examples)})"
             )
         elif len(set(examples)) != len(examples):
-            errors.append(f"{owner}: example_tasks tiene tareas duplicadas")
+            errors.append(f"{owner}: example_tasks has duplicate tasks")
 
         description = proposal.description.lower()
         if any(marker in description for marker in _SPLIT_MARKERS):
             errors.append(
-                f"{owner}: la descripción tiene dos responsabilidades ('y además'); "
-                "divídela en dos agentes"
+                f"{owner}: the description has two responsibilities ('and also'); "
+                "split it into two agents"
             )
         for validator_id in proposal.validators:
             if validator_id not in self.allowed_validators:
-                errors.append(f"{owner}: validator desconocido '{validator_id}'")
+                errors.append(f"{owner}: unknown validator '{validator_id}'")
 
         if proposal.model_role not in self.allowed_roles:
             errors.append(
-                f"{owner}: model_role '{proposal.model_role}' no permitido "
-                f"(usa {list(self.allowed_roles)})"
+                f"{owner}: model_role '{proposal.model_role}' not allowed "
+                f"(use {list(self.allowed_roles)})"
             )
 
         # system_prompt: estático, sin placeholders dinámicos.
@@ -173,15 +173,15 @@ class AgentProposalValidator:
         )
         if dynamic_in_system:
             errors.append(
-                f"{owner}: system_prompt no puede llevar placeholders dinámicos "
-                f"{dynamic_in_system} (van en user_template)"
+                f"{owner}: system_prompt cannot carry dynamic placeholders "
+                f"{dynamic_in_system} (they go in user_template)"
             )
         unknown_system = sorted(
             {p for p in system_placeholders if p not in self.allowed_placeholders}
         )
         if unknown_system:
             errors.append(
-                f"{owner}: system_prompt con placeholders no permitidos {unknown_system}"
+                f"{owner}: system_prompt with disallowed placeholders {unknown_system}"
             )
 
         # user_template: parte dinámica, con {task} obligatorio.
@@ -191,16 +191,16 @@ class AgentProposalValidator:
         )
         if unknown_user:
             errors.append(
-                f"{owner}: user_template con placeholders no permitidos {unknown_user}"
+                f"{owner}: user_template with disallowed placeholders {unknown_user}"
             )
         if "task" not in user_placeholders:
-            errors.append(f"{owner}: user_template debe incluir {{task}}")
+            errors.append(f"{owner}: user_template must include {{task}}")
 
         total_chars = len(proposal.system_prompt) + len(proposal.user_template)
         if total_chars > self.max_prompt_chars:
             errors.append(
-                f"{owner}: system_prompt + user_template exceden "
-                f"{self.max_prompt_chars} caracteres"
+                f"{owner}: system_prompt + user_template exceed "
+                f"{self.max_prompt_chars} characters"
             )
         for label, text in (
             ("system_prompt", proposal.system_prompt),
@@ -208,15 +208,15 @@ class AgentProposalValidator:
         ):
             if _ABSOLUTE_PATH.search(text):
                 errors.append(
-                    f"{owner}: {label} contiene rutas absolutas (no reutilizable)"
+                    f"{owner}: {label} contains absolute paths (not reusable)"
                 )
 
         for entry in proposal.can_call:
             if entry.agent_id == proposal.id:
-                errors.append(f"{owner}: can_call no puede apuntarse a sí mismo")
+                errors.append(f"{owner}: can_call cannot point to itself")
             elif entry.agent_id not in existing:
                 errors.append(
-                    f"{owner}: can_call apunta a un agente inexistente '{entry.agent_id}'"
+                    f"{owner}: can_call points to a nonexistent agent '{entry.agent_id}'"
                 )
 
         if self.dedup and not proposal.reuse_checked:
@@ -225,8 +225,8 @@ class AgentProposalValidator:
             ]
             if similar:
                 errors.append(
-                    f"{owner}: posible duplicado de {similar}; marca reuse_checked "
-                    "o cambia el alcance"
+                    f"{owner}: possible duplicate of {similar}; set reuse_checked "
+                    "or change the scope"
                 )
 
         return ValidationReport(ok=not errors, errors=tuple(errors))

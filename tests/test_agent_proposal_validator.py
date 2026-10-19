@@ -72,14 +72,14 @@ def test_unknown_tool_rejected() -> None:
 def test_reserved_id_rejected() -> None:
     report = make_validator().validate(make_proposal(id="skill_curator"))
     assert report.ok is False
-    assert any("reservado" in e for e in report.errors)
+    assert any("reserved" in e for e in report.errors)
 
 
 def test_bad_id_rejected() -> None:
     # 'ab' es snake_case para el modelo, pero el validador exige ^[a-z][a-z0-9_]{2,40}$
     report = make_validator().validate(make_proposal(id="ab"))
     assert report.ok is False
-    assert any("id debe cumplir" in e for e in report.errors)
+    assert any("id must match" in e for e in report.errors)
 
 
 def test_model_role_not_allowed() -> None:
@@ -104,7 +104,7 @@ def test_bad_placeholder_rejected() -> None:
 def test_dynamic_placeholder_in_system_rejected() -> None:
     report = make_validator().validate(make_proposal(system_prompt="# ROL\n{context}"))
     assert report.ok is False
-    assert any("dinámicos" in e for e in report.errors)
+    assert any("dynamic" in e for e in report.errors)
 
 
 def test_missing_task_placeholder_rejected() -> None:
@@ -149,7 +149,7 @@ def test_dedup_without_reuse_flag_rejected() -> None:
         make_proposal(description="hace otra cosa", reuse_checked=False)
     )
     assert report.ok is False
-    assert any("duplicado" in e for e in report.errors)
+    assert any("duplicate" in e for e in report.errors)
 
 
 def test_dedup_suppressed_by_reuse_checked() -> None:
@@ -162,21 +162,21 @@ def test_dedup_suppressed_by_reuse_checked() -> None:
 def test_duplicate_id_rejected() -> None:
     report = make_validator().validate(make_proposal(id="existing_agent"))
     assert report.ok is False
-    assert any("ya existe" in e for e in report.errors)
+    assert any("already exists" in e for e in report.errors)
 
 
 def test_tool_id_from_tools_manifest_is_reserved() -> None:
     validator = make_validator(tool_ids={"read_file"})
     report = validator.validate(make_proposal(id="desktop_observe", tools=("read_file",)))
     assert report.ok is False
-    assert any("reservado" in e for e in report.errors)
+    assert any("reserved" in e for e in report.errors)
 
 
 def test_desktop_control_plus_shell_is_rejected() -> None:
     validator = make_validator(tool_ids={"desktop_observe", "run_command"})
     report = validator.validate(make_proposal(tools=("desktop_observe", "run_command")))
     assert report.ok is False
-    assert any("no combinable" in e for e in report.errors)
+    assert any("cannot be combined" in e for e in report.errors)
 
 
 def test_desktop_control_plus_network_capability_is_rejected() -> None:
@@ -188,7 +188,7 @@ def test_desktop_control_plus_network_capability_is_rejected() -> None:
         )
     )
     assert report.ok is False
-    assert any("no combinable" in e for e in report.errors)
+    assert any("cannot be combined" in e for e in report.errors)
 
 
 def test_desktop_control_alone_is_allowed() -> None:

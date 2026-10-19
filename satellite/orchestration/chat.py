@@ -8,6 +8,7 @@ que un seguimiento ("agrega esto") se entienda en el contexto de lo anterior.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from satellite.context.compaction import (
     strip_code_fences,
     summarize_turns,
 )
+from satellite.core.language import detect_user_language, reply_fallback
 from satellite.core.task import Task, TaskResult
 from satellite.retrieval.sanitize import sanitize
 
@@ -32,6 +34,33 @@ CONVERSATION_FILE = "conversation.json"
 _RESERVED_CONTEXT_KEYS = ("context_refs", "context_missing", "context_external")
 
 _ROLE_LABEL = {"user": "usuario", "assistant": "asistente"}
+
+# Aceptación en texto libre de la alternativa recomendada del modo plan. Es una orden
+# de ejecución sobre el plan ya presentado: no se debe volver a pedir una elección ni
+# contestar desde el catálogo.
+_RECOMMENDED_RE = re.compile(
+    r"\brecomendad[ao]s?\b|\bla que (me )?recomiendas?\b|\bopci[oó]n recomendada\b",
+    re.IGNORECASE,
+)
+
+
+def _accepts_recommendation(text: str) -> bool:
+    """True si el mensaje acepta la alternativa recomendada del plan pendiente."""
+    return bool(_RECOMMENDED_RE.search(str(text or "")))
+
+
+def _option_instruction(option) -> str:
+    """Orden de ejecución derivada de una alternativa del modo plan."""
+    steps = "; ".join(getattr(option, "approach", ()) or ()) or "sin pasos detallados"
+    return (
+        f"Opción elegida: {getattr(option, 'title', '')}. "
+        f"{getattr(option, 'summary', '')} Pasos: {steps}. Procede con esta opción."
+    )
+
+
+def _lang_text(language: str, es: str, en: str) -> str:
+    """Texto de respuesta/aviso según el idioma detectado (``en`` sólo si es inglés)."""
+    return en if language == "en" else es
 
 
 def conversation_path(project_root: Path | str) -> Path:
@@ -107,6 +136,9 @@ class ChatSession:
         self._settings = settings
         self._discovered: int | None = None
         self.persist = persist
+        # Alternativas del modo plan pendientes de elección (se consumen en el
+        # siguiente mensaje: si acepta la recomendada, se ejecuta sin volver a pedir).
+        self._pending_plan = None  # PlanOptions | None
 
     # --- persistencia de la conversación ---
 
@@ -135,6 +167,7 @@ class ChatSession:
             except (KeyError, TypeError, ValueError):
                 continue
         self.history = loaded
+        self._pending_plan = None  # las alternativas no cruzan de sesión
         return len(loaded)
 
     def save(self) -> None:
@@ -150,6 +183,7 @@ class ChatSession:
     def reset(self) -> None:
         """Empieza una conversación nueva (y borra la guardada de la sesión activa)."""
         self.history.clear()
+        self._pending_plan = None
         if not self.persist:
             return
         path = conversation_path(self.project_root)
@@ -169,6 +203,7 @@ class ChatSession:
         """Crea una sesión vacía, la activa y devuelve su id."""
         session_id = self._store().create(name)
         self.history = []
+        self._pending_plan = None
         return session_id
 
     def use_session(self, target: str) -> str | None:
@@ -358,6 +393,22 @@ class ChatSession:
         """Envía un mensaje: compacta si hace falta, planifica/ejecuta y guarda."""
         compaction = await self.maybe_compact(text)
         history = [turn.to_dict() for turn in self.recent()]
+        # Idioma de los avisos/respuesta: manda el mensaje actual; si es ambiguo, el
+        # turno de usuario más reciente (nunca el del asistente).
+        language = detect_user_language(text, history)
+
+        # Las alternativas del modo plan se consumen en este turno. Si el mensaje
+        # acepta la recomendada ("la recomendada pero crea el agente…"), se convierte
+        # en una orden de ejecución concreta: no se vuelve a pedir una elección ni se
+        # contesta desde el catálogo ni con charla genérica.
+        pending = self._pending_plan
+        self._pending_plan = None
+        extra = dict(extra_metadata) if extra_metadata else {}
+        recommended = getattr(pending, "recommended", None)
+        if recommended is not None and _accepts_recommendation(text):
+            text = f"{text.rstrip()}\n{_option_instruction(recommended)}".strip()
+            extra["allow_plan_options"] = False
+            extra["execute_choice"] = True
         self.add("user", text)
 
         metadata: dict = {"history": history, "conversation": True}
@@ -370,7 +421,7 @@ class ChatSession:
         # pide aquí (que es donde hay puerto), se lee una sola vez si la dan y el
         # contenido viaja como dato no confiable. La autorización no se persiste.
         bloque_externo, informe_externo, notas = await self._resolve_external_mentions(
-            menciones.external, approval
+            menciones.external, approval, language
         )
         # Una mención ambigua no se adjunta (no se elige una al azar): se dice y se pide
         # la ruta completa, para que el usuario sepa que no se leyó nada.
@@ -378,20 +429,30 @@ class ChatSession:
         for amb in menciones.ambiguous:
             candidatas = ", ".join(amb.candidates[:8])
             notas.append(
-                f"@{amb.value} es ambiguo: coincide con {candidatas}. "
-                "Escribe la ruta completa para adjuntarlo."
+                _lang_text(
+                    language,
+                    f"@{amb.value} es ambiguo: coincide con {candidatas}. "
+                    "Escribe la ruta completa para adjuntarlo.",
+                    f"@{amb.value} is ambiguous: it matches {candidatas}. "
+                    "Write the full path to attach it.",
+                )
             )
         # Un archivo sensible/excluido no se lee como contexto: se dice, no se ofrece.
         for valor in menciones.ignored:
             notas.append(
-                f"No adjunté @{valor}: es un archivo sensible o excluido del índice "
-                "y no se lee como contexto."
+                _lang_text(
+                    language,
+                    f"No adjunté @{valor}: es un archivo sensible o excluido del "
+                    "índice y no se lee como contexto.",
+                    f"I did not attach @{valor}: it is a sensitive or index-excluded "
+                    "file and is not read as context.",
+                )
             )
         contexto = self._mention_report(menciones, informe_externo)
         if plan_mode:
             metadata["plan_mode"] = True
-        if extra_metadata:
-            metadata.update(extra_metadata)
+        if extra:
+            metadata.update(extra)
         # Las claves de contexto las fija SÓLO este flujo, y el contenido externo va
         # envuelto como ``ApprovedExternalContext``: descartar las que vengan por
         # metadata libre impide que ``extra_metadata`` (u otra vía interna) inyecte
@@ -413,7 +474,11 @@ class ChatSession:
         try:
             result = await self.orchestrator.execute(task)
         except Exception as exc:  # noqa: BLE001 — la conversación no debe romperse
-            text = f"No pude completarlo: {exc}"
+            text = _lang_text(
+                language,
+                f"No pude completarlo: {exc}",
+                f"I couldn't complete it: {exc}",
+            )
             self.add("assistant", text, status="failed")
             return ChatReply(
                 text=text,
@@ -426,11 +491,12 @@ class ChatSession:
         # El índice persistente lo adjunta el orquestador en cada turno. Si un turno que
         # pregunta por el proyecto se queda sin ese contexto, se dice en vez de dejar que la
         # respuesta parezca basada en archivos que no se leyeron.
-        if _missing_project_context(task) and _is_explanatory(text):
-            notas.append(
-                "No hay contexto de proyecto que adjuntar "
-                "(el índice está vacío o no está disponible)."
-            )
+        if (
+            _missing_project_context(task)
+            and _is_explanatory(text)
+            and not _result_reports_missing_context(result)
+        ):
+            notas.append(reply_fallback("no_project_context", language))
 
         reply_text = reply_from_result(result)
         if notas:
@@ -443,6 +509,8 @@ class ChatSession:
             task_id=result.task_id,
             status=result.status.value,
         )
+        # Si este turno ofreció alternativas, quedan pendientes para el siguiente.
+        self._pending_plan = self._plan_from_result(result)
         return ChatReply(
             text=reply_text,
             task_id=result.task_id,
@@ -466,7 +534,7 @@ class ChatSession:
         }
 
     async def _resolve_external_mentions(
-        self, externas, approval: ApprovalPort | None
+        self, externas, approval: ApprovalPort | None, language: str = "es"
     ) -> tuple[str, list[dict], list[str]]:
         """Pide aprobación por cada @mención de fuera y lee (una vez) lo autorizado.
 
@@ -474,7 +542,8 @@ class ChatSession:
 
         - ``bloque``: contenido externo ya leído, como DATO no confiable, para este turno.
         - ``informe``: estado por mención (para la UI).
-        - ``notas``: avisos en texto que se anteponen a la respuesta.
+        - ``notas``: avisos en texto que se anteponen a la respuesta (en el idioma del
+          usuario; las rutas quedan literales).
 
         No se guarda ninguna autorización: vale para esta petición y se descarta, así
         que no se reutiliza en turnos siguientes ni entre peticiones concurrentes.
@@ -493,8 +562,14 @@ class ChatSession:
                 for em in externas
             ]
             notas = [
-                f"No leí {em.path}: este runtime no tiene motor de contexto para "
-                "rutas externas." for em in externas
+                _lang_text(
+                    language,
+                    f"No leí {em.path}: este runtime no tiene motor de contexto para "
+                    "rutas externas.",
+                    f"I did not read {em.path}: this runtime has no context engine for "
+                    "external paths.",
+                )
+                for em in externas
             ]
             return "", informe, notas
 
@@ -507,16 +582,30 @@ class ChatSession:
             if estado == "approved":
                 aprobadas.append(em)
                 notas.append(
-                    f"Adjunté {em.path} (fuera del proyecto) solo para este turno."
+                    _lang_text(
+                        language,
+                        f"Adjunté {em.path} (fuera del proyecto) solo para este turno.",
+                        f"I attached {em.path} (outside the project) for this turn only.",
+                    )
                 )
             elif estado == "denied":
                 notas.append(
-                    f"No leí {em.path}: está fuera del proyecto y no se autorizó."
+                    _lang_text(
+                        language,
+                        f"No leí {em.path}: está fuera del proyecto y no se autorizó.",
+                        f"I did not read {em.path}: it is outside the project and was "
+                        "not authorized.",
+                    )
                 )
             else:  # no_port
                 notas.append(
-                    f"No leí {em.path}: está fuera del proyecto y esta interfaz no "
-                    "puede pedir confirmación."
+                    _lang_text(
+                        language,
+                        f"No leí {em.path}: está fuera del proyecto y esta interfaz no "
+                        "puede pedir confirmación.",
+                        f"I did not read {em.path}: it is outside the project and this "
+                        "interface cannot ask for confirmation.",
+                    )
                 )
 
         bloque = ""
@@ -566,15 +655,28 @@ class ChatSession:
             return "approved"
         return "denied"
 
+    @staticmethod
+    def _plan_from_result(result) -> object | None:
+        """Las ``PlanOptions`` que trae el resultado, si ofreció alternativas."""
+        output = result.output or {}
+        if output.get("mode") != "plan_options":
+            return None
+        payload = output.get("plan_options")
+        if not isinstance(payload, dict):
+            return None
+        try:
+            from satellite.core.plan import PlanOptions
+
+            return PlanOptions.from_dict(payload)
+        except Exception:  # noqa: BLE001 — datos incompletos: se ignora, no se inventa
+            return None
+
     async def choose(self, option, *, approval: ApprovalPort | None = None) -> ChatReply:
         """Elige una alternativa del modo plan y continúa con ella."""
-        steps = "; ".join(getattr(option, "approach", ()) or ()) or "sin pasos detallados"
-        text = (
-            f"Opción elegida: {getattr(option, 'title', '')}. "
-            f"{getattr(option, 'summary', '')} Pasos: {steps}. Procede con esta opción."
-        )
+        # La elección explícita consume las alternativas pendientes.
+        self._pending_plan = None
         return await self.send(
-            text,
+            _option_instruction(option),
             approval=approval,
             # execute_choice: es una orden de ejecución, no una pregunta, así que el
             # orquestador no debe atajarla con el catálogo ni con respuesta directa.
@@ -591,14 +693,27 @@ def _missing_project_context(task: Task) -> bool:
     return str(task.metadata.get("project_context_status") or "") in ("empty", "unavailable")
 
 
+def _result_reports_missing_context(result: TaskResult) -> bool:
+    """True si el orquestador ya avisó de la falta de contexto en este turno.
+
+    Un overview sin índice lo responde el propio orquestador con ese aviso (sin llamar
+    al modelo); para no repetirlo, la conversación no lo vuelve a anteponer.
+    """
+    output = result.output or {}
+    return bool(output.get("project_context_missing"))
+
+
 def _is_explanatory(goal: str) -> bool:
     """True si el goal pregunta por el proyecto (overview/README), no por una acción."""
     from satellite.context.project_index import explain_goal
+    from satellite.orchestration.chat_detector import is_project_overview
 
-    return explain_goal(goal)
+    return explain_goal(goal) or is_project_overview(goal)
 
 
 _OUTPUT_TEXT_KEYS = ("content", "answer", "text", "summary", "result", "output")
+# Claves de metadatos que no forman parte de la respuesta visible.
+_META_KEYS = ("user_language",)
 
 
 def _clip(text: str, limit: int) -> str:
@@ -611,6 +726,7 @@ def readable_output(output: dict | None, *, limit: int = 1200) -> str:
     Un nodo con ``output_schema`` devuelve las claves que dicte el schema (p.ej.
     ``skill``/``result``), así que mirar sólo ``content`` dejaba al usuario sin
     respuesta. Como último recurso se serializa el JSON: mejor eso que el silencio.
+    Los metadatos internos (p.ej. ``user_language``) no se muestran.
     """
     if not isinstance(output, dict) or not output:
         return ""
@@ -622,36 +738,64 @@ def readable_output(output: dict | None, *, limit: int = 1200) -> str:
             isinstance(item, str) for item in value
         ):
             return _clip(" ".join(str(item) for item in value), limit)
+    data = {key: value for key, value in output.items() if key not in _META_KEYS}
+    if not data:
+        return ""
     try:
         import json
 
-        rendered = json.dumps(output, ensure_ascii=False, default=str)
+        rendered = json.dumps(data, ensure_ascii=False, default=str)
     except (TypeError, ValueError):  # pragma: no cover - un dict simple siempre serializa
         return ""
     return _clip(rendered, limit) if rendered not in ("", "{}", "null") else ""
 
 
+def _reply_language(output: dict) -> str:
+    """Idioma del usuario para el fallback visible (``"en"`` o ``"es"`` por defecto)."""
+    return "en" if str((output or {}).get("user_language") or "") == "en" else "es"
+
+
 def reply_from_result(result: TaskResult) -> str:
-    """Convierte el ``TaskResult`` en el mensaje que ve el usuario."""
+    """Convierte el ``TaskResult`` en el mensaje que ve el usuario.
+
+    Prefiere la **prosa localizada** que ya trae el resultado (``output['content']``, la
+    que redacta ``_answer_in_prose`` en el idioma del usuario) para errores, capability
+    gaps y modo plan; sólo si no la hay cae a un texto determinista en el idioma
+    detectado (``output['user_language']``).
+    """
     output = result.output or {}
     mode = output.get("mode")
-    if mode == "plan_options":
-        options = output.get("plan_options") or {}
-        count = len(options.get("options") or [])
-        return f"Te propongo {count} alternativas. Elige una o describe tu propio enfoque."
-    if mode == "direct_reply":
-        return str(output.get("content") or result.summary or "")
-    if mode == "needs_clarification":
-        return str(output.get("question") or result.summary or "")
+    language = _reply_language(output)
+    content = output.get("content")
+    prose = content.strip() if isinstance(content, str) and content.strip() else ""
     if mode == "capability_gap":
+        if prose:
+            return prose
         gap = output.get("capability_gap") or {}
         missing = gap.get("missing", "")
-        return f"Me falta una capacidad: {missing}. ¿Quieres que la cree?"
+        mensaje = reply_fallback("gap", language).format(missing=missing)
+        opciones = output.get("options") or []
+        if opciones:
+            etiqueta = reply_fallback("options", language)
+            mensaje += f"\n{etiqueta}: " + "; ".join(str(o) for o in opciones) + "."
+        return mensaje
+    if mode == "direct_reply":
+        return str(content or result.summary or "")
+    if mode == "needs_clarification":
+        return str(output.get("question") or result.summary or "")
+    if mode == "plan_options":
+        if prose:
+            return prose
+        options = output.get("plan_options") or {}
+        count = len(options.get("options") or [])
+        return reply_fallback("alternatives", language).format(n=count)
     if result.error:
-        return f"No pude completarlo: {result.error}"
-    content = readable_output(output)
-    if content:
+        if prose:
+            return prose
+        return f"{reply_fallback('error', language)}: {result.error}"
+    content_text = readable_output(output)
+    if content_text:
         # Camino del grafo: el texto del último nodo es la respuesta, tenga `content`
         # o las claves que dicte su `output_schema`.
-        return content
-    return result.summary or "(sin respuesta)"
+        return content_text
+    return result.summary or reply_fallback("no_answer", language)

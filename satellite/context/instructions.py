@@ -39,7 +39,7 @@ def load_instructions(
     except OSError:
         return "", ""
     if len(content) > limit:
-        content = content[:limit] + f"\n\n[truncado: el fichero excede {limit} caracteres]"
+        content = content[:limit] + f"\n\n[truncated: the file exceeds {limit} characters]"
     return path.name, content
 
 

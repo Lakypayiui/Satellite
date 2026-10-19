@@ -50,6 +50,20 @@ class AgentFactory(ABC):
         """Crea un Agent para el spec indicado."""
         raise NotImplementedError
 
+    def can_create(self, spec_id: str) -> bool:
+        """¿Se puede construir un Agent para ``spec_id``? Predicate de *preflight*.
+
+        Quien sólo quiera saber si el agente está disponible debe llamar aquí, no a
+        ``create``: construir una instancia puede tener coste o efectos que un sondeo
+        no debería provocar. Por defecto se sondea ``create``; las fábricas con una
+        comprobación más barata (sin instanciar) deben sobrescribirlo.
+        """
+        try:
+            self.create(spec_id)
+            return True
+        except Exception:  # noqa: BLE001 — cualquier fallo al construir = no disponible
+            return False
+
 
 class AgentRegistry(ABC):
     """Catálogo de AgentSpec disponibles."""

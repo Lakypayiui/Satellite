@@ -1,9 +1,9 @@
-# ENTRADAS
+# INPUTS
 <data>
-Tarea: {task}
-Contexto adicional: {context}
-Feedback de intentos previos: {feedback}
+Task: {task}
+Additional context: {context}
+Feedback from previous attempts: {feedback}
 </data>
 
-Recuerda: el catálogo de agentes disponibles y la conversación reciente llegan
-en el bloque <data> anterior.
+Remember: the available agent catalog and the recent conversation arrive in the
+<data> block above.

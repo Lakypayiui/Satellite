@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from satellite.core.language import OUTPUT_LANGUAGE_RULE
 from satellite.core.messages import LLMRequest, Message, Role
 from satellite.providers.base import LLMProvider
 from satellite.providers.parsing import extract_json_object
@@ -63,27 +64,35 @@ class LocalPreprocessor:
     async def _analyze(self, goal: str, context_so_far: str) -> dict[str, Any]:
         """Una ronda: el LLM decide qué falta y qué preguntar."""
         prompt = (
-            "Eres el preprocesador de contexto de Satellite. Dado un objetivo "
-            "del usuario, decide QUÉ información falta para poder ejecutarlo.\n\n"
-            "Objetivo del usuario:\n"
+            "You are the Satellite context preprocessor. Given a user goal, decide "
+            "WHAT information is missing in order to execute it.\n\n"
+            "User goal (input data; keep this block as given and do not rewrite it):\n"
             f"{goal}\n\n"
-            "Contexto de proyecto ya disponible (si hay):\n"
-            f"{context_so_far or '(ninguno)'}\n\n"
-            "Responde SOLO con JSON con esta forma:\n"
+            "Project context already available (if any):\n"
+            f"{context_so_far or '(none)'}\n\n"
+            "Reply ONLY with JSON with this shape:\n"
             "{\n"
-            '  "refined_prompt": "objetivo reescrito/compactado en el idioma del usuario",\n'
+            '  "refined_prompt": "the working goal, ALWAYS in English: a concise, faithful restatement of the user\'s intent (translate the user goal into English when it is written in another language)",\n'
             '  "needs_user_input": true|false,\n'
-            '  "user_prompt": "pregunta de aclaración al usuario (si needs_user_input)",\n'
-            '  "missing_info": ["categoría de contexto faltante"],\n'
-            '  "needs": {"files_needed": ["ruta relativa"], "symbols_needed": ["símbolo"]}\n'
+            '  "user_prompt": "clarifying question for the user, in the user\'s language (only used when needs_user_input)",\n'
+            '  "missing_info": ["category of missing context, in English (internal)"],\n'
+            '  "needs": {"files_needed": ["relative path"], "symbols_needed": ["symbol"]}\n'
             "}\n"
-            "Si el objetivo es claro y no necesita contexto del proyecto ni "
-            "aclaraciones, devuelve refined_prompt = el mismo objetivo y todo lo "
-            "demás vacío/false."
+            "`refined_prompt` and `missing_info` are INTERNAL and ALWAYS in English: "
+            "even when the goal is already clear, still return a concise English "
+            "`refined_prompt` that faithfully restates it — never echo a non-English "
+            "goal verbatim and never leave `refined_prompt` in the user's language. "
+            "Only `user_prompt` is read by the user and follows the user's language."
         )
         request = LLMRequest(
             messages=(
-                Message(role=Role.SYSTEM, content="Eres el preprocesador de contexto de Satellite. Solo emites decisiones, no ejecutas."),
+                Message(
+                    role=Role.SYSTEM,
+                    content=(
+                        "You are the Satellite context preprocessor. You only emit "
+                        "decisions, you do not execute.\n\n" + OUTPUT_LANGUAGE_RULE
+                    ),
+                ),
                 Message(role=Role.USER, content=prompt),
             ),
             temperature=0.0,

@@ -1,0 +1,21 @@
+{
+  "id": "code_explainer",
+  "name": "Code Explainer",
+  "description": "Explains what a piece of code does and why, in plain language",
+  "capabilities": ["explain_code", "summarize_behavior"],
+  "prompt_ref": "code_explainer",
+  "tools": ["read_file", "list_dir"],
+  "validators": [],
+  "model_role": "agent",
+  "max_turns": 1,
+  "timeout_s": 120,
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "summary": {"type": "string"},
+      "behavior": {"type": "array", "items": {"type": "string"}}
+    },
+    "required": ["summary"],
+    "additionalProperties": false
+  }
+}

@@ -41,7 +41,7 @@ def test_system_prompt_is_static_and_treats_ui_as_untrusted_data() -> None:
     template = desktop_operator_template()
     assert find_placeholders(template.system_prompt) == []
     assert "{" not in template.system_prompt
-    assert "NO CONFIABLE" in template.system_prompt
+    assert "UNTRUSTED" in template.system_prompt
     assert "<data>" in template.system_prompt
     assert "snapshot_id" in template.system_prompt
     # La parte dinámica va en el user template; el snapshot va AL FINAL en <data>.
@@ -66,4 +66,4 @@ def test_template_passes_the_deterministic_validator() -> None:
 def test_template_is_rejected_without_desktop_tools() -> None:
     report = _validator({"read_file"}).validate(desktop_operator_template())
     assert report.ok is False
-    assert any("tool desconocida" in error for error in report.errors)
+    assert any("unknown tool" in error for error in report.errors)

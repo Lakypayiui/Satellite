@@ -235,7 +235,7 @@ class JobTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Gestiona los trabajos en segundo plano (los que lanza run_command con "
+            "Manages background jobs (the ones run_command launches with "
             "background=true): action=list|status|output|wait|stop."
         )
 
@@ -251,15 +251,15 @@ class JobTool(Tool):
                 "action": {
                     "type": "string",
                     "enum": ["list", "status", "output", "wait", "stop"],
-                    "description": "Qué hacer con el trabajo.",
+                    "description": "What to do with the job.",
                 },
                 "job_id": {
                     "type": "string",
-                    "description": "Id del trabajo (lo devuelve run_command con background).",
+                    "description": "Job id (returned by run_command with background).",
                 },
                 "timeout_s": {
                     "type": "integer",
-                    "description": "Segundos a esperar con action=wait (default 30).",
+                    "description": "Seconds to wait with action=wait (default 30).",
                 },
             },
             "required": ["action"],

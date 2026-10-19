@@ -61,7 +61,7 @@ def test_create_template_registers_persists_and_preserves_schema(tmp_path) -> No
     spec = registry.get("desktop_operator")
     assert spec.output_schema == desktop_operator_template().output_schema
     assert set(spec.tools) == set(TOOL_IDS)
-    assert "NO CONFIABLE" in prompts.get_system("desktop_operator")
+    assert "UNTRUSTED" in prompts.get_system("desktop_operator")
     assert (store.root / "desktop_operator.json").is_file()
     assert (store.root / "desktop_operator.system.txt").is_file()
     assert (store.root / "desktop_operator.user.txt").is_file()

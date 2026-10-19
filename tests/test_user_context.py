@@ -132,7 +132,7 @@ def test_long_instructions_are_truncated_with_a_notice(tmp_path: Path) -> None:
 
     _nombre, texto = load_instructions(tmp_path)
 
-    assert "truncado" in texto
+    assert "truncated" in texto
 
 
 def test_the_instructions_ref_points_at_the_file(tmp_path: Path) -> None:
@@ -170,7 +170,7 @@ def test_a_symbol_says_how_many_hits_it_left_out(tmp_path: Path) -> None:
     section = run(resolver.resolve_ref(ref, ContextLimits(max_chars_per_section=1_000)))
 
     assert section is not None
-    assert "coincidencia(s) más" in section.content
+    assert "more match(es) of" in section.content
     assert section.chars <= 1_000
 
 

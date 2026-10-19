@@ -10,6 +10,7 @@ from satellite.agents.base import Agent, AgentContext
 from satellite.agents.prompts import render_system, render_template
 from satellite.core.context_models import ContextBundle
 from satellite.core.events import EventType, ExecutionEvent
+from satellite.core.language import with_output_language
 from satellite.core.messages import CallContext, LLMRequest, Message, Role, Usage
 from satellite.core.result import (
     AgentResult,
@@ -48,12 +49,12 @@ def build_system_prompt(
             "\n".join(
                 f"- {tool.id}: {tool.description}" for tool in sorted(tools or [], key=lambda t: t.id)
             )
-            or "(sin tools)"
+            or "(no tools)"
         )
     schema_text = (
         json.dumps(output_schema, ensure_ascii=False, sort_keys=True)
         if output_schema
-        else "(sin schema requerido)"
+        else "(no schema required)"
     )
     rendered = render_system(
         system_prompt, tools=tools_text, output_schema=schema_text
@@ -63,23 +64,25 @@ def build_system_prompt(
             f"- {entry.agent_id}: {entry.description}" for entry in can_call
         )
         rendered += (
-            "\n\n# DELEGACIÓN\nPuedes delegar en estos agentes con la tool "
-            "`delegate(agent_id, task)`:\n" + lines
+            "\n\n# DELEGATION\nYou may delegate to these agents with the "
+            "`delegate(agent_id, task)` tool:\n" + lines
         )
-    if "no confiable" not in rendered.lower():
-        rendered = f"# DATOS NO CONFIABLES\n{UNTRUSTED_RULE}\n\n{rendered}"
-    if "fuera del proyecto" not in rendered.lower():
+    if "untrusted" not in rendered.lower():
+        rendered = f"# UNTRUSTED DATA\n{UNTRUSTED_RULE}\n\n{rendered}"
+    if "outside the project" not in rendered.lower():
         # Regla de framework para TODOS los agentes ejecutores (también los que crea
         # el usuario): sin ella, al negarse una ruta el modelo improvisaba y acababa
         # presentando el proyecto como si fuera la carpeta que se le pidió.
         regla = (
-            "Solo puedes acceder a rutas dentro del proyecto. Si una tool te dice que "
-            "una ruta queda fuera, informa del error y de la ruta pedida tal cual "
-            "(puede autorizarla el usuario): no sustituyas otra carpeta por ella ni "
-            "presentes el proyecto como si fuera lo que se pidió."
+            "You may only access paths inside the project. If a tool tells you that a "
+            "path falls outside, report the error and the requested path exactly as "
+            "given (the user may authorize it): do not substitute another folder for it "
+            "and do not present the project as if it were what was requested."
         )
-        rendered = f"# ALCANCE DE RUTAS\n{regla}\n\n{rendered}"
-    return rendered
+        rendered = f"# PATH SCOPE\n{regla}\n\n{rendered}"
+    # Regla común de idioma: los prompts internos van en inglés, pero el texto que el
+    # usuario lee sigue el idioma de su mensaje/conversación.
+    return with_output_language(rendered)
 
 
 def build_user_prompt(
@@ -95,7 +98,7 @@ def build_user_prompt(
         f"- [{f.severity.value}] {sanitize(f.message)}"
         + (f" ({sanitize(f.location)})" if f.location else "")
         for f in (feedback or [])
-    ) or "(sin feedback)"
+    ) or "(no feedback)"
     task_json = json.dumps(task, ensure_ascii=False, indent=2, sort_keys=True)
     return render_template(
         user_template,
@@ -274,7 +277,10 @@ class LLMAgent(Agent):
             if not ok:
                 messages.append(Message(role=Role.ASSISTANT, content=response.content or ""))
                 messages.append(
-                    Message(role=Role.USER, content=f"Respuesta no cumple el schema: {parsed}. Devuelve JSON válido.")
+                    Message(
+                        role=Role.USER,
+                        content=_schema_retry_message(self.spec.output_schema, parsed),
+                    )
                 )
                 retry = await self._complete(
                     ctx,
@@ -286,9 +292,20 @@ class LLMAgent(Agent):
                 candidate = extract_json_object(retry.content or "")
                 ok, parsed, dropped = self._validate_schema(candidate)
                 if not ok:
-                    error = f"respuesta no cumple output_schema: {parsed}"
-                    final_output = {"content": retry.content or ""}
-                    dropped = []
+                    # El reintento tampoco cumple. Si el esquema no exige ninguna clave
+                    # (todo opcional) y la respuesta sí traía datos, se conservan tal cual
+                    # en vez de tirarlos: un `output_schema` sin `required` queda satisfecho
+                    # aunque el modelo use otros nombres (p.ej. su prompt pide secciones en
+                    # español y el schema las declara en inglés), así que no puede acabar en
+                    # una "salida vacía" que tumbe el nodo entero.
+                    salvado = _salvage_undeclared_only(self.spec.output_schema, candidate)
+                    if salvado is not None:
+                        final_output = salvado
+                        dropped = _prune_to_schema(self.spec.output_schema, salvado)[1]
+                    else:
+                        error = f"respuesta no cumple output_schema: {parsed}"
+                        final_output = {"content": retry.content or ""}
+                        dropped = []
                 else:
                     final_output = parsed
             else:
@@ -517,9 +534,9 @@ class LLMAgent(Agent):
         vacía la respuesta que *únicamente* traía claves inventadas.
         """
         if candidate is None:
-            return False, "no se encontró JSON en la respuesta", []
+            return False, "no JSON found in the response", []
         if candidate == {} or candidate == []:
-            return False, "la salida está vacía", []
+            return False, "the output is empty", []
         try:
             import jsonschema
 
@@ -527,13 +544,13 @@ class LLMAgent(Agent):
             recortado, descartadas = _prune_to_schema(schema, candidate)
             if recortado == {} or recortado == []:
                 detalle = (
-                    " (sólo traía claves no declaradas: "
+                    " (it only carried undeclared keys: "
                     + ", ".join(sorted(dict.fromkeys(descartadas)))
                     + ")"
                     if descartadas
                     else ""
                 )
-                return False, f"la salida está vacía{detalle}", descartadas
+                return False, f"the output is empty{detalle}", descartadas
             jsonschema.validate(recortado, schema)
             return True, recortado, descartadas
         except Exception as exc:  # noqa: BLE001
@@ -591,6 +608,49 @@ def _prune_to_schema(schema, value, _path: str = ""):
     return value, []
 
 
+def _declared_keys(schema: object) -> list[str]:
+    """Claves de primer nivel que declara el ``output_schema`` (vacío si no declara)."""
+    if not isinstance(schema, dict):
+        return []
+    props = schema.get("properties")
+    if not isinstance(props, dict):
+        return []
+    return [str(clave) for clave in props]
+
+
+def _schema_retry_message(schema: dict, problem: str) -> str:
+    """Pide de nuevo JSON válido y, si el esquema declara claves, las nombra.
+
+    Sin la lista de claves, el reintento era a ciegas: el modelo no sabía qué nombres
+    exactos debía usar y volvía a fallar igual (el caso de un prompt que pide secciones
+    con otros nombres que el schema).
+    """
+    pista = ""
+    declaradas = _declared_keys(schema)
+    if declaradas:
+        pista = " Use exactly these top-level keys: " + ", ".join(declaradas) + "."
+    return f"Response does not match the schema: {problem}.{pista} Return only valid JSON."
+
+
+def _salvage_undeclared_only(schema: object, candidate: object) -> dict | None:
+    """Devuelve ``candidate`` si sólo traía claves no declaradas y nada era obligatorio.
+
+    Un esquema sin ``required`` no puede quedar insatisfecho por traer claves de más: se
+    conserva el contenido en vez de convertirlo en una salida vacía. Devuelve ``None``
+    cuando el esquema sí exige claves (ahí la falta es real) o cuando no hay datos.
+    """
+    if not isinstance(candidate, dict) or not candidate:
+        return None
+    if not isinstance(schema, dict) or not schema.get("properties"):
+        return None
+    if schema.get("required"):
+        return None
+    recortado, descartadas = _prune_to_schema(schema, candidate)
+    if recortado not in ({}, []) or not descartadas:
+        return None
+    return candidate
+
+
 def _schema_findings(dropped: list[str]) -> tuple[Finding, ...]:
     """Diagnóstico de las claves que el nodo devolvió de más y se descartaron."""
     if not dropped:
@@ -617,7 +677,7 @@ def _accumulate(total: Usage, part: Usage | None) -> Usage:
 
 def _context_to_text(context: ContextBundle) -> str:
     if not context.sections:
-        return "(sin contexto)"
+        return "(no context)"
     return "\n\n".join(
         wrap_data(f"{section.ref.kind.value}:{section.ref.value}", section.content)
         for section in context.sections

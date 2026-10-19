@@ -33,8 +33,8 @@ class RequestContextTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Pide contexto adicional del proyecto (archivos, directorios, "
-            "patrones, símbolos o resumen) cuando necesitas más información."
+            "Requests additional project context (files, directories, "
+            "patterns, symbols or a summary) when you need more information."
         )
 
     @property
@@ -59,7 +59,7 @@ class RequestContextTool(Tool):
                         },
                         "required": ["kind", "value"],
                     },
-                    "description": "Referencias de contexto a resolver.",
+                    "description": "Context references to resolve.",
                 }
             },
             "required": ["refs"],

@@ -148,7 +148,7 @@ def test_explain_question_reaches_the_provider_with_the_readme(tmp_path: Path) -
 
     enviado = _enviado(provider)
     assert "caja registradora" in enviado  # el README, no una suposición
-    assert "CONTEXTO DEL PROYECTO" in enviado
+    assert "PROJECT CONTEXT" in enviado
 
 
 def test_chat_session_attaches_the_index_before_sending(tmp_path: Path) -> None:

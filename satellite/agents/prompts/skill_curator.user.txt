@@ -1,6 +1,6 @@
-# ENTRADAS
+# INPUTS
 <data>
-Solicitud o modo (lote/bajo demanda): {task}
-Skills y estadísticas: {context}
-Feedback previo: {feedback}
+Request or mode (batch/on-demand): {task}
+Skills and statistics: {context}
+Previous feedback: {feedback}
 </data>

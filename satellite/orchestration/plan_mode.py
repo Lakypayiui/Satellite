@@ -76,13 +76,13 @@ class PlanOptionGenerator:
             )
             data = extract_json_object(response.content or "")
             if data is None:
-                errors = "respuesta anterior sin JSON válido"
+                errors = "previous response was not valid JSON"
                 continue
             try:
                 options = PlanOptions.from_dict(data)
                 self._check_size(options)
             except (SpecValidationError, ContractError) as exc:
-                errors = f"tu respuesta no cumple el schema: {exc}"
+                errors = f"your response does not match the schema: {exc}"
                 continue
             return options
         return None
@@ -90,11 +90,11 @@ class PlanOptionGenerator:
     def _check_size(self, options: PlanOptions) -> None:
         if len(options.options) < self.min_options:
             raise SpecValidationError(
-                f"se esperaban al menos {self.min_options} alternativas, "
-                f"recibidas {len(options.options)}"
+                f"expected at least {self.min_options} alternatives, "
+                f"received {len(options.options)}"
             )
         if len(options.options) > self.max_options:
             raise SpecValidationError(
-                f"se esperaban como máximo {self.max_options} alternativas, "
-                f"recibidas {len(options.options)}"
+                f"expected at most {self.max_options} alternatives, "
+                f"received {len(options.options)}"
             )

@@ -1,6 +1,6 @@
-# ENTRADAS
+# INPUTS
 <data>
-Tarea o duda: {task}
-Contexto del proyecto y catálogo: {context}
-Intentos o aclaraciones previas: {feedback}
+Task or question: {task}
+Project context and catalog: {context}
+Previous attempts or clarifications: {feedback}
 </data>

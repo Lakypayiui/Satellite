@@ -45,7 +45,7 @@ class SearchSkillsTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Busca skills ya guardadas por descripción y devuelve id, descripción y score."
+        return "Searches already saved skills by description and returns id, description and score."
 
     @property
     def categories(self) -> tuple[str, ...]:
@@ -56,8 +56,8 @@ class SearchSkillsTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Descripción de lo que necesitas."},
-                "top_k": {"type": "integer", "description": "Número de resultados (default 3)."},
+                "query": {"type": "string", "description": "Description of what you need."},
+                "top_k": {"type": "integer", "description": "Number of results (default 3)."},
             },
             "required": ["query"],
         }
@@ -95,8 +95,8 @@ class ProposeSkillTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Propone guardar como skill reutilizable el código que acaba de funcionar. "
-            "Requiere al menos una ejecución exitosa en esta tarea."
+            "Proposes saving the code that just worked as a reusable skill. "
+            "Requires at least one successful run in this task."
         )
 
     @property

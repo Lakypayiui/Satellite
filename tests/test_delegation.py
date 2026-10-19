@@ -75,21 +75,21 @@ def root_ctx(**kwargs) -> DelegationContext:
 def test_context_depth_limit() -> None:
     ok, reason = root_ctx(depth=3, max_depth=3).can_delegate("child")
     assert ok is False
-    assert "profundidad" in reason
+    assert "depth" in reason
 
 
 def test_context_cycle_detected() -> None:
     ctx = root_ctx(chain=("child",))
     ok, reason = ctx.can_delegate("child")
     assert ok is False
-    assert "ciclo" in reason
+    assert "cycle" in reason
 
 
 def test_context_token_budget() -> None:
     ctx = root_ctx(token_budget=10, tokens_used=10)
     ok, reason = ctx.can_delegate("child")
     assert ok is False
-    assert "tokens" in reason
+    assert "token" in reason
 
 
 def test_context_allows_within_budget() -> None:
@@ -162,7 +162,7 @@ def test_delegate_escalation_denied(tmp_path: Path) -> None:
         )
     )
     assert result.ok is False
-    assert "escalado" in (result.error or "")
+    assert "escalation" in (result.error or "")
 
 
 def test_delegate_escalation_approved(tmp_path: Path) -> None:
@@ -190,7 +190,7 @@ def test_delegate_depth_limit_blocks(tmp_path: Path) -> None:
         )
     )
     assert result.ok is False
-    assert "profundidad" in (result.error or "")
+    assert "depth" in (result.error or "")
 
 
 def test_delegate_cycle_blocks(tmp_path: Path) -> None:
@@ -206,7 +206,7 @@ def test_delegate_cycle_blocks(tmp_path: Path) -> None:
         )
     )
     assert result.ok is False
-    assert "ciclo" in (result.error or "")
+    assert "cycle" in (result.error or "")
 
 
 def test_delegate_emits_events(tmp_path: Path) -> None:

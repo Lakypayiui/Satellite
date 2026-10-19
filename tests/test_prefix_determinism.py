@@ -126,7 +126,7 @@ def test_render_history_keeps_chronological_order() -> None:
 def test_render_history_empty_and_sanitized() -> None:
     assert render_history(None) == ""
     assert render_history([{"role": "user", "content": "   "}]) == ""
-    assert render_history([{"role": "user", "content": "hola"}]).startswith("Conversación reciente")
+    assert render_history([{"role": "user", "content": "hola"}]).startswith("Recent conversation")
 
 
 def test_history_is_not_in_the_stable_catalog_block() -> None:
@@ -140,7 +140,7 @@ def test_history_is_not_in_the_stable_catalog_block() -> None:
 
 def test_catalog_context_empty_is_stable() -> None:
     assert build_catalog_context([]) == build_catalog_context([], ())
-    assert "(catálogo vacío)" in build_catalog_context([])
+    assert "(empty catalog)" in build_catalog_context([])
 
 
 # ---------------------------------------------------------------- system prompt
@@ -200,4 +200,4 @@ def test_user_prompt_is_deterministic() -> None:
     two = build_user_prompt(template, task={"a": 1, "b": 2, "goal": "x"}, context=bundle, feedback=())
     assert one == two
     assert '"a": 1' in one
-    assert "sin feedback" in one
+    assert "no feedback" in one

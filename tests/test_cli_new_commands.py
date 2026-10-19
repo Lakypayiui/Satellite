@@ -18,9 +18,9 @@ def test_tool_descriptions_are_honest_about_the_shell() -> None:
     run_python = by_id["run_python"].description
 
     assert run_command != run_argv
-    assert "no interpreta" in run_command
-    assert "NO abre un intérprete de shell" in run_argv
-    assert "subproceso" in run_python
+    assert "does not interpret" in run_command
+    assert "does NOT open a shell" in run_argv
+    assert "subprocess" in run_python
 
 
 def _write_skill(skills_root: Path, skill_id: str, description: str) -> None:

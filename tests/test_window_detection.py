@@ -27,8 +27,20 @@ def _cache(project: Path, values: dict) -> None:
 
 
 def test_the_known_window_is_used_without_a_conversation(tmp_path: Path, monkeypatch) -> None:
-    """Al arrancar (sin chat) la barra debe leer la ventana ya conocida, no la tabla."""
+    """Al arrancar (sin chat) la barra debe leer la ventana ya conocida, no la tabla.
+
+    ``SATELLITE_HOME`` aísla del proveedor global activo del usuario (``active_connection``
+    resuelve ``llm.provider_id``/``active_id`` desde el almacén global): sin aislarlo, el
+    modelo/endpoint reales se filtraban y se consultaba la red, devolviendo 1_000_000.
+    """
+    monkeypatch.setenv("SATELLITE_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(compaction, "_ASKED", set())
+    # La ventana ya está cacheada: no debe haber ninguna consulta de red.
+    monkeypatch.setattr(
+        compaction,
+        "discover_window_result",
+        lambda **kw: (_ for _ in ()).throw(AssertionError("no debe consultar la red")),
+    )
     _config(tmp_path, model="deepseek-flash", base_url="https://api.deepseek.com/v1")
     _cache(tmp_path, {"deepseek-flash": 1_048_576})
 

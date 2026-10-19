@@ -68,7 +68,7 @@ def test_a_follow_up_reaches_the_model_with_the_previous_turns(tmp_path: Path) -
 
     assert result.output["mode"] == "direct_reply"
     enviado = _enviado(provider)
-    assert "CONVERSACIÓN RECIENTE" in enviado
+    assert "RECENT CONVERSATION" in enviado
     assert "a.txt, b.txt, notas.md" in enviado
     assert "explícamela" in enviado
 
@@ -80,7 +80,7 @@ def test_without_history_there_is_no_conversation_block(tmp_path: Path) -> None:
 
     run(orch._answer_direct(Task(goal="hola", project_root=tmp_path)))
 
-    assert "CONVERSACIÓN RECIENTE" not in _enviado(provider)
+    assert "RECENT CONVERSATION" not in _enviado(provider)
 
 
 def test_direct_answer_receives_project_index_context(tmp_path: Path) -> None:
@@ -94,7 +94,7 @@ def test_direct_answer_receives_project_index_context(tmp_path: Path) -> None:
 
     run(orch._answer_direct(task))
 
-    assert "CONTEXTO DEL PROYECTO" in _enviado(provider)
+    assert "PROJECT CONTEXT" in _enviado(provider)
     assert "aplicación de ejemplo" in _enviado(provider)
 
 

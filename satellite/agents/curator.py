@@ -97,7 +97,7 @@ class SkillCurator:
             user_template=user_template,
             output_schema=CURATOR_OUTPUT_SCHEMA,
             catalog=catalog_text,
-            task=request or "curaduría bajo demanda",
+            task=request or "on-demand curation",
             context=self._stats_text(),
         )
         response = await self.provider.complete(
@@ -110,7 +110,7 @@ class SkillCurator:
         )
         data = extract_json_object(response.content or "")
         if data is None:
-            return CuratorOutcome(kind="error", reason="respuesta sin JSON válido")
+            return CuratorOutcome(kind="error", reason="response without valid JSON")
         operations = self._parse(data)
         if not operations:
             return CuratorOutcome(kind="empty")
@@ -258,7 +258,7 @@ class SkillCurator:
             f"| lifecycle={manifest.lifecycle}"
             for manifest in self.registry.all()
         ]
-        return "\n".join(lines) or "(catálogo vacío)"
+        return "\n".join(lines) or "(empty catalog)"
 
     def _stats_text(self) -> str:
         """Estadísticas de uso (bloque **dinámico**, después del catálogo)."""
@@ -269,7 +269,7 @@ class SkillCurator:
             f"latency_ms={manifest.stats.total_latency_ms}"
             for manifest in self.registry.all()
         ]
-        return "\n".join(lines) or "(sin estadísticas)"
+        return "\n".join(lines) or "(no statistics)"
 
     def _emit_suspicious(self, op: CuratorOperation) -> None:
         if self.sink is None:

@@ -1,0 +1,41 @@
+{
+  "id": "pele_diagram_agent",
+  "name": "Pele Diagram Agent",
+  "description": "Designs Mermaid architecture, software and data diagrams and renders them to SVG with the project's Pele renderer",
+  "capabilities": ["render_mermaid", "architecture_diagram", "software_diagram"],
+  "prompt_ref": "pele_diagram_agent",
+  "tools": ["render_diagram"],
+  "validators": [],
+  "model_role": "agent",
+  "max_turns": 2,
+  "timeout_s": 120,
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "mermaid": {
+        "type": "string",
+        "minLength": 1,
+        "description": "The Mermaid source of the diagram."
+      },
+      "rendered": {
+        "type": "boolean",
+        "description": "true only when Pele produced an SVG."
+      },
+      "svg_path": {
+        "type": "string",
+        "description": "Path to the generated SVG, when rendering succeeded."
+      },
+      "diagram_type": {
+        "type": "string",
+        "description": "Diagram type reported by the renderer, when available."
+      },
+      "content": {
+        "type": "string",
+        "description": "Short message for the user, in the user's language."
+      }
+    },
+    "required": ["mermaid", "rendered"],
+    "additionalProperties": false
+  },
+  "lifecycle": "persistent"
+}

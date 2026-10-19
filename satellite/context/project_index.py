@@ -19,12 +19,19 @@ IGNORED_DIRS = {
 }
 _MAX_INDEX_FILE_BYTES = 1_000_000
 _MAX_CONTEXT_CHARS = 12_000
-_TEXT_SUFFIXES = {
-    ".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".json",
-    ".toml", ".yaml", ".yml", ".md", ".rst", ".txt", ".html", ".css",
-    ".scss", ".sql", ".sh", ".ps1", ".bat", ".c", ".h", ".cpp", ".hpp",
-    ".go", ".rs", ".java", ".kt", ".swift", ".xml", ".ini", ".cfg",
+# Extensiones que casi siempre son binarias: no se intentan leer como texto. Es un
+# atajo, no un filtro de contenido: lo que decide de verdad es la sonda de bytes.
+_BINARY_SUFFIXES = {
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".icns", ".webp", ".tiff",
+    ".pdf", ".zip", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar", ".jar",
+    ".exe", ".dll", ".so", ".dylib", ".bin", ".dat", ".o", ".a", ".obj",
+    ".class", ".pyc", ".pyo", ".pyd", ".wasm", ".woff", ".woff2", ".ttf",
+    ".otf", ".eot", ".mp3", ".mp4", ".mov", ".avi", ".mkv", ".wav", ".ogg",
+    ".flac", ".webm", ".db", ".sqlite", ".sqlite3",
 }
+# Separador de los bloques de contenido dentro de la vista de proyecto (``--- ruta ---``).
+# Se usa para saber si la vista incluye texto de archivos o sólo el inventario.
+_CONTENT_BLOCK = "\n--- "
 
 # Patrones por lenguaje para detectar funciones, clases e imports
 _LANG_PATTERNS: dict[str, dict[str, re.Pattern]] = {
@@ -75,6 +82,15 @@ _EXPLAIN_RE = re.compile(
 def explain_goal(goal: str) -> bool:
     """True si el goal pregunta por el proyecto (overview/README) y no por una acción."""
     return bool(_EXPLAIN_RE.search(str(goal or "")))
+
+
+def has_readable_content(context: str) -> bool:
+    """True si la vista de proyecto incluye el texto de algún archivo legible.
+
+    La vista siempre trae el inventario (el árbol de rutas); esto distingue si además
+    se pudo leer contenido, para no confundir «hay archivos» con «se pudo leer algo».
+    """
+    return _CONTENT_BLOCK in str(context or "")
 
 
 class ProjectIndex:
@@ -131,6 +147,13 @@ class ProjectIndex:
         # A partir de aquí el índice en memoria cubre TODO el proyecto, aunque la
         # escritura a disco falle (p. ej. proyecto de solo lectura).
         self._ensured = True
+
+        # Un archivo borrado deja de estar en ``current``: si no se retira de la
+        # memoria, seguiría apareciendo en el inventario de turnos siguientes (el
+        # contexto de un índice reutilizado). El índice refleja el proyecto actual.
+        for rel in set(self._stats) - set(current):
+            self._stats.pop(rel, None)
+            self._structure.pop(rel, None)
 
         records = []
         for rel in sorted(current):
@@ -199,13 +222,10 @@ class ProjectIndex:
         for _, rel, path in selected:
             if not path.is_file():
                 continue
-            if path.suffix.lower() not in _TEXT_SUFFIXES or not self._safe_index_file(path):
+            content = self._readable_text(path)
+            if content is None:
                 continue
-            try:
-                content = path.read_text(encoding="utf-8", errors="replace")[:4000]
-            except OSError:
-                continue
-            block = f"\n--- {rel} ---\n{content}"
+            block = f"{_CONTENT_BLOCK}{rel} ---\n{content}"
             if len(block) > remaining:
                 block = block[:remaining]
             if block:
@@ -214,6 +234,28 @@ class ProjectIndex:
             if remaining <= 0:
                 break
         return "\n".join(lines)[:max_chars]
+
+    def _readable_text(self, path: Path, *, limit: int = 4000) -> str | None:
+        """Texto legible de un archivo, o ``None`` si no es seguro/legible.
+
+        Decide por **contenido** (sonda de bytes), no por una lista cerrada de
+        extensiones: así archivos relevantes con extensiones distintas (``.vue``,
+        ``.lua``, ``Dockerfile``, ``LICENSE``, etc.) también entran al contexto. Se
+        respetan las exclusiones sensibles y el límite de tamaño, y se descarta lo que
+        parece binario (un byte NUL) sin gastar memoria de más.
+        """
+        if path.suffix.lower() in _BINARY_SUFFIXES:
+            return None
+        if not self._safe_index_file(path):
+            return None
+        try:
+            with open(path, "rb") as stream:
+                data = stream.read(limit * 4)
+        except OSError:
+            return None
+        if b"\x00" in data:
+            return None
+        return data.decode("utf-8", errors="replace")[:limit]
 
     def _safe_index_file(self, path: Path) -> bool:
         if is_index_excluded(path):

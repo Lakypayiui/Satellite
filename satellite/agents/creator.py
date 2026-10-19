@@ -81,11 +81,11 @@ class AgentProposalGenerator:
             for spec in self.registry.all()
         ]
         return (
-            "Catálogo de agentes existentes:\n"
-            + ("\n".join(lines) or "(vacío)")
-            + "\n\nReglas de naming: id snake_case ^[a-z][a-z0-9_]{2,40}$; "
-            "description = verbo + objeto + cuándo usarlo."
-            + "\nmodel_role permitido: generated."
+            "Existing agent catalog:\n"
+            + ("\n".join(lines) or "(empty)")
+            + "\n\nNaming rules: id snake_case ^[a-z][a-z0-9_]{2,40}$; "
+            "description = verb + object + when to use it."
+            + "\nmodel_role allowed: generated."
         )
 
     async def propose(self, need: str, *, extra_context: str = "") -> CreatorOutcome:
@@ -117,7 +117,7 @@ class AgentProposalGenerator:
             response = await self.provider.complete(request)
             data = extract_json_object(response.content or "")
             if data is None:
-                last_errors.append("respuesta sin JSON válido")
+                last_errors.append("response without valid JSON")
                 feedback = "; ".join(last_errors)
                 continue
 
@@ -135,7 +135,7 @@ class AgentProposalGenerator:
                 try:
                     extension = AgentExtension.from_dict(data)
                 except (SpecValidationError, ContractError, KeyError, TypeError, ValueError) as exc:
-                    last_errors.append(f"extensión inválida: {exc}")
+                    last_errors.append(f"invalid extension: {exc}")
                     feedback = "; ".join(last_errors)
                     continue
                 return CreatorOutcome(kind="extend", extension=extension)
@@ -143,19 +143,19 @@ class AgentProposalGenerator:
                 try:
                     skill = ProposedSkill.from_dict(data)
                 except (SpecValidationError, ContractError, KeyError, TypeError, ValueError) as exc:
-                    last_errors.append(f"sugerencia de skill inválida: {exc}")
+                    last_errors.append(f"invalid skill suggestion: {exc}")
                     feedback = "; ".join(last_errors)
                     continue
                 return CreatorOutcome(kind="skill_suggestion", skill=skill)
             if kind != "proposed_agent":
-                last_errors.append(f"'type' inválido: {kind!r}")
+                last_errors.append(f"invalid 'type': {kind!r}")
                 feedback = "; ".join(last_errors)
                 continue
 
             try:
                 proposal = ProposedAgent.from_dict(data)
             except (SpecValidationError, ContractError, KeyError, TypeError, ValueError) as exc:
-                last_errors.append(f"propuesta inválida: {exc}")
+                last_errors.append(f"invalid proposal: {exc}")
                 feedback = "; ".join(last_errors)
                 continue
 
@@ -170,5 +170,5 @@ class AgentProposalGenerator:
 
         return CreatorOutcome(
             kind="error",
-            error="; ".join(last_errors) or "no se produjo ninguna propuesta",
+            error="; ".join(last_errors) or "no proposal was produced",
         )

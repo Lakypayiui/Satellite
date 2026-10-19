@@ -48,13 +48,13 @@ def test_build_system_prompt_is_static() -> None:
 
 def test_build_system_prompt_adds_untrusted_banner_and_delegation() -> None:
     system = build_system_prompt("Sé útil.", can_call=())
-    assert "no confiable" in system.lower()
+    assert "untrusted" in system.lower()
     from satellite.core.spec import CanCallEntry
 
     with_delegation = build_system_prompt(
         "Sé útil.", can_call=(CanCallEntry(agent_id="other", description="para X"),)
     )
-    assert "# DELEGACIÓN" in with_delegation
+    assert "# DELEGATION" in with_delegation
     assert "other: para X" in with_delegation
 
 
@@ -72,7 +72,7 @@ def test_build_user_prompt_fills_dynamic_part() -> None:
     )
     assert "haz algo" in user
     assert "contenido" in user
-    assert "(sin feedback)" in user
+    assert "(no feedback)" in user
     assert "{task}" not in user
     assert "{context}" not in user
     assert "{feedback}" not in user

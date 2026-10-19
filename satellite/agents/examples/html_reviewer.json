@@ -1,7 +1,7 @@
 {
   "id": "html_reviewer",
   "name": "HTML Reviewer",
-  "description": "Revisa documentos HTML buscando errores de estructura y accesibilidad",
+  "description": "Reviews HTML documents looking for structural and accessibility issues",
   "capabilities": ["review_html", "validate_html"],
   "prompt_ref": "html_reviewer",
   "tools": ["read_file"],

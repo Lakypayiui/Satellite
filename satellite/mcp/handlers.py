@@ -148,19 +148,19 @@ def get_handlers(bundle: RuntimeBundle) -> dict[str, callable]:
 TOOLS_LIST = [
     {
         "name": "satellite_run",
-        "description": "Ejecuta una tarea completa de Satellite (goal) y devuelve el resultado.",
+        "description": "Runs a complete Satellite task (goal) and returns the result.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "goal": {"type": "string"},
-                "project_root": {"type": "string", "description": "Raíz del proyecto (opcional)."},
+                "project_root": {"type": "string", "description": "Project root (optional)."},
             },
             "required": ["goal"],
         },
     },
     {
         "name": "satellite_agents",
-        "description": "Lista el catálogo de agentes disponibles.",
+        "description": "Lists the available agent catalog.",
         "inputSchema": {
             "type": "object",
             "properties": {"project_root": {"type": "string"}},
@@ -169,7 +169,7 @@ TOOLS_LIST = [
     },
     {
         "name": "satellite_graph",
-        "description": "Muestra el grafo serializado de una tarea.",
+        "description": "Shows the serialized graph of a task.",
         "inputSchema": {
             "type": "object",
             "properties": {"task_id": {"type": "string"}, "project_root": {"type": "string"}},
@@ -178,7 +178,7 @@ TOOLS_LIST = [
     },
     {
         "name": "satellite_status",
-        "description": "Estado actual de una tarea (eventos recientes).",
+        "description": "Current status of a task (recent events).",
         "inputSchema": {
             "type": "object",
             "properties": {"task_id": {"type": "string"}, "project_root": {"type": "string"}},
@@ -187,7 +187,7 @@ TOOLS_LIST = [
     },
     {
         "name": "satellite_cancel",
-        "description": "Pide cancelación best-effort de una tarea.",
+        "description": "Requests best-effort cancellation of a task.",
         "inputSchema": {
             "type": "object",
             "properties": {"task_id": {"type": "string"}},
@@ -197,8 +197,8 @@ TOOLS_LIST = [
     {
         "name": "satellite_approvals",
         "description": (
-            "Lista las propuestas que esperan una decisión humana (solo lectura). "
-            "Las aprobaciones se resuelven en el CLI o en la TUI: MCP no aprueba."
+            "Lists the proposals awaiting a human decision (read-only). "
+            "Approvals are resolved in the CLI or the TUI: MCP does not approve."
         ),
         "inputSchema": {
             "type": "object",

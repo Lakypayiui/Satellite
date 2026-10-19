@@ -78,9 +78,15 @@ def test_desktop_tools_registered_only_when_allowed() -> None:
 
 
 def test_reserved_ids() -> None:
-    assert RESERVED_AGENT_IDS == {"orchestrator", "agent_creator", "skill_curator"}
+    assert RESERVED_AGENT_IDS == {
+        "orchestrator",
+        "agent_creator",
+        "skill_curator",
+        "pele_diagram_agent",
+    }
     assert "run_python" in RESERVED_SKILL_IDS
     assert is_reserved("orchestrator")
+    assert is_reserved("pele_diagram_agent")
     assert is_reserved("search_files")
     assert not is_reserved("docs_writer")
 

@@ -1,4 +1,4 @@
-"""Tests del catálogo base (3 agentes) y de los prompts del kernel (Fase 5)."""
+"""Tests del catálogo base (agentes del kernel + agente de diagrama) y prompts (Fase 5)."""
 
 from pathlib import Path
 
@@ -18,14 +18,23 @@ SPECS = PKG / "specs"
 PROMPTS = PKG / "prompts"
 EXAMPLES = PKG / "examples"
 
+SHIPPED_PROMPTS = (
+    "orchestrator",
+    "agent_creator",
+    "skill_curator",
+    "plan_options",
+    "pele_diagram_agent",
+)
 
-def test_base_specs_are_exactly_three() -> None:
+
+def test_base_specs_are_the_shipped_agents() -> None:
     reg = DefaultAgentRegistry()
     reg.load_dir(SPECS)
     assert {spec.id for spec in reg.all()} == {
         "orchestrator",
         "agent_creator",
         "skill_curator",
+        "pele_diagram_agent",
     }
 
 
@@ -46,7 +55,7 @@ def test_base_ids_are_reserved() -> None:
 def test_base_prompts_use_only_allowed_placeholders() -> None:
     prompts = DefaultPromptRegistry()
     prompts.load_dir(PROMPTS)
-    for prompt_id in ("orchestrator", "agent_creator", "skill_curator", "plan_options"):
+    for prompt_id in SHIPPED_PROMPTS:
         system = prompts.get_system(prompt_id)
         user = prompts.get_user(prompt_id)
         assert system.strip() and user.strip()
@@ -62,7 +71,7 @@ def test_no_retrieved_data_in_system() -> None:
     """El catálogo/contexto NO se inyectan en el system: van como bloque USER."""
     prompts = DefaultPromptRegistry()
     prompts.load_dir(PROMPTS)
-    for prompt_id in ("orchestrator", "agent_creator", "skill_curator", "plan_options"):
+    for prompt_id in SHIPPED_PROMPTS:
         system = prompts.get_system(prompt_id)
         # el bloque de datos recuperados nunca va en el system (sólo se menciona
         # en la documentación, que no es contenido inyectado)
@@ -94,7 +103,7 @@ def test_base_prompts_render_with_distinct_values() -> None:
         "output_schema": "«SCHEMA»",
         "tools": "«TOOLS»",
     }
-    for prompt_id in ("orchestrator", "agent_creator", "skill_curator", "plan_options"):
+    for prompt_id in SHIPPED_PROMPTS:
         # el system sólo se renderiza con {tools}/{output_schema}: lo dinámico
         # NUNCA entra, aunque el texto mencione los placeholders
         system = render_system(

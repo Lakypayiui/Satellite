@@ -67,7 +67,7 @@ def test_budget_exhausted_blocks_delegation() -> None:
         )
     )
     assert result.ok is False
-    assert "tokens" in (result.error or "")
+    assert "token" in (result.error or "")
 
 
 def test_runner_token_budget_aborts(tmp_path) -> None:

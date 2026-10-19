@@ -7,10 +7,11 @@ real sí se planifica.
 Orden de decisión:
 1. Preguntas sobre el propio sistema ("¿qué agentes tienes?") → conversación.
 2. **Acción o diagnóstico CON contexto real de proyecto** → tarea.
-3. Preguntas de conocimiento general ("¿qué es X?") → conversación.
-4. Cortesía y relleno ("hola", "gracias", "ok", "ayúdame") → conversación.
-5. Mensaje largo sin ninguna señal → tarea.
-6. Pregunta corta con "?" → conversación.
+3. Pregunta por el proyecto en conjunto (overview/README) → conversación.
+4. Preguntas de conocimiento general ("¿qué es X?") → conversación.
+5. Cortesía y relleno ("hola", "gracias", "ok", "ayúdame") → conversación.
+6. Mensaje largo sin ninguna señal → tarea.
+7. Pregunta corta con "?" → conversación.
 
 Los patrones cubren español e inglés.
 """
@@ -87,8 +88,41 @@ _CHAT_HINTS_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Pregunta por el PROYECTO en conjunto (overview/README), no por una acción sobre él.
+# Combina un sujeto de proyecto con una intención de resumen/explicación. Es
+# conversación aunque no lleve "?" ni abra con palabra interrogativa, que era justo
+# lo que dejaba "De que trata el proyecto" en manos del planner y del clasificador LLM.
+# Variantes naturales ES/EN: "de qué trata el proyecto", "¿De qué trata este proyecto?",
+# "de qué va el repo", "en qué consiste el proyecto", "qué hace el proyecto",
+# "what is the project about", "what does this repo do".
+_PROJECT_SUBJECT_RE = re.compile(
+    r"\b(proyecto|project|repo|repositorio|repository|codebase)\b",
+    re.IGNORECASE,
+)
+_PROJECT_OVERVIEW_INTENT_RE = re.compile(
+    r"\b(de qu[eé] trata|de que trata|se trata|trata|consiste|de qu[eé] va|"
+    r"qu[eé] es|que es|qu[eé] hace|que hace|resumen|resume|describe|"
+    r"descripci[oó]n|expl[ií]ca|explica|sobre qu[eé]|cu[eé]ntame|sirve|funciona|"
+    r"about|what is|what's|what does|overview|summary|describe|explain|purpose)\b",
+    re.IGNORECASE,
+)
+
 # Longitud máxima para considerar "posible conversación" si no hay más señales.
 _MAX_LEN = 160
+
+
+def is_project_overview(goal: str) -> bool:
+    """True si pregunta de qué trata el proyecto (overview), no una acción sobre él.
+
+    Determinista y barato: exige un sujeto de proyecto **y** una intención de
+    resumen/explicación. La acción con contexto de proyecto se filtra antes
+    (:func:`has_task_hint`), así que "arregla el proyecto" o "documenta el proyecto"
+    siguen siendo tareas.
+    """
+    text = str(goal or "").strip()
+    return bool(
+        _PROJECT_SUBJECT_RE.search(text) and _PROJECT_OVERVIEW_INTENT_RE.search(text)
+    )
 
 
 def has_project_context(goal: str) -> bool:
@@ -116,16 +150,19 @@ def heuristic_is_chat(goal: str) -> bool:
     # 2) Acción o diagnóstico con contexto de proyecto → tarea
     if has_task_hint(text):
         return False
-    # 3) Conocimiento general → conversación
+    # 3) Pregunta por el proyecto en conjunto (overview/README) → conversación
+    if is_project_overview(text):
+        return True
+    # 4) Conocimiento general → conversación
     if _KNOWLEDGE_CHAT_RE.search(text):
         return True
-    # 4) Cortesía, relleno o "ayúdame" → conversación
+    # 5) Cortesía, relleno o "ayúdame" → conversación
     if _CHAT_HINTS_RE.search(text):
         return True
-    # 5) Mensaje largo sin ninguna señal → tarea
+    # 6) Mensaje largo sin ninguna señal → tarea
     if len(text) > _MAX_LEN:
         return False
-    # 6) Pregunta corta → conversación
+    # 7) Pregunta corta → conversación
     return len(text) <= 60 and text.endswith("?")
 
 
@@ -160,19 +197,19 @@ async def async_is_chat_goal(task: Task, provider: LLMProvider | None) -> bool:
 async def _llm_classify(goal: str, provider: LLMProvider) -> bool:
     """Pregunta al LLM (una llamada corta) si el goal es conversacional."""
     prompt = (
-        "Clasifica la siguiente consulta del usuario:\n"
+        "Classify the following user query:\n"
         f"\"{goal}\"\n\n"
-        "Responde SOLO con 'chat' si es una pregunta conversacional simple "
-        "(saludo, definición, opinión, curiosidad, explicación general) que NO "
-        "requiere modificar archivos, ejecutar comandos, crear código ni "
-        "analizar el proyecto.\n"
-        "Responde SOLO con 'task' si es una tarea que requiere usar el "
-        "proyecto, archivos, código, herramientas o ejecución.\n"
-        "Responde únicamente: chat | task"
+        "Reply ONLY with 'chat' if it is a simple conversational question "
+        "(greeting, definition, opinion, curiosity, general explanation) that does "
+        "NOT require modifying files, running commands, creating code or analyzing "
+        "the project.\n"
+        "Reply ONLY with 'task' if it is a task that requires using the project, "
+        "files, code, tools or execution.\n"
+        "Reply with only: chat | task"
     )
     request = LLMRequest(
         messages=(
-            Message(role=Role.SYSTEM, content="Eres un clasificador binario. Responde solo 'chat' o 'task'."),
+            Message(role=Role.SYSTEM, content="You are a binary classifier. Reply only 'chat' or 'task'."),
             Message(role=Role.USER, content=prompt),
         ),
         temperature=0.0,

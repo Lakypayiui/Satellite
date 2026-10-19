@@ -153,7 +153,7 @@ def test_invented_tool_rejected() -> None:
 def test_reserved_id_rejected() -> None:
     report = make_validator().validate(make_proposal(id="orchestrator"))
     assert report.ok is False
-    assert any("reservado" in error for error in report.errors)
+    assert any("reserved" in error for error in report.errors)
 
 
 def test_prompt_injection_in_description_does_not_bypass_validator() -> None:
@@ -202,7 +202,7 @@ def test_delegation_cycle_blocked(tmp_path: Path) -> None:
         )
     )
     assert result.ok is False
-    assert "ciclo" in (result.error or "")
+    assert "cycle" in (result.error or "")
 
 
 def test_permission_escalation_requires_approval(tmp_path: Path) -> None:
@@ -219,7 +219,7 @@ def test_permission_escalation_requires_approval(tmp_path: Path) -> None:
         )
     )
     assert result.ok is False
-    assert "escalado" in (result.error or "")
+    assert "escalation" in (result.error or "")
 
 
 # --- abuso / políticas ---
@@ -284,7 +284,7 @@ def test_runtime_prompt_declares_and_wraps_untrusted_context() -> None:
         feedback=(),
     )
     # el system es estático: ni placeholders dinámicos ni contenido recuperado
-    assert "no confiable" in system.lower()
+    assert "untrusted" in system.lower()
     assert "{task}" not in system and "{context}" not in system
     assert "instrucciones maliciosas" not in system
     # el contenido recuperado va al user, con el cierre inyectado neutralizado

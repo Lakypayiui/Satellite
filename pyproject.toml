@@ -46,6 +46,8 @@ desktop-control-linux = [
 [tool.setuptools.package-data]
 # El servicio vendorizado viaja con su config de referencia, su README y su aviso.
 "satellite.safe_proxy" = ["*.md", "*.yaml"]
+# Helper Node de Pele: es el único código JS que viaja con el paquete.
+"satellite.tools" = ["*.mjs"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

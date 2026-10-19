@@ -56,11 +56,11 @@ class DelegationContext:
     def can_delegate(self, agent_id: str) -> tuple[bool, str]:
         """True si se puede delegar en ``agent_id`` según presupuesto y ciclos."""
         if self.depth + 1 > self.max_depth:
-            return False, f"profundidad máxima de delegación ({self.max_depth}) alcanzada"
+            return False, f"delegation depth limit ({self.max_depth}) reached"
         if agent_id in self.chain:
-            return False, f"ciclo de delegación detectado hacia '{agent_id}'"
+            return False, f"delegation cycle detected toward '{agent_id}'"
         if self.token_budget is not None and self.remaining_tokens() <= 0:
-            return False, "presupuesto de tokens de delegación agotado"
+            return False, "delegation token budget exhausted"
         return True, ""
 
 
@@ -140,7 +140,7 @@ class DelegationManager:
                     return DelegationResult(
                         ok=False,
                         agent_id=agent_id,
-                        error=f"'{agent_id}' no está en can_call y no se aprobó añadirlo",
+                        error=f"'{agent_id}' is not in can_call and adding it was not approved",
                     )
 
         if caller_spec is not None and self._requires_escalation(caller_spec, callee_spec):
@@ -161,7 +161,7 @@ class DelegationManager:
                 return DelegationResult(
                     ok=False,
                     agent_id=agent_id,
-                    error=f"escalado de permisos denegado hacia '{agent_id}'",
+                    error=f"permission escalation denied toward '{agent_id}'",
                 )
 
         payload = dict(task or {})

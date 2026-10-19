@@ -68,7 +68,7 @@ def make_validator() -> AgentProposalValidator:
 def test_single_capability_rejected() -> None:
     report = make_validator().validate(make_proposal(capabilities=("only_one",)))
     assert report.ok is False
-    assert any("entre 2 y 6" in error for error in report.errors)
+    assert any("between 2 and 6" in error for error in report.errors)
 
 
 def test_too_many_capabilities_rejected() -> None:
@@ -76,13 +76,13 @@ def test_too_many_capabilities_rejected() -> None:
         make_proposal(capabilities=("a1", "b2", "c3", "d4", "e5", "f6", "g7"))
     )
     assert report.ok is False
-    assert any("entre 2 y 6" in error for error in report.errors)
+    assert any("between 2 and 6" in error for error in report.errors)
 
 
 def test_too_many_tools_rejected() -> None:
     report = make_validator().validate(make_proposal(tools=("read_file",) * 9))
     assert report.ok is False
-    assert any("demasiadas tools" in error for error in report.errors)
+    assert any("too many tools" in error for error in report.errors)
 
 
 def test_missing_example_tasks_rejected() -> None:
@@ -94,7 +94,7 @@ def test_missing_example_tasks_rejected() -> None:
 def test_duplicate_example_tasks_rejected() -> None:
     report = make_validator().validate(make_proposal(example_tasks=("a", "a", "b")))
     assert report.ok is False
-    assert any("duplicadas" in error for error in report.errors)
+    assert any("duplicate" in error for error in report.errors)
 
 
 def test_two_responsibilities_rejected() -> None:
@@ -102,7 +102,7 @@ def test_two_responsibilities_rejected() -> None:
         make_proposal(description="escribe documentación y además despliega en producción")
     )
     assert report.ok is False
-    assert any("divídela" in error for error in report.errors)
+    assert any("split it" in error for error in report.errors)
 
 
 def test_valid_role_accepted() -> None:
@@ -181,7 +181,7 @@ def test_creator_retries_when_limits_violated() -> None:
     )
     outcome = run(generator.propose("docs"))
     assert outcome.kind == "error"
-    assert "entre 2 y 6" in (outcome.error or "")
+    assert "between 2 and 6" in (outcome.error or "")
 
 
 # --- expander: extend y skill ---

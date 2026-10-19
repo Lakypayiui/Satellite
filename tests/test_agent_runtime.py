@@ -271,14 +271,14 @@ def test_the_system_prompt_says_where_paths_end() -> None:
     from satellite.agents.runtime import build_system_prompt
 
     texto = build_system_prompt("Eres un escritor.\n{tools}")
-    assert "ALCANCE DE RUTAS" in texto
-    assert "no sustituyas otra carpeta" in texto
+    assert "# PATH SCOPE" in texto
+    assert "do not substitute another folder" in texto
 
-    # si el prompt ya lo dice, no se duplica la sección
+    # si el prompt ya lo dice (en inglés), no se duplica la sección
     repetido = build_system_prompt(
-        "Eres un escritor.\n{tools}\nNo salgas del proyecto: si algo queda fuera del proyecto, informa."
+        "Eres un escritor.\n{tools}\nOnly paths inside the project: if something falls outside the project, report it."
     )
-    assert repetido.lower().count("alcance de rutas") <= 1
+    assert repetido.lower().count("# path scope") <= 1
 
 
 def test_a_schema_without_required_is_still_enforced(tmp_path: Path) -> None:
@@ -323,3 +323,51 @@ def test_output_schema_extra_keys_are_dropped_not_fatal(tmp_path: Path) -> None:
     assert result.status is AgentStatus.OK
     assert result.output == {"summary": "explicación"}
     assert any("title" in hallazgo.message for hallazgo in result.findings)
+
+
+def test_output_schema_undeclared_only_without_required_is_kept(tmp_path: Path) -> None:
+    """Un esquema sin claves obligatorias no convierte en vacía una salida con datos.
+
+    Regresión del `code_explainer` real: su prompt pide secciones en español mientras
+    que su `output_schema` declaraba claves en inglés y sin `required`; el modelo
+    devolvía las claves en español y el nodo fallaba con «la salida está vacía (sólo
+    traía claves no declaradas: …)» tras gastar varios pasos de la auditoría.
+    """
+    spec = make_spec(
+        output_schema={
+            "type": "object",
+            "properties": {"summary": {"type": "string"}, "behavior": {"type": "array"}},
+        }
+    )
+    respuesta = '{"resumen": "explica el proyecto", "comportamiento": ["lee", "describe"]}'
+    agent, _ = make_agent(spec, [{"content": respuesta}, {"content": respuesta}], tmp_path)
+
+    result = run(agent.execute({"node_id": "n1"}, make_ctx(tmp_path)))
+
+    assert result.status is AgentStatus.OK
+    assert result.error is None
+    # se conserva el contenido aunque las claves no coincidan con el esquema
+    assert result.output["resumen"] == "explica el proyecto"
+    assert result.output["comportamiento"] == ["lee", "describe"]
+    # y queda el aviso de que eran claves no declaradas
+    assert any("resumen" in hallazgo.message for hallazgo in result.findings)
+
+
+def test_output_schema_missing_required_is_a_readable_error(tmp_path: Path) -> None:
+    """Si el esquema exige una clave y no llega, el fallo es legible (no un vacío opaco)."""
+    spec = make_spec(
+        output_schema={
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        }
+    )
+    script = [{"content": "{\"otra\": \"cosa\"}"}, {"content": "{\"otra\": \"cosa\"}"}]
+    agent, provider = make_agent(spec, script, tmp_path)
+
+    result = run(agent.execute({"node_id": "n1"}, make_ctx(tmp_path)))
+
+    assert result.status is AgentStatus.FAILED
+    assert result.error is not None and "output_schema" in result.error
+    # el reintento nombra las claves declaradas para que el modelo pueda cumplir
+    assert "summary" in provider.requests[-1].messages[-1].content

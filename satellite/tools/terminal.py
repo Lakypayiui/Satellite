@@ -160,8 +160,8 @@ class RunCommandTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Ejecuta un programa con argumentos (sin shell): no interpreta tuberías, "
-            "comodines ni variables de entorno; captura stdout/stderr."
+            "Runs a program with arguments (no shell): it does not interpret pipes, "
+            "globs or environment variables; it captures stdout/stderr."
         )
 
     @property
@@ -169,17 +169,17 @@ class RunCommandTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "Comando y argumentos como string."},
-                "timeout_s": {"type": "integer", "description": "Timeout en segundos (default 30)."},
+                "command": {"type": "string", "description": "Command and arguments as a string."},
+                "timeout_s": {"type": "integer", "description": "Timeout in seconds (default 30)."},
                 "cwd_relative": {
                     "type": "string",
-                    "description": "Directorio de trabajo relativo al proyecto (opcional).",
+                    "description": "Working directory relative to the project (optional).",
                 },
                 "background": {
                     "type": "boolean",
                     "description": (
-                        "Si true, el comando sigue en segundo plano y devuelve un job_id "
-                        "para consultarlo con la tool 'job' (default false)."
+                        "If true, the command keeps running in the background and returns a job_id "
+                        "to query with the 'job' tool (default false)."
                     ),
                 },
             },

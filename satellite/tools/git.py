@@ -20,7 +20,7 @@ class GitStatusTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Muestra el estado del repositorio git (status --short y diff --stat)."
+        return "Shows the git repository state (status --short and diff --stat)."
 
     @property
     def categories(self) -> tuple[str, ...]:

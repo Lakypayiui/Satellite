@@ -12,7 +12,7 @@ from satellite.agents.runtime import build_system_prompt
 from satellite.core.messages import Message, Role
 from satellite.retrieval.sanitize import neutralize_delimiters, wrap_data
 
-CATALOG_SOURCE = "catalogo"
+CATALOG_SOURCE = "catalog"
 
 
 def build_meta_messages(

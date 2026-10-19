@@ -1,7 +1,7 @@
 {
   "id": "html_writer",
   "name": "HTML Writer",
-  "description": "Crea y modifica documentos HTML",
+  "description": "Creates and modifies HTML documents",
   "capabilities": ["write_html", "modify_html"],
   "prompt_ref": "html_writer",
   "tools": ["read_file", "write_file", "edit_file"],

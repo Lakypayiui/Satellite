@@ -140,3 +140,83 @@ def test_reply_reads_outputs_that_do_not_have_content() -> None:
         task_id="t", status=TaskStatus.OK, summary="", output={"clave": 7, "otra": True}
     )
     assert reply_from_result(con_schema) == '{"clave": 7, "otra": true}'
+
+
+def test_reply_shows_capability_gap_options() -> None:
+    """El gap de capacidad se muestra con opciones concretas, no sólo el aviso."""
+    gap = TaskResult(
+        task_id="t",
+        status=TaskStatus.NEEDS_USER_INPUT,
+        output={
+            "mode": "capability_gap",
+            "capability_gap": {"missing": "auditar el proyecto"},
+            "options": ["crear un agente para «auditar el proyecto»", "reformular la petición"],
+        },
+    )
+    mensaje = reply_from_result(gap)
+    assert "auditar el proyecto" in mensaje
+    assert "Opciones:" in mensaje
+    assert "reformular la petición" in mensaje
+
+
+# ---------------------------------------------------------------- notas/errores por idioma
+
+
+class _OrquestadorQueRevienta:
+    """Orquestador que lanza: la conversación debe cerrar con un aviso localizado."""
+
+    services = None
+
+    async def execute(self, task):
+        raise RuntimeError("boom")
+
+
+class _SinIndiceDeProyecto:
+    """Orquestador que responde OK pero deja el índice sin adjuntar."""
+
+    services = None
+
+    async def execute(self, task):
+        task.metadata["project_context_status"] = "empty"
+        return TaskResult(
+            task_id=task.task_id,
+            status=TaskStatus.OK,
+            summary="ok",
+            output={"mode": "direct_reply", "content": "ok"},
+        )
+
+
+def test_send_error_notice_follows_language(tmp_path: Path) -> None:
+    es = run(ChatSession(tmp_path, _OrquestadorQueRevienta(), persist=False).send(
+        "arregla el archivo de configuración"
+    ))
+    assert es.text == "No pude completarlo: boom"
+
+    en = run(ChatSession(tmp_path, _OrquestadorQueRevienta(), persist=False).send(
+        "fix the failing build"
+    ))
+    assert en.text == "I couldn't complete it: boom"
+    assert "No pude" not in en.text  # sin mezcla de español en la respuesta inglesa
+
+
+def test_send_missing_context_notice_follows_language(tmp_path: Path) -> None:
+    es = run(ChatSession(tmp_path, _SinIndiceDeProyecto(), persist=False).send(
+        "¿De qué trata este proyecto?"
+    ))
+    assert "No hay contexto de proyecto que adjuntar" in es.text
+
+    en = run(ChatSession(tmp_path, _SinIndiceDeProyecto(), persist=False).send(
+        "What is this project about?"
+    ))
+    assert "There is no project context to attach" in en.text
+    assert "contexto de proyecto" not in en.text.lower()
+
+
+def test_send_ignored_mention_notice_follows_language(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("X=1", encoding="utf-8")
+    es = run(ChatSession(tmp_path, _SinIndiceDeProyecto(), persist=False).send("mira @.env"))
+    assert "No adjunté @.env" in es.text
+
+    en = run(ChatSession(tmp_path, _SinIndiceDeProyecto(), persist=False).send("look at the @.env file"))
+    assert "I did not attach @.env" in en.text
+    assert "adjunté" not in en.text.lower()

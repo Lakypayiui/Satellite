@@ -161,7 +161,7 @@ def test_system_never_carries_dynamic_content() -> None:
     assert request.stable_user_count == 1
     catalog_block = request.messages[1]
     assert catalog_block.role is Role.USER
-    assert 'source="catalogo"' in catalog_block.content
+    assert 'source="catalog"' in catalog_block.content
     assert "alpha_agent" in catalog_block.content
 
     dynamic = request.messages[-1]

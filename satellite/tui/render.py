@@ -470,6 +470,8 @@ def result_panel(result: TaskResult) -> Panel:
     if output.get("mode") == "capability_gap":
         gap = output.get("capability_gap") or {}
         body.append(f"\nfalta capacidad: {gap.get('missing', '')}", style="yellow")
+        for opcion in output.get("options") or []:
+            body.append(f"\n  · {opcion}", style="yellow")
     metrics = result.metrics
     body.append(
         f"\n\ntokens {metrics.tokens_in}/{metrics.tokens_out} · "

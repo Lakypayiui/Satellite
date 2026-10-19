@@ -56,13 +56,13 @@ PROPOSED_AGENT_SCHEMA: dict = {
         "system_prompt": {
             "type": "string",
             "description": (
-                "Parte ESTÁTICA del prompt. No puede contener {task}, {context} "
-                "ni {feedback}. Sí puede usar {tools} y {output_schema}."
+                "STATIC part of the prompt. It cannot contain {task}, {context} "
+                "or {feedback}. It may use {tools} and {output_schema}."
             ),
         },
         "user_template": {
             "type": "string",
-            "description": "Parte dinámica: {task}, {context}, {feedback}.",
+            "description": "Dynamic part: {task}, {context}, {feedback}.",
         },
         "input_schema": {"type": "object"},
         "output_schema": {"type": "object"},
@@ -81,7 +81,7 @@ PROPOSED_AGENT_SCHEMA: dict = {
         "example_tasks": {
             "type": "array",
             "minItems": 3,
-            "items": {"type": "string", "description": "Tarea distinta que atendería el rol."},
+            "items": {"type": "string", "description": "A distinct task the role would handle."},
         },
         "rationale": {"type": "string"},
         "reuse_checked": {"type": "boolean"},
@@ -96,9 +96,9 @@ PROPOSED_AGENT_SCHEMA: dict = {
         "deterministic": {
             "type": "boolean",
             "description": (
-                "true solo si la skill es una transformación pura (sin red, sin "
-                "escritura, sin hora ni entorno): entonces su resultado se puede "
-                "memoizar. Declarativo: no se analiza el código."
+                "true only if the skill is a pure transformation (no network, no "
+                "writing, no clock or environment): then its result can be "
+                "memoized. Declarative: the code is not analyzed."
             ),
         },
         "examples": {"type": "array", "items": {"type": "string"}},

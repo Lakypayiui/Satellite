@@ -123,7 +123,7 @@ def test_generator_retries_on_invalid() -> None:
     generator = make_generator([{"content": "no json"}, {"content": json.dumps(payload)}])
     options = run(generator.generate("tarea"))
     assert options is not None
-    assert "sin JSON" in generator.provider.requests[1].messages[-1].content
+    assert "JSON" in generator.provider.requests[1].messages[-1].content
 
 
 def test_generator_rejects_too_few_options() -> None:
@@ -354,6 +354,58 @@ def test_choose_sends_followup_without_options(tmp_path: Path) -> None:
     assert orchestrator.tasks[0].metadata["allow_plan_options"] is False
     assert orchestrator.tasks[0].metadata["execute_choice"] is True
     assert "Cambio mínimo" in orchestrator.tasks[0].goal
+
+
+class PlanThenOkOrchestrator:
+    """Ofrece alternativas y, si la tarea es una elección, la ejecuta."""
+
+    def __init__(self, options: PlanOptions) -> None:
+        self.options = options
+        self.tasks: list = []
+        self.services = None
+
+    async def execute(self, task):
+        self.tasks.append(task)
+        if task.metadata.get("execute_choice"):
+            return TaskResult(task_id=task.task_id, status=TaskStatus.OK, summary="en marcha")
+        return TaskResult(
+            task_id=task.task_id,
+            status=TaskStatus.NEEDS_USER_INPUT,
+            summary="elige",
+            output={"mode": "plan_options", "plan_options": self.options.to_dict()},
+        )
+
+
+def test_accepting_the_recommended_option_does_not_ask_again(tmp_path: Path) -> None:
+    """Regresión: aceptar "la recomendada" en texto libre ejecuta, no re-pregunta.
+
+    Tras el primer turno ambiguo («Audítalo») con una alternativa marcada como
+    recomendada, un seguimiento que la acepta («La recomendada pero crea el agente que
+    audita») es una orden de ejecución: ni catálogo, ni charla, ni una segunda ronda de
+    alternativas.
+    """
+    options = make_options()  # recomendación = "minimo" (Cambio mínimo)
+    orchestrator = PlanThenOkOrchestrator(options)
+    chat = ChatSession(tmp_path, orchestrator)
+
+    first = run(chat.send("Audítalo"))
+    assert first.output["mode"] == "plan_options"
+
+    second = run(chat.send("La recomendada pero crea el agente que audita"))
+    task = orchestrator.tasks[1]
+    assert task.metadata.get("execute_choice") is True
+    assert task.metadata.get("allow_plan_options") is False
+    assert "Cambio mínimo" in task.goal  # la alternativa recomendada, resuelta
+    assert second.output.get("mode") != "plan_options"
+
+
+def test_followup_not_accepting_the_recommendation_is_left_alone(tmp_path: Path) -> None:
+    """Un seguimiento que no acepta la recomendada no se convierte en elección."""
+    orchestrator = PlanThenOkOrchestrator(make_options())
+    chat = ChatSession(tmp_path, orchestrator)
+    run(chat.send("Audítalo"))
+    run(chat.send("mejor pensemos otra cosa"))
+    assert orchestrator.tasks[1].metadata.get("execute_choice") is None
 
 
 class _PlannerQueRevienta:

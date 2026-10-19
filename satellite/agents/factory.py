@@ -8,9 +8,10 @@ from satellite.agents.base import Agent, AgentFactory, AgentRegistry
 from satellite.agents.prompts import DefaultPromptRegistry
 from satellite.agents.runtime import LLMAgent
 from satellite.core.errors import ToolError
+from satellite.core.spec import AgentSpec
 from satellite.providers.base import LLMProvider
 from satellite.security.base import SecurityPolicy
-from satellite.tools.base import ToolRegistry
+from satellite.tools.base import Tool, ToolRegistry
 from satellite.tools.context_tool import RequestContextTool
 
 
@@ -49,8 +50,8 @@ class DefaultAgentFactory(AgentFactory):
         except Exception:
             self.tools.register(RequestContextTool())
 
-    def create(self, spec_id: str, *, model_role: str | None = None) -> Agent:
-        """Crea un LLMAgent para el spec; tools = spec.tools + request_context."""
+    def _resolve(self, spec_id: str) -> tuple[AgentSpec, str, str, list[Tool]]:
+        """Resuelve spec + prompts + tools del agente (lo que ``create`` puede fallar)."""
         spec = self.registry.get(spec_id)
         system_prompt = self.prompts.get_system(spec.prompt_ref)
         user_template = self.prompts.get_user(spec.prompt_ref)
@@ -68,7 +69,11 @@ class DefaultAgentFactory(AgentFactory):
                 if self.policy.check_tool(tid, {})
             }
             tool_ids = [tid for tid in tool_ids if tid in allowed]
-        tools_list = self.tools.list_for(tool_ids)
+        return spec, system_prompt, user_template, self.tools.list_for(tool_ids)
+
+    def create(self, spec_id: str, *, model_role: str | None = None) -> Agent:
+        """Crea un LLMAgent para el spec; tools = spec.tools + request_context."""
+        spec, system_prompt, user_template, tools_list = self._resolve(spec_id)
         return LLMAgent(
             spec=spec,
             system_prompt=system_prompt,
@@ -83,3 +88,15 @@ class DefaultAgentFactory(AgentFactory):
             sandbox=self.sandbox,
             delegation_manager=self.delegation_manager,
         )
+
+    def can_create(self, spec_id: str) -> bool:
+        """Disponibilidad real sin instanciar el agente (preflight del orquestador).
+
+        Repite las comprobaciones de ``create`` que pueden fallar (spec, prompts y tools)
+        sin construir el ``LLMAgent``: el preflight no debe instanciar ni tener efectos.
+        """
+        try:
+            self._resolve(spec_id)
+            return True
+        except Exception:  # noqa: BLE001 — spec/prompt/tool ausente = no disponible
+            return False

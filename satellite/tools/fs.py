@@ -22,14 +22,14 @@ class ReadFileTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Lee el contenido de un archivo de texto (UTF-8, hasta ~50 KB)."
+        return "Reads the contents of a text file (UTF-8, up to ~50 KB)."
 
     @property
     def parameters_schema(self) -> dict:
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Ruta del archivo, relativa al proyecto."}
+                "path": {"type": "string", "description": "File path, relative to the project."}
             },
             "required": ["path"],
         }
@@ -57,15 +57,15 @@ class WriteFileTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Escribe contenido en un archivo (UTF-8), creando directorios padre si faltan."
+        return "Writes content to a file (UTF-8), creating parent directories if missing."
 
     @property
     def parameters_schema(self) -> dict:
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Ruta del archivo a escribir, relativa al proyecto."},
-                "content": {"type": "string", "description": "Contenido a escribir."},
+                "path": {"type": "string", "description": "Path of the file to write, relative to the project."},
+                "content": {"type": "string", "description": "Content to write."},
             },
             "required": ["path", "content"],
         }
@@ -97,16 +97,16 @@ class EditFileTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Reemplaza la primera aparición exacta de un texto en un archivo."
+        return "Replaces the first exact occurrence of a text in a file."
 
     @property
     def parameters_schema(self) -> dict:
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Ruta del archivo a editar, relativa al proyecto."},
-                "old_string": {"type": "string", "description": "Texto a reemplazar."},
-                "new_string": {"type": "string", "description": "Texto de reemplazo."},
+                "path": {"type": "string", "description": "Path of the file to edit, relative to the project."},
+                "old_string": {"type": "string", "description": "Text to replace."},
+                "new_string": {"type": "string", "description": "Replacement text."},
             },
             "required": ["path", "old_string", "new_string"],
         }
@@ -144,15 +144,15 @@ class ListDirTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Lista entradas de un directorio con nombre, tipo, tamaño y mtime."
+        return "Lists directory entries with name, type, size and mtime."
 
     @property
     def parameters_schema(self) -> dict:
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Ruta del directorio a listar, relativa al proyecto."},
-                "recursive": {"type": "boolean", "description": "Si listar recursivamente (default false)."},
+                "path": {"type": "string", "description": "Path of the directory to list, relative to the project."},
+                "recursive": {"type": "boolean", "description": "Whether to list recursively (default false)."},
             },
             "required": ["path"],
         }

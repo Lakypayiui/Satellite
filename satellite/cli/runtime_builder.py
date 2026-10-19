@@ -44,6 +44,7 @@ from satellite.safe_proxy.interceptor import SanitizingProvider, sanitize_provid
 from satellite.skills.cache import SkillResultCache
 from satellite.orchestration.base import RuntimeServices
 from satellite.orchestration.delegation import DelegationManager
+from satellite.orchestration.diagram_flow import DiagramFlow
 from satellite.orchestration.orchestrator import DefaultOrchestrator
 from satellite.orchestration.plan_mode import PlanOptionGenerator
 from satellite.orchestration.planner import LLMPlanner
@@ -59,6 +60,7 @@ from satellite.skills.registry import SkillRegistry
 from satellite.skills.runner import SkillRunner
 from satellite.tools.context_tool import RequestContextTool
 from satellite.tools.delegate import DelegateTool
+from satellite.tools.diagram import RenderDiagramTool
 from satellite.tools.fs import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from satellite.tools.git import GitStatusTool
 from satellite.tools.primitives import RunPythonTool, RunArgvTool, SearchFilesTool
@@ -83,6 +85,7 @@ DEFAULT_ALLOWED_TOOLS: set[str] = {
     "search_skills",
     "propose_skill",
     "delegate",
+    "render_diagram",
 }
 
 AGENTS_SUBDIR = Path("agents")
@@ -274,6 +277,15 @@ def build_runtime(
     )
     orchestrator.preprocessor = _build_preprocessor(project_root, provider, settings)
     orchestrator.skill_runner = skill_runner
+    # Capacidad condicional: diagramas/arquitecturas se enrutan al agente de diagrama
+    # (pele_diagram_agent). El flujo sólo delega; el agente diseña el Mermaid y lo
+    # renderiza con la tool render_diagram. Si el renderer no está instalado, el agente
+    # devuelve la fuente Mermaid y el flujo la presenta sin romper la tarea.
+    orchestrator.diagram_flow = DiagramFlow(
+        factory=factory,
+        project_root=project_root,
+        services=services,
+    )
     return orchestrator, bus, store, registry
 
 
@@ -367,6 +379,7 @@ def build_tool_registry(
         DelegateTool(),
         SearchSkillsTool(),
         ProposeSkillTool(),
+        RenderDiagramTool(),
     ):
         tools.register(tool)
     if allow_desktop:

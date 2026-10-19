@@ -20,6 +20,7 @@ import {
 import { comandoTraducido } from "./commandsI18n";
 import { useT, type Clave } from "./i18n";
 import { Logo } from "./Logo";
+import { pasosDelTurno } from "./turnActivity";
 
 interface Props {
   turnos: Turn[];
@@ -80,14 +81,6 @@ function hora(iso?: string): string {
   if (!iso) return "";
   const fecha = new Date(iso);
   return Number.isNaN(fecha.getTime()) ? "" : fecha.toLocaleTimeString().slice(0, 8);
-}
-
-/** Los pasos del turno en curso: sólo lo posterior al último «tarea iniciada». */
-function pasosDelTurno(eventos: StreamItem[]): StreamItem[] {
-  for (let indice = eventos.length - 1; indice >= 0; indice -= 1) {
-    if (eventos[indice].event.event_type === "task_started") return eventos.slice(indice);
-  }
-  return [];
 }
 
 function detalleDe(evento: StreamItem["event"]): string {

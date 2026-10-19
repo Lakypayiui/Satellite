@@ -189,8 +189,8 @@ class ContextResolver:
         content = "\n\n".join(hits)
         if omitted:
             aviso = (
-                f"\n\n[hay {omitted} coincidencia(s) más de '{symbol}': "
-                "pide el fichero concreto o usa un patrón]"
+                f"\n\n[{omitted} more match(es) of '{symbol}': "
+                "ask for the specific file or use a pattern]"
             )
             content = content[: max(0, cap - len(aviso))] + aviso
         return ContextSection(ref=ref, content=content)
@@ -203,7 +203,7 @@ class ContextResolver:
         if not texto:
             return None
         content = self._cap_section(
-            f"Instrucciones del proyecto ({nombre}):\n{texto}", limits
+            f"Project instructions ({nombre}):\n{texto}", limits
         )
         return ContextSection(ref=ref, content=content)
 
@@ -220,9 +220,9 @@ class ContextResolver:
             else:
                 top_level.append(f"{child.name}/")
         content = (
-            f"Resumen del proyecto {self.project_root.name}:\n"
+            f"Project summary {self.project_root.name}:\n"
             + "\n".join(top_level)
-            + f"\n\nTamaño total (top-level): {total_size} bytes"
+            + f"\n\nTotal size (top-level): {total_size} bytes"
         )
         return ContextSection(ref=ref, content=content)
 
