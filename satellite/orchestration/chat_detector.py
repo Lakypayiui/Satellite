@@ -224,6 +224,53 @@ async def _llm_classify(goal: str, provider: LLMProvider) -> bool:
         return heuristic_is_chat(goal)
 
 
+async def classify_project_question(
+    goal: str,
+    provider: LLMProvider,
+    *,
+    conversation: str = "",
+) -> str | None:
+    """Clasifica la intención de una consulta del proyecto con el modelo activo.
+
+    ``None`` significa que el proveedor no pudo clasificarla; el llamador puede usar
+    una regla local de respaldo en ese caso.
+    """
+    prompt = (
+        "Classify the user's latest request about the active project. Use the complete "
+        "request and conversation to infer intent, including natural paraphrases.\n\n"
+        "Return exactly one label:\n"
+        "structure — the user asks to see or describe project files, folders, or tree.\n"
+        "overview — the user asks what the project is for, what it does, or how it works.\n"
+        "other — neither of those; includes requests to change, debug, or run the project."
+    )
+    if conversation.strip():
+        prompt += f"\n\nRecent conversation:\n{conversation.strip()}"
+    prompt += f"\n\nLatest user request:\n{goal.strip()}"
+    request = LLMRequest(
+        messages=(
+            Message(
+                role=Role.SYSTEM,
+                content=(
+                    "You are a project-intent classifier. Read the user's actual request "
+                    "and conversation, then return only structure, overview, or other."
+                ),
+            ),
+            Message(role=Role.USER, content=prompt),
+        ),
+        temperature=0.0,
+        max_tokens=8,
+    )
+    try:
+        response = await provider.complete(request)
+    except Exception:  # noqa: BLE001 — el llamador conserva una ruta de respaldo
+        return None
+    answer = (response.content or "").strip().lower()
+    for label in ("structure", "overview", "other"):
+        if answer == label or answer.startswith(label + " ") or answer.startswith(label + "\n"):
+            return label
+    return None
+
+
 def _run_sync(coro):
     import asyncio
 

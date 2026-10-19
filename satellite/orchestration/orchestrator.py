@@ -35,6 +35,7 @@ from satellite.orchestration.base import (
 from satellite.orchestration.catalog_answer import answer_catalog_question
 from satellite.orchestration.chat_detector import (
     async_is_chat_goal,
+    classify_project_question,
     has_task_hint,
     is_project_overview,
 )
@@ -507,7 +508,19 @@ class DefaultOrchestrator(Orchestrator):
         conversacion = render_history(task.metadata.get("history")).strip()
         language = detect_user_language(task.goal, task.metadata.get("history")) or "es"
         project_context = str(task.metadata.get("project_context") or "").strip()
-        if project_context and _asks_for_project_index(task.goal):
+        project_intent = None
+        if project_context and self.services.provider is not None:
+            project_intent = await classify_project_question(
+                task.goal,
+                self.services.provider,
+                conversation=conversacion,
+            )
+        asks_index = (
+            project_intent == "structure"
+            if project_intent is not None
+            else _asks_for_project_index(task.goal)
+        )
+        if project_context and asks_index:
             inventory = _project_inventory(project_context, language)
             answer = inventory or reply_fallback("no_project_context", language)
             return TaskResult(
@@ -530,10 +543,11 @@ class DefaultOrchestrator(Orchestrator):
         if conversacion:
             trozos.append(f"RECENT CONVERSATION:\n{conversacion}")
         if project_context:
-            overview_question = is_project_overview(task.goal) and not has_task_hint(
-                task.goal
-            )
-            asks_index = _asks_for_project_index(task.goal)
+            overview_question = (
+                project_intent == "overview"
+                if project_intent is not None
+                else is_project_overview(task.goal)
+            ) and not has_task_hint(task.goal)
             context_for_answer = project_context
             if overview_question and not asks_index:
                 context_for_answer = "\n\n".join(
@@ -575,7 +589,11 @@ class DefaultOrchestrator(Orchestrator):
         tokens_out = response.usage.completion_tokens if response.usage else 0
         overview = bool(
             project_context
-            and is_project_overview(task.goal)
+            and (
+                project_intent == "overview"
+                if project_intent is not None
+                else is_project_overview(task.goal)
+            )
             and not has_task_hint(task.goal)
         )
         # Overview questions depend on translating the README/context. If the first
@@ -680,7 +698,7 @@ class DefaultOrchestrator(Orchestrator):
             answer = self._overview_from_context(
                 project_context,
                 language,
-                include_inventory=_asks_for_project_index(task.goal),
+                include_inventory=asks_index,
             )
         else:
             answer = reply_fallback("empty_response", language)
