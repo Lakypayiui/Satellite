@@ -74,7 +74,7 @@ _SKIP_SYMBOLS = {"", "if", "for", "while", "return", "switch", "catch", "new"}
 # Preguntas por el proyecto (overview/README): piden una explicación, no una acción.
 _EXPLAIN_RE = re.compile(
     r"\b(qué|que|trata|describe|explica|explique|resumen|resum|hace|overview|about|"
-    r"arquitectura|funciona|consiste)\b",
+    r"arquitectura|funciona|consiste|diagramas?|diagrams?|flowcharts?|flow[ -]?charts?)\b",
     re.IGNORECASE,
 )
 
