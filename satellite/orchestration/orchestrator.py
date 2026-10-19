@@ -7,6 +7,7 @@ needs_clarification). El chat-directo pasa a ser una salida `direct_reply`
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 
 from satellite.core.context_models import ApprovedExternalContext
@@ -85,12 +86,26 @@ def _asks_for_project_index(goal: str) -> bool:
 
     return bool(
         re.search(
-            r"\b(índice|indice|árbol de archivos|arbol de archivos|lista de archivos|"
-            r"estructura de carpetas|file tree|file list|project inventory)\b",
+            r"\b(índice|indice|árbol(?: de archivos)?|arbol(?: de archivos)?|"
+            r"lista de archivos|estructura(?: de carpetas| del proyecto| del repo|"
+            r" del repositorio)?|file tree|file list|project inventory|"
+            r"project structure|repository structure)\b",
             str(goal or ""),
             re.IGNORECASE,
         )
     )
+
+
+def _project_inventory(project_context: str, language: str) -> str:
+    """Devuelve el árbol ya actualizado cuando el usuario lo pide expresamente."""
+    inventory = project_context.partition("\n--- ")[0].strip()
+    if language == "en":
+        inventory = re.sub(
+            r"^Índice estructural del proyecto \(árbol hasta dos niveles\):",
+            "Project structure (tree up to two levels):",
+            inventory,
+        )
+    return inventory
 
 
 def _can_create(factory, spec_id: str) -> bool:
@@ -490,6 +505,21 @@ class DefaultOrchestrator(Orchestrator):
         from satellite.orchestration.planner_prompt import render_history
 
         conversacion = render_history(task.metadata.get("history")).strip()
+        language = detect_user_language(task.goal, task.metadata.get("history")) or "es"
+        project_context = str(task.metadata.get("project_context") or "").strip()
+        if project_context and _asks_for_project_index(task.goal):
+            inventory = _project_inventory(project_context, language)
+            answer = inventory or reply_fallback("no_project_context", language)
+            return TaskResult(
+                task_id=task.task_id,
+                status=TaskStatus.OK,
+                summary=answer,
+                output={
+                    "mode": "direct_reply",
+                    "content": answer,
+                    "user_language": language,
+                },
+            )
         trozos = [
             "The user is asking a conversational question. Answer clearly and "
             "concisely, in the user's language. Do NOT mention tools, agents or graphs.",
@@ -499,7 +529,6 @@ class DefaultOrchestrator(Orchestrator):
         ]
         if conversacion:
             trozos.append(f"RECENT CONVERSATION:\n{conversacion}")
-        project_context = str(task.metadata.get("project_context") or "").strip()
         if project_context:
             overview_question = is_project_overview(task.goal) and not has_task_hint(
                 task.goal
@@ -531,6 +560,7 @@ class DefaultOrchestrator(Orchestrator):
                 Message(role=Role.USER, content=prompt),
             ),
             temperature=0.0,
+            max_tokens=512,
         )
         response = await self.services.provider.complete(request)
         # Una completion vacía del proveedor no es una respuesta: se avisa con un texto
@@ -540,7 +570,6 @@ class DefaultOrchestrator(Orchestrator):
         # indexado, se responde con lo disponible (inventario + contenido legible) en vez
         # de devolver el aviso de modelo vacío: un overview no debe quedarse mudo cuando
         # hay material que mostrar.
-        language = detect_user_language(task.goal, task.metadata.get("history")) or "es"
         content = (response.content or "").strip()
         tokens_in = response.usage.prompt_tokens if response.usage else 0
         tokens_out = response.usage.completion_tokens if response.usage else 0
@@ -590,6 +619,7 @@ class DefaultOrchestrator(Orchestrator):
                         Message(role=Role.USER, content=retry_prompt),
                     ),
                     temperature=0.0,
+                    max_tokens=512,
                 )
                 try:
                     retry = await self.services.provider.complete(retry_request)
@@ -631,6 +661,7 @@ class DefaultOrchestrator(Orchestrator):
                             Message(role=Role.USER, content=compact_prompt),
                         ),
                         temperature=0.0,
+                        max_tokens=512,
                     )
                     try:
                         final_retry = await self.services.provider.complete(compact_request)
@@ -690,7 +721,7 @@ class DefaultOrchestrator(Orchestrator):
         )
         inventory, separator, readable_text = project_context.partition("\n--- ")
         if include_inventory:
-            return f"{header}\n\n{inventory.strip()}"
+            return _project_inventory(project_context, language)
         if not separator:
             return (
                 "No pude generar el resumen porque solo encontré una lista de archivos."

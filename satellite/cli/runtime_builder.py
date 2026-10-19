@@ -526,9 +526,14 @@ def _max_tokens_for(llm: dict, provider: dict | None = None, role: str = "") -> 
         if value is None:
             continue
         try:
-            return int(value)
+            limit = int(value)
         except (TypeError, ValueError):
             continue
+        # Provider settings persist 0 to mean "no explicit limit". Passing that
+        # through to OpenAI-compatible APIs requests zero output tokens, which looks
+        # exactly like a successful but empty model response in chat and summaries.
+        if limit > 0:
+            return limit
     return None
 
 
