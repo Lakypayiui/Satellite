@@ -70,6 +70,27 @@ def test_target_required_and_must_exist() -> None:
     )
 
 
+def test_scroll_may_omit_target_and_still_validates_a_given_one() -> None:
+    snap = _last()
+    # Sin target: desplaza el área principal de la ventana.
+    free = validate_action(
+        Action(kind="scroll", direction="down", amount=10),
+        snapshot=snap,
+        snapshot_id=snap.snapshot_id,
+    )
+    assert free.ok is True
+    assert free.element is None
+    # Con target: sigue validándose como cualquier control.
+    targeted = validate_action(
+        Action(kind="scroll", target="e8"), snapshot=snap, snapshot_id=snap.snapshot_id
+    )
+    assert targeted.ok is True and targeted.element is not None
+    missing = validate_action(
+        Action(kind="scroll", target="e99"), snapshot=snap, snapshot_id=snap.snapshot_id
+    )
+    assert missing.code == TARGET_MISSING
+
+
 def test_target_must_be_visible_and_interactable() -> None:
     snap = _last()
     assert (

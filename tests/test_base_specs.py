@@ -24,6 +24,7 @@ SHIPPED_PROMPTS = (
     "skill_curator",
     "plan_options",
     "pele_diagram_agent",
+    "desktop_operator",
 )
 
 
@@ -35,7 +36,23 @@ def test_base_specs_are_the_shipped_agents() -> None:
         "agent_creator",
         "skill_curator",
         "pele_diagram_agent",
+        "desktop_operator",
     }
+
+
+def test_desktop_operator_is_a_primitive_agent() -> None:
+    reg = DefaultAgentRegistry()
+    reg.load_dir(SPECS)
+    spec = reg.get("desktop_operator")
+    assert spec.tools == (
+        "desktop_list_windows",
+        "desktop_observe",
+        "desktop_act",
+        "run_command",
+    )
+    assert {"observe_desktop", "act_desktop"} <= set(spec.capabilities)
+    assert spec.output_schema is not None
+    assert "summary" in spec.output_schema["required"]
 
 
 def test_base_specs_model_roles() -> None:

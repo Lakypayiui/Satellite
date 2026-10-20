@@ -102,6 +102,12 @@ def _session(tool_ctx: ToolContext) -> str:
     return str(getattr(tool_ctx, "session_id", "") or getattr(tool_ctx, "task_id", "") or "local")
 
 
+def _begin_run(policy: DesktopControlPolicy, tool_ctx: ToolContext, session: str) -> None:
+    """Reinicia topes al empezar la tarea (no al construir el runtime)."""
+    task_id = str(getattr(tool_ctx, "task_id", "") or "")
+    policy.begin_run(f"{session}:{task_id or 'default'}")
+
+
 def _is_human_port(port: object) -> bool:
     """Sólo puertos humanos reales pueden aprobar; nunca los automáticos/MCP."""
     if port is None:
@@ -115,8 +121,15 @@ async def _ask_human(
     task_id: str,
     summary: str,
     details: dict,
+    allow_auto: bool = False,
 ) -> bool:
-    """Pide aprobación humana; cualquier duda (o puerto no humano) ⇒ False."""
+    """Pide aprobación humana; cualquier duda (o puerto no humano) ⇒ False.
+
+    ``allow_auto`` sólo lo activa la política en modo ``unrestricted``: el usuario
+    eligió explícitamente no recibir preguntas.
+    """
+    if allow_auto and type(port).__name__ == "AutoApprovalPort":
+        return True
     if not _is_human_port(port):
         return False
     ctx = ApprovalContext(
@@ -229,6 +242,7 @@ class DesktopListWindowsTool(Tool):
     async def execute(self, arguments: dict, tool_ctx: ToolContext) -> ToolResult:
         policy = _policy(self._policy)
         session = _session(tool_ctx)
+        _begin_run(policy, tool_ctx, session)
         decision = policy.check_screen(session, "*", SCOPE_OBSERVE)
         if decision.needs_approval:
             approved = await _ask_human(
@@ -236,6 +250,7 @@ class DesktopListWindowsTool(Tool):
                 task_id=tool_ctx.task_id,
                 summary="Permitir listar las ventanas de escritorio en esta sesión",
                 details={"app": "*", "scope": SCOPE_OBSERVE},
+                allow_auto=policy.allow_auto_approval,
             )
             if approved:
                 policy.grant(session, "*", SCOPE_OBSERVE)
@@ -361,6 +376,7 @@ class DesktopObserveTool(Tool):
 
         policy = _policy(self._policy)
         session = _session(tool_ctx)
+        _begin_run(policy, tool_ctx, session)
         backend = _backend(self._backend)
         try:
             windows = await backend.list_windows()
@@ -390,6 +406,7 @@ class DesktopObserveTool(Tool):
                 task_id=tool_ctx.task_id,
                 summary=f"Permitir observar la app «{app}» en esta sesión",
                 details={"app": app, "scope": SCOPE_OBSERVE},
+                allow_auto=policy.allow_auto_approval,
             )
             if approved:
                 policy.grant(session, app, SCOPE_OBSERVE)
@@ -495,10 +512,11 @@ class DesktopActTool(Tool):
     def description(self) -> str:
         return (
             "Runs an action (click/type/set_value/key/scroll/focus) on an [eN] "
-            "reference of the LATEST snapshot (current snapshot_id). Requires a "
-            "control grant per session+app and confirmation for destructive or "
-            "indeterminate actions. No coordinates or selectors. Never types into "
-            "sensitive fields."
+            "reference of the LATEST snapshot (current snapshot_id). Scroll may omit "
+            "target to scroll the window's main area, and accepts direction "
+            "(up/down/left/right) and amount (number of steps). Requires a control "
+            "grant per session+app and confirmation for destructive or indeterminate "
+            "actions. No coordinates or selectors. Never types into sensitive fields."
         )
 
     @property
@@ -513,9 +531,22 @@ class DesktopActTool(Tool):
                 "action": {"type": "string", "enum": sorted(ALLOWED_ACTIONS_SET)},
                 "target": {
                     "type": "string",
-                    "description": "reference [eN] of the latest snapshot",
+                    "description": (
+                        "reference [eN] of the latest snapshot; optional for scroll"
+                    ),
                 },
                 "text": {"type": "string"},
+                "direction": {
+                    "type": "string",
+                    "enum": ["up", "down", "left", "right"],
+                    "description": "scroll direction (default: down)",
+                },
+                "amount": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "description": "number of scroll steps (default: 1)",
+                },
                 "snapshot_id": {"type": "string"},
             },
             "required": ["action", "snapshot_id"],
@@ -555,9 +586,28 @@ class DesktopActTool(Tool):
                 error="'text' debe ser texto",
                 error_code="invalid_arguments",
             )
+        direction = arguments.get("direction", "")
+        if direction is None:
+            direction = ""
+        if not isinstance(direction, str) or direction not in ("", "up", "down", "left", "right"):
+            return ToolResult(
+                success=False,
+                error="'direction' debe ser up, down, left o right",
+                error_code="invalid_arguments",
+            )
+        amount = arguments.get("amount")
+        if amount is not None and (
+            isinstance(amount, bool) or not isinstance(amount, int) or amount < 1
+        ):
+            return ToolResult(
+                success=False,
+                error="'amount' debe ser un entero >= 1",
+                error_code="invalid_arguments",
+            )
 
         policy = _policy(self._policy)
         session = _session(tool_ctx)
+        _begin_run(policy, tool_ctx, session)
         backend = _backend(self._backend)
         snapshot = await backend.inspect(snapshot_id)
         if snapshot is None:
@@ -587,6 +637,7 @@ class DesktopActTool(Tool):
                 task_id=tool_ctx.task_id,
                 summary=f"Permitir controlar la app «{app}» en esta sesión",
                 details={"app": app, "scope": SCOPE_CONTROL},
+                allow_auto=policy.allow_auto_approval,
             )
             if approved:
                 policy.grant(session, app, SCOPE_CONTROL)
@@ -597,6 +648,7 @@ class DesktopActTool(Tool):
                 task_id=tool_ctx.task_id,
                 summary=f"Confirmar acción «{kind}» sobre la app «{app}»",
                 details={"app": app, "action": kind, "target": target},
+                allow_auto=policy.allow_auto_approval,
             )
             if approved:
                 decision = GateDecision(True)
@@ -614,7 +666,13 @@ class DesktopActTool(Tool):
             )
             return _denied(decision)
 
-        action = Action(kind=kind, target=target, text=text)
+        action = Action(
+            kind=kind,
+            target=target,
+            text=text,
+            amount=amount,
+            direction=direction,
+        )
         try:
             result = await backend.act(snapshot_id, action)
         except Exception as exc:

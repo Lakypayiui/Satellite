@@ -9,8 +9,9 @@ Accesibilidad concedido en Ajustes del Sistema; si no, se devuelve
 ``EnvironmentUnavailable`` (nunca se elevan privilegios).
 
 Acciones nativas soportadas: ``click`` (AXPress/AXConfirm/AXOpen), ``focus``
-(AXFocused) y ``set_value`` (AXValue si es settable). ``type``/``key``/``scroll``
-no tienen patrón AX fiable ⇒ ``unsupported_action`` explícito (sin CGEvent ni
+(AXFocused), ``set_value`` (AXValue si es settable) y ``scroll`` (AXScrollBar
+AXValue o acciones AXScroll*ByPage sobre el área de scroll). ``type``/``key`` no
+tienen patrón AX fiable ⇒ ``unsupported_action`` explícito (sin CGEvent ni
 coordenadas). El resto de la seguridad (snapshot vigente, allowlist, redacción
 sensible, re-observación) la aporta ``AdapterDesktopBackend``.
 """
@@ -31,7 +32,15 @@ from satellite.desktop_control.errors import (
 PLATFORM = "darwin"
 EXTRA = "desktop-control-macos"
 MACOS_EXTRA = "desktop-control-macos"
-SUPPORTED_ACTIONS: tuple[str, ...] = ("click", "focus", "set_value")
+SUPPORTED_ACTIONS: tuple[str, ...] = ("click", "focus", "set_value", "scroll")
+SCROLL_PAGE_ACTIONS: dict[str, str] = {
+    "down": "AXScrollDownByPage",
+    "up": "AXScrollUpByPage",
+    "left": "AXScrollLeftByPage",
+    "right": "AXScrollRightByPage",
+}
+SCROLL_STEP = 0.1
+MAX_SCROLL_STEPS = 50
 MAX_WINDOWS = 40
 
 # Rolenames de AX → nombres canónicos (los usa la clasificación destructiva).
@@ -88,6 +97,15 @@ def ax_available() -> bool:
     except Exception:
         return False
     return True
+
+
+def ax_trusted() -> bool | None:
+    """¿Tiene el proceso permiso de Accesibilidad? ``None`` si no se puede saber."""
+    try:
+        AX, _Quartz = _import_ax()
+        return bool(AX.AXIsProcessTrusted())
+    except Exception:
+        return None
 
 
 class _AxAdapter:
@@ -158,6 +176,8 @@ class _AxAdapter:
         window = self._window_element(window_id)
         if window is None:
             return {"ok": False, "code": "target_missing", "error": "ventana no disponible"}
+        if kind == "scroll" and not node_key:
+            return self._scroll(window, action)
         element = self._find(window, node_key)
         if element is None:
             return {
@@ -165,6 +185,8 @@ class _AxAdapter:
                 "code": "target_missing",
                 "error": "el control ya no está en el árbol AX",
             }
+        if kind == "scroll":
+            return self._scroll(element, action)
         if kind == "click":
             for name in PRESS_ACTIONS:
                 try:
@@ -206,6 +228,114 @@ class _AxAdapter:
             "error": f"macOS AX no ofrece un patrón nativo seguro para {kind!r}",
         }
 
+    # --- scroll ----------------------------------------------------------
+
+    def _scroll(self, base: Any, action: dict[str, Any]) -> dict[str, Any]:
+        """Scroll nativo: acción de página AX o AXValue de la barra de scroll."""
+        direction = str(action.get("direction") or "down").strip().lower()
+        if direction not in SCROLL_PAGE_ACTIONS:
+            direction = "down"
+        try:
+            amount = int(action.get("amount") or 1)
+        except (TypeError, ValueError):
+            amount = 1
+        amount = max(1, min(amount, MAX_SCROLL_STEPS))
+
+        # 1) Acciones nativas de página (Safari/WebKit y áreas de scroll AX).
+        if self._scroll_by_page(base, direction, amount):
+            return {"ok": True, "code": "", "error": ""}
+
+        # 2) Barra de scroll: AXValue (0.0–1.0) es settable.
+        bar = self._scroll_bar(base, direction)
+        if bar is not None:
+            try:
+                current = self._attr(bar, "AXValue")
+                value = float(current) if current is not None else 0.0
+            except (TypeError, ValueError):
+                value = 0.0
+            delta = SCROLL_STEP * amount
+            if direction in ("up", "left"):
+                delta = -delta
+            new_value = min(1.0, max(0.0, value + delta))
+            try:
+                if (
+                    int(self._AX.AXUIElementSetAttributeValue(bar, "AXValue", new_value))
+                    == 0
+                ):
+                    return {"ok": True, "code": "", "error": ""}
+            except Exception as exc:
+                return {"ok": False, "code": "act_failed", "error": str(exc)}
+
+        return {
+            "ok": False,
+            "code": "unsupported_action",
+            "error": "no hay área de scroll AX desplazable en este control",
+        }
+
+    def _scroll_by_page(self, base: Any, direction: str, amount: int) -> bool:
+        """Repite la acción de página en el elemento y sus ancestros AX."""
+        name = SCROLL_PAGE_ACTIONS[direction]
+        node = base
+        for _ in range(6):
+            if node is None:
+                break
+            moved = False
+            for _step in range(amount):
+                try:
+                    if int(self._AX.AXUIElementPerformAction(node, name)) != 0:
+                        break
+                    moved = True
+                except Exception:
+                    break
+            if moved:
+                return True
+            node = self._attr(node, "AXParent")
+        return False
+
+    def _scroll_bar(self, base: Any, direction: str) -> Any | None:
+        """Barra de scroll vertical/horizontal del área o de un ancestro."""
+        if base is None:
+            return None
+        if str(self._attr(base, "AXRole") or "") == "AXScrollBar":
+            return base
+        attributes = (
+            ("AXHorizontalScrollBar",)
+            if direction in ("left", "right")
+            else ("AXVerticalScrollBar",)
+        )
+        node = base
+        for _ in range(6):
+            if node is None:
+                break
+            for attribute in attributes:
+                bar = self._attr(node, attribute)
+                if bar is not None:
+                    return bar
+            node = self._attr(node, "AXParent")
+        # Respaldo: cualquier AXScrollBar con la orientación pedida en el subárbol.
+        wanted = "horizontal" if direction in ("left", "right") else "vertical"
+        for element in self._iter_elements(base, limit=2000):
+            if str(self._attr(element, "AXRole") or "") != "AXScrollBar":
+                continue
+            orientation = str(self._attr(element, "AXOrientation") or "").lower()
+            if wanted in orientation:
+                return element
+        return None
+
+    def _iter_elements(self, root: Any, *, limit: int):
+        """Recorrido DFS acotado del subárbol AX (sin construir nodos)."""
+        stack = [root]
+        seen = 0
+        while stack and seen < limit:
+            element = stack.pop()
+            seen += 1
+            yield element
+            try:
+                children = list(self._attr(element, "AXChildren") or [])
+            except Exception:
+                children = []
+            stack.extend(reversed(children))
+
     # --- internos --------------------------------------------------------
 
     def _window_element(self, window_id: str) -> Any | None:
@@ -217,6 +347,17 @@ class _AxAdapter:
             windows = self._attr(app, "AXWindows") or []
         except Exception:
             return None
+        # AXWindowNumber es el mismo CGWindowID que devuelve CGWindowList y no
+        # depende del título (que puede venir vacío sin permiso de grabación de
+        # pantalla). Es la vía fiable para elegir la ventana correcta.
+        for candidate in windows:
+            try:
+                number = self._attr(candidate, "AXWindowNumber")
+                if number is not None and int(number) == int(window_id):
+                    return candidate
+            except (TypeError, ValueError):
+                continue
+        # Respaldo por título, y por último la primera ventana de la app.
         for candidate in windows:
             if str(self._attr(candidate, "AXTitle") or "") == meta.get("title", ""):
                 return candidate
@@ -256,7 +397,7 @@ class _AxAdapter:
             enabled_value = self._attr(element, "AXEnabled")
             enabled = True if enabled_value is None else bool(enabled_value)
             hidden = bool(self._attr(element, "AXHidden") or False)
-            actions = tuple(str(a) for a in (self._attr(element, "AXActionNames") or ()))
+            actions = self._actions(element)
             role = ROLE_MAP.get(raw_role, raw_role.replace("AX", "") or "Unknown")
             value = "" if sensitive else self._string(self._attr(element, "AXValue"))
             return {
@@ -280,6 +421,17 @@ class _AxAdapter:
         except Exception:
             return None
         return value
+
+    def _actions(self, element: Any) -> tuple[str, ...]:
+        """Nombres de acción vía ``AXUIElementCopyActionNames`` (no es atributo)."""
+        try:
+            _err, names = self._AX.AXUIElementCopyActionNames(element, None)
+        except Exception:
+            return ()
+        try:
+            return tuple(str(name) for name in (names or ()))
+        except Exception:
+            return ()
 
     @staticmethod
     def _string(value: Any) -> str:

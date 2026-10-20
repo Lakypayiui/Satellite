@@ -9,6 +9,8 @@ vez, así que nadie pierde su historial.
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +23,45 @@ SESSION_DIR = "conversations"
 CURRENT_FILE = "current_session.json"
 DEFAULT_SESSION_ID = "default"
 DEFAULT_SESSION_NAME = "conversación principal"
+NEW_SESSION_NAME = "nueva conversación"
+
+# Palabras vacías (ES/EN) para el título automático de 2-3 palabras. No es un
+# resumen semántico: evita que el nombre sea "Quiero que me hagas un…".
+_TITLE_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a", "al", "algo", "an", "and", "are", "as", "con", "como", "cómo", "de",
+        "del", "desde", "donde", "dónde", "el", "ella", "ellas", "ellos", "en",
+        "entre", "era", "es", "esa", "ese", "eso", "esta", "este", "esto", "estos",
+        "estas", "for", "fue", "ha", "hacer", "haz", "hagas", "has", "hasta", "hay",
+        "la", "las", "le", "les", "lo", "los", "me", "mi", "mis", "muy", "no", "nos",
+        "o", "of", "on", "or", "para", "pero", "please", "por", "puede", "puedes",
+        "que", "qué", "quiero", "se", "ser", "si", "sí", "sin", "sobre", "son", "su",
+        "sus", "te", "the", "this", "that", "to", "tu", "tus", "un", "una", "uno",
+        "unos", "unas", "usted", "ustedes", "y", "ya", "you", "your", "can",
+        "could", "would", "should", "what", "which", "how", "why", "with", "from",
+        "into", "will", "just", "like", "make", "want", "need", "necesito",
+        "abre", "abrir", "entra", "entrar", "navega", "navegar", "busca", "buscar",
+        "crea", "crear", "haz", "hacer", "funciona", "funcionar",
+    }
+)
+_WORD_RE = re.compile(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9_.+-]+")
+
+
+def summarize_session_name(text: str, *, max_words: int = 3) -> str:
+    """Título corto (2-3 palabras) a partir del primer mensaje, sin LLM."""
+    raw = unicodedata.normalize("NFC", str(text or ""))
+    words = _WORD_RE.findall(raw)
+    meaningful = [
+        word for word in words if word.lower().strip("._-") not in _TITLE_STOPWORDS
+    ]
+    chosen = (meaningful or words)[:max_words]
+    if not chosen:
+        return ""
+    title = " ".join(chosen)
+    title = title.strip(" .,:;!?¡¿-–—")
+    if not title:
+        return ""
+    return title[0].upper() + title[1:]
 
 
 @dataclass(frozen=True)
@@ -159,11 +200,51 @@ class SessionStore:
     # --- crear / listar / cambiar / renombrar ---
 
     def create(self, name: str = "") -> str:
-        """Crea una sesión vacía, la activa y devuelve su id."""
+        """Crea una sesión vacía, la activa y devuelve su id.
+
+        Sin nombre explícito se usa un placeholder; el primer mensaje la renombra
+        con un resumen de 2-3 palabras (``summarize_session_name``).
+        """
         session_id = uuid4().hex[:8]
-        self.save(session_id, [], name=name.strip() or f"sesión {session_id}")
+        self.save(session_id, [], name=name.strip() or NEW_SESSION_NAME)
         self.set_active(session_id)
         return session_id
+
+    def delete(self, session_id: str) -> bool:
+        """Borra una conversación y sus turnos. Si era la activa, activa otra."""
+        target = str(session_id or "").strip()
+        if not target:
+            return False
+        path = self.session_path(target)
+        existed = path.is_file()
+        if existed:
+            try:
+                path.unlink()
+            except OSError:
+                return False
+        # La memoria persistente pertenece a la conversación: se borra con ella.
+        summary = self.state / "summaries" / f"{target}.json"
+        if summary.is_file():
+            try:
+                summary.unlink()
+            except OSError:
+                pass
+        if self.active_id() == target:
+            # ``list`` añade una sesión «default» sintética cuando la activa ya no
+            # existe; no debe ganar a una conversación real que sí tiene fichero.
+            candidatas = [
+                info
+                for info in self.list()
+                if info.id != target
+                and (
+                    info.id != DEFAULT_SESSION_ID
+                    or self.session_path(DEFAULT_SESSION_ID).is_file()
+                )
+            ]
+            preferidas = [info for info in candidatas if not info.archived] or candidatas
+            self.set_active(preferidas[0].id if preferidas else DEFAULT_SESSION_ID)
+        # Borrar una sesión «default» vacía es un no-op válido.
+        return existed or target != DEFAULT_SESSION_ID
 
     def list(self) -> list[SessionInfo]:
         """Sesiones conocidas: la activa primero y el resto por fecha."""

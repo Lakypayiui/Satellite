@@ -185,11 +185,29 @@ class DesktopControlPolicy:
         emergency: EmergencyStop | None = None,
         budget: ActionBudget | None = None,
         clock: Callable[[], float] = time.monotonic,
+        allow_auto_approval: bool = False,
     ) -> None:
         self.settings = settings or DesktopControlSettings()
         self.grants = grants or DesktopGrantStore()
         self.emergency = emergency or EmergencyStop()
         self.budget = budget or ActionBudget(self.settings, clock=clock)
+        self._run_id = ""
+        # Sólo el modo ``unrestricted`` (decisión explícita del humano en Ajustes)
+        # acepta el puerto automático. En ask/auto sigue mandando una persona.
+        self.allow_auto_approval = bool(allow_auto_approval)
+
+    def begin_run(self, run_id: str) -> None:
+        """Reinicia los topes al empezar una ejecución nueva (una tarea).
+
+        Sin esto el presupuesto de tiempo arrancaba al construir la política: tras
+        ``max_seconds_per_run`` segundos desde el arranque, *cualquier* acción
+        posterior fallaba con ``time_budget`` aunque la tarea acabara de empezar.
+        """
+        value = str(run_id or "")
+        if not value or value == self._run_id:
+            return
+        self._run_id = value
+        self.budget.reset_run()
 
     # --- allowlist / denylist ---
 
@@ -253,14 +271,19 @@ class DesktopControlPolicy:
         pre = self._pre()
         if not pre.allowed:
             return pre
-        if element is None:
+        # ``scroll`` puede no llevar target: se desplaza el área principal.
+        if element is None and str(action) != "scroll":
             return _deny(TARGET_MISSING, "target ausente en el snapshot vigente")
-        if not bool(getattr(element, "is_operable", True)):
+        if element is not None and not bool(getattr(element, "is_operable", True)):
             return _deny(
                 TARGET_NOT_INTERACTABLE,
                 "target no visible/habilitado/interactuable",
             )
-        if str(action) in TEXT_WRITE_ACTIONS and bool(getattr(element, "sensitive", False)):
+        if (
+            element is not None
+            and str(action) in TEXT_WRITE_ACTIONS
+            and bool(getattr(element, "sensitive", False))
+        ):
             return _deny(SENSITIVE_TARGET, "campo sensible: nunca se escribe")
         budget = self.budget.check()
         if not budget.allowed:

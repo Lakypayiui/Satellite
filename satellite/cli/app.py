@@ -159,7 +159,7 @@ def agents(
     create: str = typer.Option(
         "",
         "--create",
-        help="Necesidad de capacidad o plantilla (p. ej. desktop_operator).",
+        help="Necesidad de capacidad o plantilla estática.",
     ),
     yes: bool = typer.Option(False, "--yes", help="Auto-aprobar la creación."),
 ) -> None:
@@ -197,6 +197,16 @@ def agents(
         )
         say(f"{outcome.kind}: {detail}")
         return
+
+    if template_id:
+        # Los ids base ya existen en el catálogo: se sincronizan, no se crean.
+        from satellite.cli.runtime_builder import build_agent_catalog
+        from satellite.kernel.manifest import RESERVED_AGENT_IDS
+
+        if template_id in RESERVED_AGENT_IDS:
+            build_agent_catalog(project)
+            say(f"exists: {template_id}")
+            return
 
     orchestrator, _bus, _store, registry = build_runtime(project, allow_desktop=True)
     if create:

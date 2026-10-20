@@ -18,10 +18,12 @@ reusable agents and skills. It ships as a **CLI**, an interactive **TUI**, an
   (`spawn_agent`), with hard limits and file ownership (see below).
 - Helps with everyday software tasks: add a feature, fix a bug, refactor code,
   write or update tests, explore and document a codebase.
-- Ships four base agents at install: `orchestrator` (goal → plan over the
+- Ships five base agents at install: `orchestrator` (goal → plan over the
   existing catalog), `agent_creator` (proposes one reusable agent for a need,
-  with human approval), `skill_curator` (maintains the skill catalog) and
-  `pele_diagram_agent` (designs Mermaid diagrams and renders them to SVG).
+  with human approval), `skill_curator` (maintains the skill catalog),
+  `pele_diagram_agent` (designs Mermaid diagrams and renders them to SVG) and
+  `desktop_operator` (observes and controls desktop windows under the local
+  policy; excluded from MCP).
 - Extends declaratively: a new agent is a `spec.json` plus prompts; a new skill
   is a script plus a `manifest.json`.
 - Keeps you in control: paths outside the project and commands not on the
@@ -152,6 +154,10 @@ by the runtime, and keys are only ever returned as `api_key_set`.
     `SATELLITE_DESKTOP_CONTROL_MACOS_SMOKE=1`.
   - Linux: `pip install -e .[desktop-control-linux]` plus the system package
     `gir1.2-atspi-2.0` and an active AT-SPI accessibility bus.
+  - Enabling the toggle does not grant permissions: add the target apps to the
+    **allowed apps** list in *Settings → Desktop* (the local denylist always
+    wins), then approve each session. Settings shows whether the native backend
+    is installed and, on macOS, whether Accessibility permission is granted.
 - Desktop-control backends are optional and import lazily. Missing dependencies
   or permissions produce explicit errors instead of breaking the runtime.
 - macOS packaging for the Electron app is a development build; signing,
@@ -175,6 +181,11 @@ cd desktop
 npm install
 npm run dev
 ```
+
+`desktop/package.json` includes `pele`, so `npm install` installs the Mermaid
+renderer the backend uses for diagrams. The Python resolver also finds a global
+or nvm/Homebrew installation when the desktop copy is absent; Node is discovered
+outside the shell PATH (important when macOS launches the app from Finder).
 
 The embedded **Safe Proxy** has two modes:
 

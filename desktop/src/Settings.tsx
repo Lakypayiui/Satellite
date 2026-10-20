@@ -220,6 +220,8 @@ export function Settings(props: Props) {
 
   // --- control de escritorio (F7) ---
   const [desktop, setDesktop] = useState<DesktopControlView | null>(null);
+  const [allowedApps, setAllowedApps] = useState("");
+  const [allowlistMsg, setAllowlistMsg] = useState("");
   const [visionModelos, setVisionModelos] = useState<ModelsResult | null>(null);
   const [cargandoVision, setCargandoVision] = useState(false);
 
@@ -407,6 +409,11 @@ export function Settings(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.config.providers]);
 
+  // La allowlist es estado del host: se refleja en el formulario al recargar.
+  useEffect(() => {
+    setAllowedApps((desktop?.allowed_processes ?? []).join("\n"));
+  }, [desktop?.allowed_processes]);
+
   useEffect(() => {
     const proveedor = desktop?.vision.provider ?? "";
     if (props.seccion !== "escritorio" || !proveedor) {
@@ -479,6 +486,37 @@ export function Settings(props: Props) {
       }
     } catch (exc) {
       props.onAviso(mensajeDe(exc));
+    }
+  }
+
+  /** Guarda la allowlist local (una app por línea o separadas por comas). */
+  async function guardarAllowlist() {
+    const apps = allowedApps
+      .split(/[\n,]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    try {
+      const vista = await api<DesktopControlView>("/desktop-control", {
+        method: "PATCH",
+        body: { allowed_processes: apps },
+      });
+      setDesktop(vista);
+      const guardadas = vista.allowed_processes ?? [];
+      setAllowedApps(guardadas.join("\n"));
+      setAllowlistMsg(
+        guardadas.length
+          ? t("settings.desktop.allowlist.savedList", { apps: guardadas.join(", ") })
+          : t("settings.desktop.allowlist.savedEmpty"),
+      );
+      if (vista.runtime_error) {
+        props.onAviso(
+          t("settings.desktop.savedNoRuntime", { error: vista.runtime_error }),
+        );
+      }
+    } catch (exc) {
+      const error = mensajeDe(exc);
+      setAllowlistMsg(error);
+      props.onAviso(error);
     }
   }
 
@@ -1007,6 +1045,42 @@ export function Settings(props: Props) {
           />
           {t("settings.desktop.toggle")}
         </label>
+
+        <div className="subbloque">
+          <p className="etiqueta">{t("settings.desktop.allowlist.title")}</p>
+          <p className="nota" style={{ marginTop: 0 }}>
+            {t("settings.desktop.allowlist.note")}
+          </p>
+          <label className="campo">
+            <span>{t("settings.desktop.allowlist.label")}</span>
+            <textarea
+              rows={3}
+              value={allowedApps}
+              aria-label={t("settings.desktop.allowlist.label")}
+              placeholder={t("settings.desktop.allowlist.placeholder")}
+              onChange={(evento) => setAllowedApps(evento.target.value)}
+            />
+            <span className="nota" style={{ margin: 0 }}>
+              {t("settings.desktop.allowlist.hint")}
+            </span>
+          </label>
+          <div className="acciones">
+            <button onClick={() => void guardarAllowlist()}>
+              {t("settings.desktop.allowlist.save")}
+            </button>
+          </div>
+          {allowlistMsg && <p className="nota">{allowlistMsg}</p>}
+          {desktop && !desktop.backend?.available && (
+            <p className="nota">
+              {t("settings.desktop.backend.missing", {
+                extra: desktop.backend?.extra ?? "",
+              })}
+            </p>
+          )}
+          {desktop && desktop.backend?.available && desktop.backend.trusted === false && (
+            <p className="nota">{t("settings.desktop.backend.untrusted")}</p>
+          )}
+        </div>
 
         <div className="subbloque">
           <p className="etiqueta">{t("settings.desktop.vision.title")}</p>

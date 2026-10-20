@@ -50,6 +50,10 @@ def test_normalize_app() -> None:
     assert normalize_app("C:\\Program Files\\Demo\\Demo.EXE") == "demo"
     assert normalize_app("/usr/bin/demo") == "demo"
     assert normalize_app("  Demo   App ") == "demo app"
+    # macOS: nombre localizado y bundle con acento -> app real.
+    assert normalize_app("Música") == "music"
+    assert normalize_app("Música.app") == "music"
+    assert normalize_app("/System/Applications/Music.app") == "music"
 
 
 def test_load_missing_and_corrupt_are_denied(tmp_path) -> None:
@@ -62,7 +66,7 @@ def test_load_missing_and_corrupt_are_denied(tmp_path) -> None:
 def test_load_reads_allowlist_and_defaults_denylist(tmp_path) -> None:
     path = tmp_path / "desktop_control.json"
     path.write_text(
-        '{"enabled": true, "allowed_processes": ["Demo.exe"], '
+        '{"enabled": true, "allowed_processes": ["Demo.exe"], "denied_apps": [], '
         '"max_actions_per_run": 3, "rate_per_minute": 2, "max_seconds_per_run": 5}',
         encoding="utf-8",
     )

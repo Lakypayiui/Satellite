@@ -156,10 +156,44 @@ def test_enable_preserves_the_rest_of_the_host_policy(tmp_path, monkeypatch) -> 
     saved = json.loads(host_file.read_text(encoding="utf-8"))
     assert saved["enabled"] is True
     assert saved["allowed_processes"] == ["demo app"]
-    assert saved["denied_apps"] == ["terminal"]
+    # La denylist por defecto es un suelo: se conserva "terminal" y se suman las
+    # apps protegidas aunque el archivo sea antiguo.
+    assert "terminal" in saved["denied_apps"]
+    assert "keepass" in saved["denied_apps"]
     assert saved["max_actions_per_run"] == 3
     assert saved["max_seconds_per_run"] == 5.0
     assert saved["rate_per_minute"] == 2
+
+
+def test_allowlist_can_be_edited_and_persists(tmp_path, monkeypatch) -> None:
+    backend = make_backend(tmp_path, monkeypatch)
+    client = make_client(backend)
+
+    data = client.patch(
+        "/api/desktop-control",
+        json={"enabled": True, "allowed_processes": ["Safari", "Demo App", "demo app"]},
+    ).json()
+
+    # Se normaliza y se deduplica; la vista devuelve la allowlist efectiva.
+    assert data["allowed_processes"] == ["safari", "demo app"]
+    assert data["backend"]["platform"]
+    host_file = tmp_path / "home" / "desktop_control.json"
+    saved = json.loads(host_file.read_text(encoding="utf-8"))
+    assert saved["allowed_processes"] == ["safari", "demo app"]
+    assert saved["enabled"] is True
+
+
+def test_allowlist_rejects_a_denied_app(tmp_path, monkeypatch) -> None:
+    backend = make_backend(tmp_path, monkeypatch)
+    client = make_client(backend)
+
+    response = client.patch(
+        "/api/desktop-control", json={"allowed_processes": ["Terminal"]}
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "app_denied"
+    # Nada se escribe si la lista es inválida.
+    assert not (tmp_path / "home" / "desktop_control.json").exists()
 
 
 # --- selección de proveedor/modelo ------------------------------------------

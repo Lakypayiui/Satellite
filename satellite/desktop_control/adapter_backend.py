@@ -149,16 +149,21 @@ class AdapterDesktopBackend(DesktopBackend):
                 error=decision.reason,
                 before_snapshot_id=snapshot_id,
             )
-        node_key = self._key_by_ref.get(window_id, {}).get(action.target)
-        if not node_key:
-            return ActResult(
-                ok=False,
-                action=action.kind,
-                ref=action.target,
-                code=TARGET_MISSING,
-                error="la referencia no resuelve a un control del snapshot",
-                before_snapshot_id=snapshot_id,
-            )
+        # Scroll sin target = área principal de la ventana (compatible con los tres
+        # backends: cada adaptador decide cómo desplazarla).
+        if action.kind == "scroll" and not action.target:
+            node_key = ""
+        else:
+            node_key = self._key_by_ref.get(window_id, {}).get(action.target)
+            if not node_key:
+                return ActResult(
+                    ok=False,
+                    action=action.kind,
+                    ref=action.target,
+                    code=TARGET_MISSING,
+                    error="la referencia no resuelve a un control del snapshot",
+                    before_snapshot_id=snapshot_id,
+                )
         outcome = self._use().act(window_id, node_key, action.to_dict())
         if not outcome.get("ok", False):
             return ActResult(

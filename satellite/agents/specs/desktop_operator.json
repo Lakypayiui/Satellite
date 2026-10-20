@@ -1,0 +1,28 @@
+{
+  "id": "desktop_operator",
+  "name": "Desktop Operator",
+  "description": "Controls the computer when the user names an app or window: launches apps and observes/acts on desktop windows (for example open Safari and go to Google Docs). Not for general web searches, file edits or running arbitrary commands. Under human approval and the host allowlist",
+  "capabilities": ["observe_desktop", "act_desktop", "control_computer", "launch_apps", "control_browser", "navigate_web"],
+  "prompt_ref": "desktop_operator",
+  "tools": ["desktop_list_windows", "desktop_observe", "desktop_act", "run_command"],
+  "validators": [],
+  "model_role": "agent",
+  "max_turns": 24,
+  "timeout_s": 300,
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "summary": {
+        "type": "string",
+        "description": "Short result for the user, in the user's language."
+      },
+      "completed": {
+        "type": "boolean",
+        "description": "true only when the requested desktop action was performed."
+      }
+    },
+    "required": ["summary", "completed"],
+    "additionalProperties": false
+  },
+  "lifecycle": "persistent"
+}

@@ -15,8 +15,10 @@ from .base import ActResult, Action, DesktopBackend, Element, ObserveLimits, Sna
 # Allowlist CERRADA de acciones (§2).
 ALLOWED_ACTIONS: tuple[str, ...] = ("click", "type", "set_value", "key", "scroll", "focus")
 ALLOWED_ACTIONS_SET: frozenset[str] = frozenset(ALLOWED_ACTIONS)
-# Acciones que exigen un target presente e interactuable.
-TARGET_ACTIONS: frozenset[str] = frozenset({"click", "type", "set_value", "scroll", "focus"})
+# Acciones que exigen un target presente e interactuable. ``scroll`` puede ir sin
+# target: en ese caso se desplaza el área principal de la ventana (útil cuando el
+# árbol de accesibilidad no expone la barra de scroll, p. ej. Safari).
+TARGET_ACTIONS: frozenset[str] = frozenset({"click", "type", "set_value", "focus"})
 # Acciones que escriben en un campo: nunca sobre uno sensible.
 TEXT_WRITE_ACTIONS: frozenset[str] = frozenset({"type", "set_value"})
 DEFAULT_MAX_TEXT_CHARS = 1000

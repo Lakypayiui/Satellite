@@ -36,6 +36,15 @@ import {
 } from "./themes";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
+// Nombre de producto para el menú/Dock (macOS), la barra de tareas (Windows) y
+// WM_CLASS (Linux). `app.setName` debe llamarse antes de `whenReady`.
+app.setName("Satellite");
+if (process.platform === "win32") {
+  app.setAppUserModelId("ai.satellite.desktop");
+}
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("class", "Satellite");
+}
 const DEV_URL = process.env.VITE_DEV_SERVER_URL ?? "";
 const CERRAR_BACKEND_MS = 2_500;
 // Iconos de la app tomados de la carpeta de iconos del repo (arte original, sin retocar). El
@@ -51,7 +60,14 @@ function iconoSegunSistema(): string {
 
 /** Fija el icono en el dock (macOS) o la barra de tareas (Windows/Linux) según el SO. */
 function aplicarIconoSistema(): void {
-  const imagen = nativeImage.createFromPath(iconoSegunSistema());
+  // `Ico_white`/`Ico_Black` son PNG sin extensión: se leen por buffer para que
+  // `nativeImage` detecte el formato por contenido (createFromPath puede fallar).
+  let imagen: Electron.NativeImage;
+  try {
+    imagen = nativeImage.createFromBuffer(readFileSync(iconoSegunSistema()));
+  } catch {
+    return;
+  }
   if (imagen.isEmpty()) return;
   if (process.platform === "darwin") app.dock?.setIcon(imagen);
   else ventana?.setIcon(imagen);
@@ -267,9 +283,14 @@ function createWindow(): void {
     // Icono en dock/barra de tareas según el tema del sistema (macOS usa `app.dock.setIcon`).
     icon: iconoSegunSistema(),
     show: false,
-    // Titlebar propia: sin frame nativo (nada blanco del chrome del sistema). Los controles
-    // los dibuja el renderer y actúan por IPC validado.
-    frame: false,
+    // macOS: titlebar oculta con los semáforos nativos (rojo/amarillo/verde).
+    // Windows/Linux: sin frame; el renderer dibuja sus propios controles.
+    ...(process.platform === "darwin"
+      ? {
+          titleBarStyle: "hiddenInset" as const,
+          trafficLightPosition: { x: 12, y: 11 },
+        }
+      : { frame: false }),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

@@ -45,6 +45,7 @@ from satellite.safe_proxy.interceptor import SanitizingProvider, sanitize_provid
 from satellite.skills.cache import SkillResultCache
 from satellite.orchestration.base import RuntimeServices
 from satellite.orchestration.delegation import DelegationManager
+from satellite.orchestration.desktop_flow import DesktopFlow
 from satellite.orchestration.diagram_flow import DiagramFlow
 from satellite.orchestration.orchestrator import DefaultOrchestrator
 from satellite.orchestration.plan_mode import PlanOptionGenerator
@@ -143,7 +144,12 @@ def build_runtime(
     # La allowlist sale de `terminal.allowed_commands` y vacía por defecto: sin ella todo
     # comando se pregunta.
     allowed_tools = set(DEFAULT_ALLOWED_TOOLS)
-    if allow_desktop:
+    # Doble llave: la superficie debe permitir humano (CLI/TUI/Desktop; MCP nunca)
+    # y el usuario debe tener «enable desktop control» encendido en Ajustes. Si
+    # está apagado, no se registran tools, ni agente, ni ruta de escritorio.
+    desktop_settings = load_desktop_settings()
+    desktop_active = bool(allow_desktop and desktop_settings.enabled)
+    if desktop_active:
         allowed_tools |= set(DESKTOP_TOOL_IDS)
     policy = DefaultSecurityPolicy(
         allowed_tools=allowed_tools,
@@ -151,13 +157,20 @@ def build_runtime(
         allowed_commands=settings.allowed_commands,
     )
     # Control de escritorio: política (config local deny-by-default) + auditoría.
-    # Sólo se construyen si la superficie tiene humano; MCP queda fuera.
-    desktop_policy = DesktopControlPolicy(load_desktop_settings()) if allow_desktop else None
-    desktop_audit = AuditLog(paths.audit_root) if allow_desktop else None
-    desktop_vision = vision_fallback_for(project_root) if allow_desktop else None
+    desktop_policy = (
+        DesktopControlPolicy(
+            desktop_settings,
+            # El modo unrestricted es una decisión humana explícita: no se pregunta.
+            allow_auto_approval=settings.policy_mode is PolicyMode.UNRESTRICTED,
+        )
+        if desktop_active
+        else None
+    )
+    desktop_audit = AuditLog(paths.audit_root) if desktop_active else None
+    desktop_vision = vision_fallback_for(project_root) if desktop_active else None
     tools = build_tool_registry(
         policy,
-        allow_desktop=allow_desktop,
+        allow_desktop=desktop_active,
         desktop_policy=desktop_policy,
         desktop_audit=desktop_audit,
         desktop_vision=desktop_vision,
@@ -182,6 +195,10 @@ def build_runtime(
 
     # Catálogo: base (ya sincronizado) + agentes creados por el usuario.
     loaded_specs = {spec.id: spec for spec in catalog_store.load_specs()}
+    # El operador de escritorio sólo existe si el control está habilitado en
+    # Ajustes y la superficie tiene humano. Si no, ni se ve ni se puede ejecutar.
+    if not desktop_active:
+        loaded_specs.pop("desktop_operator", None)
     if _SAFE_MODE:
         base_ids = set(RESERVED_AGENT_IDS)
         loaded_specs = {k: v for k, v in loaded_specs.items() if k in base_ids}
@@ -328,6 +345,13 @@ def build_runtime(
         project_root=project_root,
         services=services,
     )
+    # Control del escritorio: sólo con humano y con el flag de Ajustes encendido.
+    if desktop_active:
+        orchestrator.desktop_flow = DesktopFlow(
+            factory=factory,
+            project_root=project_root,
+            services=services,
+        )
     return orchestrator, bus, store, registry
 
 
@@ -459,13 +483,15 @@ def build_agent_catalog(project_root: Path):
     migrate_prompt_files(paths.agents_root)
     migrate_agent_specs(paths.agents_root)
     catalog_store = AgentCatalogStore(paths.agents_root)
-    registry = DefaultAgentRegistry(
-        {spec.id: spec for spec in catalog_store.load_specs()}
-    )
+    specs = {spec.id: spec for spec in catalog_store.load_specs()}
+    desktop_enabled = bool(load_desktop_settings().enabled)
+    if not desktop_enabled:
+        specs.pop("desktop_operator", None)
+    registry = DefaultAgentRegistry(specs)
     prompts = DefaultPromptRegistry()
     for prompt_id, (system, user) in catalog_store.load_prompts().items():
         prompts.register_pair(prompt_id, system, user)
-    tools = build_tool_registry(allow_desktop=True)
+    tools = build_tool_registry(allow_desktop=desktop_enabled)
     validator = AgentProposalValidator(
         registry,
         tool_ids={tool.id for tool in tools.all()},

@@ -219,6 +219,16 @@ export interface ConfigView {
 /** Control de escritorio: flag local + proveedor/modelo de visión seleccionado. */
 export interface DesktopControlView {
   enabled: boolean;
+  /** Apps que la política puede considerar; vacío deniega todas. */
+  allowed_processes: string[];
+  /** Backend nativo: instalado y, en macOS, con permiso de Accesibilidad. */
+  backend: {
+    platform: string;
+    available: boolean;
+    trusted: boolean | null;
+    extra?: string;
+    error?: string;
+  };
   vision: {
     provider: string;
     model: string;

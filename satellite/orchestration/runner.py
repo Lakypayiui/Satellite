@@ -31,9 +31,15 @@ def _with_conversation(bundle: ContextBundle, task) -> ContextBundle:
 
     conversacion = render_history(task.metadata.get("history")).strip()
     project_context = str(task.metadata.get("project_context") or "").strip()
-    if not conversacion and not project_context:
+    memoria = str(task.metadata.get("session_memory") or "").strip()
+    if not conversacion and not project_context and not memoria:
         return bundle
     sections = []
+    if memoria:
+        sections.append(ContextSection(
+            ref=ContextRef(ContextRefKind.SUMMARY, "session memory"),
+            content=memoria,
+        ))
     if project_context:
         sections.append(ContextSection(
             ref=ContextRef(ContextRefKind.SUMMARY, "project index"),
@@ -204,6 +210,7 @@ class DefaultGraphRunner(GraphRunner):
                 feedback=tuple(entrada.get("feedback") or ()),
                 sink=sink,
                 task_id=task.task_id,
+                session_id=str(task.metadata.get("session_id") or ""),
                 node_id=node_id,
                 project_root=task.project_root,
                 user_language=detect_user_language(
@@ -665,6 +672,7 @@ class DefaultGraphRunner(GraphRunner):
                 feedback=tuple(entrada.get("feedback") or ()),
                 sink=sink,
                 task_id=task.task_id,
+                session_id=str(task.metadata.get("session_id") or ""),
                 node_id=node_id,
                 project_root=task.project_root,
                 user_language=user_language,

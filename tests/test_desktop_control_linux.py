@@ -95,7 +95,7 @@ def test_capabilities_are_partial_and_native() -> None:
     assert caps.platform == "linux"
     assert caps.can_observe is True
     assert caps.can_act is True
-    assert caps.actions == ("click", "focus", "set_value")
+    assert caps.actions == ("click", "focus", "set_value", "scroll")
     assert caps.coordinate_fallback is False
 
 

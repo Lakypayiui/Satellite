@@ -152,6 +152,7 @@ class DiagramFlow:
             context=self._context(task),
             sink=getattr(self.services, "sink", None),
             task_id=task.task_id,
+            session_id=str(task.metadata.get("session_id") or ""),
             node_id="diagram",
             project_root=task.project_root or self.project_root,
             user_language=user_language,
@@ -177,9 +178,20 @@ class DiagramFlow:
 
     def _context(self, task: Task) -> ContextBundle:
         """Contexto del agente: el índice de proyecto, acotado y como dato no confiable."""
+        memoria = str(task.metadata.get("session_memory") or "").strip()
+        memory_sections = (
+            (
+                ContextSection(
+                    ref=ContextRef(ContextRefKind.SUMMARY, "session memory"),
+                    content=memoria,
+                ),
+            )
+            if memoria
+            else ()
+        )
         text = str(task.metadata.get("project_context") or "").strip()
         if not text:
-            return ContextBundle()
+            return ContextBundle(sections=memory_sections)
         # ProjectIndex puts the file tree first. For a diagram request, put readable
         # README/source excerpts first so the agent sees architecture evidence before a
         # long inventory reaches the context limit.
@@ -188,7 +200,8 @@ class DiagramFlow:
         excerpts = ["--- " + section for section in sections[1:] if section.strip()]
         prioritized = "\n".join((*excerpts, inventory))
         return ContextBundle(
-            sections=(
+            sections=memory_sections
+            + (
                 ContextSection(
                     ref=ContextRef(ContextRefKind.SUMMARY, "project index"),
                     content=(

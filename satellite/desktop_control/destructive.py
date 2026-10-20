@@ -101,6 +101,11 @@ def normalize_label(value: object) -> str:
 
 def classify_destructive(element: object, action: str = "") -> str:
     """``destructive`` | ``safe`` | ``unknown`` (determinista, sin heurísticas)."""
+    kind = str(action or "").strip().lower()
+    # ``scroll``/``focus`` no cambian el estado de la app: son seguras incluso si
+    # el scroll va sin target (ventana completa).
+    if kind in NON_MUTATING_ACTIONS:
+        return "safe"
     if element is None:
         return "unknown"
     if bool(getattr(element, "sensitive", False)):
@@ -109,13 +114,9 @@ def classify_destructive(element: object, action: str = "") -> str:
     automation = normalize_label(getattr(element, "automation_id", ""))
     name = normalize_label(getattr(element, "name", ""))
     role = str(getattr(element, "role", "") or "")
-    kind = str(action or "").strip().lower()
 
     if automation in DESTRUCTIVE_IDS or name in DESTRUCTIVE_NAMES:
         return "destructive"
-
-    if kind in NON_MUTATING_ACTIONS:
-        return "safe"
     if kind in TEXT_ACTIONS:
         return "safe" if role in TEXT_SAFE_ROLES else "unknown"
     if kind == "click":

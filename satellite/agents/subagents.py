@@ -344,6 +344,7 @@ class SpawnManager:
             feedback=(),
             sink=getattr(active, "sink", None),
             task_id=getattr(active, "task_id", ""),
+            session_id=getattr(active, "session_id", ""),
             node_id=agent_id,
             project_root=parent.project_root,
             user_language="en",

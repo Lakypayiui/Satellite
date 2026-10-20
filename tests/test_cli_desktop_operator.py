@@ -7,7 +7,8 @@ from typer.testing import CliRunner
 from satellite.cli.app import app
 
 
-def test_cli_creates_desktop_operator_without_llm(tmp_path, monkeypatch) -> None:
+def test_cli_reports_desktop_operator_as_existing_base_agent(tmp_path, monkeypatch) -> None:
+    """Es un agente base: se sincroniza al catálogo, no se crea un duplicado."""
     home = tmp_path / "home"
     project = tmp_path / "proj"
     project.mkdir()
@@ -25,7 +26,7 @@ def test_cli_creates_desktop_operator_without_llm(tmp_path, monkeypatch) -> None
         ],
     )
     assert result.exit_code == 0, result.output
-    assert "created: desktop_operator" in result.output
+    assert "exists: desktop_operator" in result.output
     assert (home / "agents" / "desktop_operator.json").is_file()
     assert (home / "agents" / "desktop_operator.system.txt").is_file()
     assert (home / "agents" / "desktop_operator.user.txt").is_file()

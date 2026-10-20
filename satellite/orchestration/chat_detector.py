@@ -78,6 +78,136 @@ _KNOWLEDGE_CHAT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Acciones sobre el escritorio/navegador: son tareas (usan las tools desktop_*),
+# no charla, aunque no mencionen archivos ni el proyecto. Sin esta regla, "abre
+# Safari y entra a Google Docs" caía en la respuesta directa del modelo, que no
+# conoce ni puede ejecutar esas tools.
+# --- clasificación genérica de acciones de escritorio ------------------------
+# No se limita a una lista de apps: combina verbo + objeto de UI, nombre propio
+# de aplicación, URL/dominio o la forma "la app de X". Así reconoce apps que no
+# conocemos ("abre Obsidian") sin confundir "busca esto en internet" ni
+# "corre este comando".
+_LAUNCH_VERB_RE = re.compile(
+    r"\b(abre|abrir|a?breme|abrirme|lanza|lanzar|inicia|iniciar|"
+    r"open|launch|start|display)\b",
+    re.IGNORECASE,
+)
+_CONTROL_VERB_RE = re.compile(
+    r"\b(haz clic|haz click|clic|click|pulsa|presiona|escribe|teclea|"
+    r"scroll|desplaza|despl[aá]zate|navega|entra|ir a|ve a|visita|busca|buscar|"
+    r"search|open|navigate|go to|visit|type|press)\b",
+    re.IGNORECASE,
+)
+# Objetos inequívocos de una UI (no "internet", "web" o "google" a secas).
+_DESKTOP_OBJECT_RE = re.compile(
+    r"\b(ventana|window|pesta[nñ]a|tab|escritorio|desktop|"
+    r"aplicaci[oó]n|aplicacion|app|programa|navegador|browser|"
+    r"men[uú]|menu|bot[oó]n|button|campo|field|barra|scrollbar|"
+    r"di[aá]logo|dialog|icono|icon|panel)\b",
+    re.IGNORECASE,
+)
+# Apps muy comunes en los tres sistemas (respaldo; no es la única vía).
+_DESKTOP_APP_RE = re.compile(
+    r"\b(safari|chrome|google chrome|firefox|edge|brave|terminal|consola|iterm2?|"
+    r"finder|explorer|music|m[uú]sica|spotify|slack|whatsapp|telegram|"
+    r"notas|notes|calendar|calendario|mail|correo|messages|mensajes|"
+    r"photos|fotos|maps|mapas|calculator|calculadora|preview|quicktime|"
+    r"youtube|google docs|gmail)\b",
+    re.IGNORECASE,
+)
+_URL_RE = re.compile(
+    r"https?://|\b[\w-]+\.(?:com|org|net|io|dev|es|co|ai|app|me|edu|gov)\b",
+    re.IGNORECASE,
+)
+# Nombre propio justo después del verbo: "abre Obsidian", "abre Music".
+_LAUNCH_PROPER_RE = re.compile(
+    r"\b(?:abre|abrir|a?breme|lanza|lanzar|inicia|iniciar|open|launch|start)\s+"
+    r"(?:la\s+|el\s+|una\s+|un\s+)?"
+    r"(?:app\s+|aplicaci[oó]n\s+|aplicacion\s+|programa\s+)?"
+    r"[\"“']?([A-ZÁÉÍÓÚÑ][\w.+-]*(?:\s+[A-ZÁÉÍÓÚÑ][\w.+-]*)*)"
+)
+# "abre la app de <lo que sea>" / "abre el programa <X>".
+_LAUNCH_APP_OF_RE = re.compile(
+    r"\b(?:abre|abrir|lanza|lanzar|inicia|iniciar|open|launch|start)\s+"
+    r"(?:la|el|una|un)\s+(?:app|aplicaci[oó]n|aplicacion|programa)\s*(?:de\s+)?(.+)",
+    re.IGNORECASE,
+)
+# "abre <algo> en <App>" (VSCode, Safari, ...).
+_LAUNCH_IN_APP_RE = re.compile(
+    r"\b(?:abre|abrir|lanza|lanzar|inicia|iniciar|open|launch|start)\b"
+    r"[^.\n]{0,80}?\ben\s+([A-ZÁÉÍÓÚÑ][\w.+-]*(?:\s+[A-ZÁÉÍÓÚÑ][\w.+-]*)*)"
+)
+_FILELIKE_RE = re.compile(
+    r"\.(?:py|js|mjs|ts|tsx|json|md|txt|html|css|ya?ml|toml|sh|go|rs|java|"
+    r"cpp|c|h|log|pdf|docx?|xlsx?|csv|png|jpe?g|svg)\b",
+    re.IGNORECASE,
+)
+_FILE_CONTEXT_RE = re.compile(
+    r"\b(archivo|fichero|file|carpeta|folder|directorio|repo|repositorio)\b",
+    re.IGNORECASE,
+)
+_ACCOUNT_RE = re.compile(
+    r"\b(cuenta|account|registro|sign up|login|iniciar sesi[oó]n)\b", re.IGNORECASE
+)
+# Intención de shell/ejecución: no es control de UI aunque mencione "terminal".
+_COMMAND_RE = re.compile(
+    r"\b(ejecuta|ejecutar|corre|correr|run|instala|instalar|npm|pip|python|"
+    r"bash|sh|script|comando|command)\b",
+    re.IGNORECASE,
+)
+
+
+def is_desktop_action(goal: str) -> bool:
+    """True si pide abrir/controlar una app, ventana o navegador concretos.
+
+    Genérico a propósito:
+    - verbo de apertura/control **y** objeto de UI, app conocida, URL o nombre
+      propio tras el verbo ("abre Obsidian", "abre la app de música");
+    - "busca esto en internet" no nombra app/ventana → False;
+    - "corre este comando" no es una acción de UI → False;
+    - "abre el archivo README" es una operación de archivos → False.
+
+    El orquestador, además, sólo enruta aquí si el control de escritorio está
+    habilitado en Ajustes (ver ``build_runtime``).
+    """
+    text = str(goal or "").strip()
+    if not text:
+        return False
+    launch = bool(_LAUNCH_VERB_RE.search(text))
+    control = bool(_CONTROL_VERB_RE.search(text))
+    if not (launch or control):
+        return False
+
+    strong = bool(
+        _DESKTOP_OBJECT_RE.search(text)
+        or _DESKTOP_APP_RE.search(text)
+        or _URL_RE.search(text)
+    )
+    proper_app = False
+    if launch:
+        match = _LAUNCH_PROPER_RE.search(text)
+        if match and not _FILELIKE_RE.search(match.group(1)):
+            proper_app = True
+        if _LAUNCH_APP_OF_RE.search(text):
+            proper_app = True
+        if _LAUNCH_IN_APP_RE.search(text):
+            proper_app = True
+    if not (strong or proper_app):
+        return False
+
+    # Intención de comando/shell sin una ventana explícita: va al planificador.
+    if _COMMAND_RE.search(text) and not _DESKTOP_OBJECT_RE.search(text):
+        return False
+    # Sólo tenemos un nombre (sin objeto/app conocida/URL): descartar archivos
+    # y cuentas, que no son control de escritorio.
+    if not strong:
+        if _FILELIKE_RE.search(text) or _ACCOUNT_RE.search(text):
+            return False
+        if _FILE_CONTEXT_RE.search(text) and not _LAUNCH_IN_APP_RE.search(text):
+            return False
+    return True
+
+
 # Cortesía, relleno y peticiones de ayuda sin objeto concreto.
 _CHAT_HINTS_RE = re.compile(
     r"\b(hola|buenas|buenos d[ií]as|gracias|ok|okey|vale|perfecto|genial|entendido|"
@@ -148,22 +278,25 @@ def heuristic_is_chat(goal: str) -> bool:
     # 1) Preguntas sobre el propio sistema → conversación
     if _META_CHAT_RE.search(text):
         return True
-    # 2) Acción o diagnóstico con contexto de proyecto → tarea
+    # 2) Acción sobre una app/ventana/navegador → tarea (tools desktop_*)
+    if is_desktop_action(text):
+        return False
+    # 3) Acción o diagnóstico con contexto de proyecto → tarea
     if has_task_hint(text):
         return False
-    # 3) Pregunta por el proyecto en conjunto (overview/README) → conversación
+    # 4) Pregunta por el proyecto en conjunto (overview/README) → conversación
     if is_project_overview(text):
         return True
-    # 4) Conocimiento general → conversación
+    # 5) Conocimiento general → conversación
     if _KNOWLEDGE_CHAT_RE.search(text):
         return True
-    # 5) Cortesía, relleno o "ayúdame" → conversación
+    # 6) Cortesía, relleno o "ayúdame" → conversación
     if _CHAT_HINTS_RE.search(text):
         return True
-    # 6) Mensaje largo sin ninguna señal → tarea
+    # 7) Mensaje largo sin ninguna señal → tarea
     if len(text) > _MAX_LEN:
         return False
-    # 7) Pregunta corta → conversación
+    # 8) Pregunta corta → conversación
     return len(text) <= 60 and text.endswith("?")
 
 

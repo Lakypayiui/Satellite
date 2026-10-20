@@ -8,10 +8,11 @@ No se importa a nivel de módulo. Si falta el extra/typelib se devuelve
 ``MissingDependency``; si no hay bus/permiso, ``EnvironmentUnavailable``. Nunca se
 elevan privilegios.
 
-Acciones nativas: ``click`` (Action.do_action), ``focus`` (Component.grab_focus)
-y ``set_value`` (EditableText.set_text_contents). ``type``/``key``/``scroll`` no
-tienen patrón AT-SPI fiable ⇒ ``unsupported_action`` explícito (sin coordenadas).
-El resto de la seguridad la aporta ``AdapterDesktopBackend``.
+Acciones nativas: ``click`` (Action.do_action), ``focus`` (Component.grab_focus),
+``set_value`` (EditableText.set_text_contents) y ``scroll`` (Value de la barra de
+scroll o acciones AT-SPI de página). ``type``/``key`` no tienen patrón AT-SPI
+fiable ⇒ ``unsupported_action`` explícito (sin coordenadas). El resto de la
+seguridad la aporta ``AdapterDesktopBackend``.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ from satellite.desktop_control.errors import (
 PLATFORM = "linux"
 EXTRA = "desktop-control-linux"
 LINUX_EXTRA = "desktop-control-linux"
-SUPPORTED_ACTIONS: tuple[str, ...] = ("click", "focus", "set_value")
+SUPPORTED_ACTIONS: tuple[str, ...] = ("click", "focus", "set_value", "scroll")
 MAX_WINDOWS = 40
 
 # Rolenames de AT-SPI → nombres canónicos (los usa la clasificación destructiva).
@@ -195,6 +196,8 @@ class _AtspiAdapter:
         window = self._window_element(window_id)
         if window is None:
             return {"ok": False, "code": "target_missing", "error": "ventana no disponible"}
+        if kind == "scroll" and not node_key:
+            return self._scroll(window, action)
         element = self._find(window, node_key)
         if element is None:
             return {
@@ -202,6 +205,8 @@ class _AtspiAdapter:
                 "code": "target_missing",
                 "error": "el control ya no está en el árbol AT-SPI",
             }
+        if kind == "scroll":
+            return self._scroll(element, action)
         if kind == "click":
             action_iface = self._query(element, "query_action")
             if action_iface is None:
@@ -256,6 +261,106 @@ class _AtspiAdapter:
             "code": "unsupported_action",
             "error": f"Linux AT-SPI no ofrece un patrón nativo seguro para {kind!r}",
         }
+
+    # --- scroll ----------------------------------------------------------
+
+    def _scroll(self, base: Any, action: dict[str, Any]) -> dict[str, Any]:
+        """Scroll nativo: Value de la barra de scroll o acción AT-SPI de página."""
+        direction = str(action.get("direction") or "down").strip().lower()
+        if direction not in ("up", "down", "left", "right"):
+            direction = "down"
+        try:
+            amount = int(action.get("amount") or 1)
+        except (TypeError, ValueError):
+            amount = 1
+        amount = max(1, min(amount, 50))
+
+        # 1) Barra de scroll con interfaz Value (la mayoría de toolkits).
+        bar = self._scroll_bar(base)
+        value = self._query(bar, "query_value") if bar is not None else None
+        if value is not None:
+            try:
+                current = float(value.get_current_value())
+                minimum = float(value.get_minimum_value())
+                maximum = float(value.get_maximum_value())
+                try:
+                    step = float(value.get_minimum_increment())
+                except Exception:
+                    step = 0.0
+                if step <= 0:
+                    step = max((maximum - minimum) * 0.1, 1.0)
+                delta = step * amount
+                if direction in ("up", "left"):
+                    delta = -delta
+                target = min(maximum, max(minimum, current + delta))
+                value.set_current_value(target)
+                return {"ok": True, "code": "", "error": ""}
+            except Exception as exc:
+                return {"ok": False, "code": "act_failed", "error": str(exc)}
+
+        # 2) Acciones AT-SPI con nombre de scroll/página.
+        names = {
+            "down": ("scroll down", "page down", "down"),
+            "up": ("scroll up", "page up", "up"),
+            "left": ("scroll left", "page left", "left"),
+            "right": ("scroll right", "page right", "right"),
+        }[direction]
+        node = base
+        for _ in range(6):
+            if node is None:
+                break
+            action_iface = self._query(node, "query_action")
+            if action_iface is not None:
+                try:
+                    for index in range(int(action_iface.get_n_actions())):
+                        name = str(action_iface.get_action_name(index) or "").lower()
+                        if any(wanted in name for wanted in names):
+                            for _step in range(amount):
+                                action_iface.do_action(index)
+                            return {"ok": True, "code": "", "error": ""}
+                except Exception as exc:
+                    return {"ok": False, "code": "act_failed", "error": str(exc)}
+            node = self._query(node, "get_parent")
+
+        return {
+            "ok": False,
+            "code": "unsupported_action",
+            "error": "no hay barra de scroll ni acción AT-SPI desplazable",
+        }
+
+    def _scroll_bar(self, base: Any) -> Any | None:
+        """Primera barra de scroll (preferentemente vertical) del subárbol."""
+        if base is None:
+            return None
+        if self._role(base) == "scroll bar":
+            return base
+        fallback = None
+        for element in self._iter_elements(base, limit=2000):
+            if self._role(element) != "scroll bar":
+                continue
+            name = self._name(element).lower()
+            if "vertical" in name or "vert" in name:
+                return element
+            if fallback is None:
+                fallback = element
+        return fallback
+
+    def _iter_elements(self, root: Any, *, limit: int):
+        """Recorrido DFS acotado del subárbol AT-SPI."""
+        stack = [root]
+        seen = 0
+        while stack and seen < limit:
+            element = stack.pop()
+            seen += 1
+            yield element
+            try:
+                children = [
+                    element.get_child_at_index(index)
+                    for index in range(int(element.get_child_count()))
+                ]
+            except Exception:
+                children = []
+            stack.extend(reversed([child for child in children if child is not None]))
 
     # --- internos --------------------------------------------------------
 

@@ -9,6 +9,7 @@ from satellite.orchestration.chat_detector import (
     has_task_hint,
     heuristic_is_chat,
     is_chat_goal,
+    is_desktop_action,
 )
 from satellite.providers.fake import FakeLLM
 
@@ -27,6 +28,37 @@ def test_heuristic_task_hint_not_chat() -> None:
     assert heuristic_is_chat("crea una página html que diga hola") is False
     assert heuristic_is_chat("arregla el error en main.py") is False
     assert heuristic_is_chat("implementa una función que sume") is False
+
+
+def test_desktop_actions_are_tasks_not_chat() -> None:
+    """Abrir/controlar Safari es trabajo (tools desktop_*), no charla."""
+    for text in (
+        "Puedes abrir safari y entrar a google docs",
+        "abre Google Chrome y ve a docs.google.com",
+        "haz clic en la ventana de Safari",
+        "open Safari and navigate to Google Docs",
+    ):
+        assert is_desktop_action(text) is True
+        assert heuristic_is_chat(text) is False
+    # Preguntar por el navegador no es una acción de escritorio.
+    assert is_desktop_action("¿qué es Safari?") is False
+    assert heuristic_is_chat("¿qué es Safari?") is True
+
+
+def test_desktop_action_requires_an_explicit_app_or_window() -> None:
+    """No confundir control de escritorio con buscar en internet o correr comandos."""
+    # Peticiones de escritorio: app/ventana nombrada + verbo.
+    assert is_desktop_action("abre una nueva terminal") is True
+    assert is_desktop_action("abre la app de música") is True
+    assert is_desktop_action("abre Music") is True
+    assert is_desktop_action("busca vuelos en Google Chrome") is True
+    assert is_desktop_action("haz scroll en youtube") is True
+    # Sin app/ventana nombrada: no es control de escritorio.
+    assert is_desktop_action("busca esto en internet") is False
+    assert is_desktop_action("busca esto en google") is False
+    assert is_desktop_action("corre este comando") is False
+    assert is_desktop_action("ejecuta este comando en la terminal") is False
+    assert is_desktop_action("abre el archivo main.py") is False
 
 
 def test_heuristic_long_not_chat() -> None:

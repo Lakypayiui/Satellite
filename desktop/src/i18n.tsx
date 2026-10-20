@@ -539,6 +539,19 @@ export const TEXTOS = {
   "sidebar.unpin": { es: "Dejar de fijar", en: "Unpin" },
   "sidebar.archive": { es: "Archivar", en: "Archive" },
   "sidebar.unarchive": { es: "Desarchivar", en: "Unarchive" },
+  "sidebar.delete": { es: "Borrar", en: "Delete" },
+  "sidebar.deleteTitle": {
+    es: "Borrar la conversación «{nombre}»",
+    en: "Delete the conversation “{nombre}”",
+  },
+  "sidebar.deleteDetail": {
+    es: "Se eliminará esta conversación y sus turnos guardados. No se puede deshacer.",
+    en: "This conversation and its saved turns will be deleted. It cannot be undone.",
+  },
+  "sidebar.deleted": {
+    es: "conversación «{nombre}» borrada",
+    en: "conversation “{nombre}” deleted",
+  },
   "sidebar.archived": { es: "Archivadas ({n})", en: "Archived ({n})" },
   "sidebar.archived.note": {
     es: "Archivar no borra nada: la conversación y sus turnos siguen guardados aquí.",
@@ -828,6 +841,50 @@ export const TEXTOS = {
   "settings.desktop.toggle": {
     es: "habilitar control de escritorio",
     en: "enable desktop control",
+  },
+  "settings.desktop.allowlist.title": {
+    es: "Apps permitidas",
+    en: "Allowed apps",
+  },
+  "settings.desktop.allowlist.note": {
+    es: "La política sólo puede observar o controlar apps de esta lista; la denylist local (terminales, gestores de contraseñas, ajustes del sistema) siempre gana. Sin apps aquí, toda petición se deniega.",
+    en: "The policy can only observe or control apps in this list; the local denylist (terminals, password managers, system settings) always wins. With no apps here, every request is denied.",
+  },
+  "settings.desktop.allowlist.label": {
+    es: "una app por línea (nombre del proceso)",
+    en: "one app per line (process name)",
+  },
+  "settings.desktop.allowlist.placeholder": {
+    es: "Safari\nGoogle Chrome\ncom.apple.Terminal",
+    en: "Safari\nGoogle Chrome\ncom.apple.Terminal",
+  },
+  "settings.desktop.allowlist.hint": {
+    es: "También se aceptan separadas por comas. Ejemplos: Safari, Google Chrome, Finder, notepad.",
+    en: "Comma-separated is also accepted. Examples: Safari, Google Chrome, Finder, notepad.",
+  },
+  "settings.desktop.allowlist.save": {
+    es: "guardar apps permitidas",
+    en: "save allowed apps",
+  },
+  "settings.desktop.allowlist.saved": {
+    es: "apps permitidas guardadas",
+    en: "allowed apps saved",
+  },
+  "settings.desktop.allowlist.savedList": {
+    es: "Guardado: {apps}. La política lo aplicará en la próxima petición.",
+    en: "Saved: {apps}. The policy will apply it on the next request.",
+  },
+  "settings.desktop.allowlist.savedEmpty": {
+    es: "Allowlist vacía: la política denegará todas las apps.",
+    en: "Empty allowlist: the policy will deny every app.",
+  },
+  "settings.desktop.backend.missing": {
+    es: "El backend de control no está instalado (extra {extra}). Instálalo para poder observar y controlar ventanas.",
+    en: "The control backend is not installed (extra {extra}). Install it to observe and control windows.",
+  },
+  "settings.desktop.backend.untrusted": {
+    es: "macOS no tiene permiso de Accesibilidad para este proceso: concédelo en Ajustes del Sistema → Privacidad y seguridad → Accesibilidad y reinicia la app.",
+    en: "macOS has not granted Accessibility permission to this process: allow it in System Settings → Privacy & Security → Accessibility, then restart the app.",
   },
   "settings.desktop.enabled": {
     es: "control de escritorio habilitado",

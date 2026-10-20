@@ -212,13 +212,18 @@ class _PywinautoAdapter:
             except Exception as exc:
                 return {"ok": False, "code": "act_failed", "error": str(exc)}
 
-        item = self._find(win, node_key)
-        if item is None:
-            return {
-                "ok": False,
-                "code": "target_missing",
-                "error": "el control ya no está en el árbol UIA",
-            }
+        # Scroll sin target: se intenta sobre la ventana (patrón Scroll del panel
+        # principal). Si la ventana no lo expone, se devuelve unsupported_action.
+        if kind == "scroll" and not node_key:
+            item = win
+        else:
+            item = self._find(win, node_key)
+            if item is None:
+                return {
+                    "ok": False,
+                    "code": "target_missing",
+                    "error": "el control ya no está en el árbol UIA",
+                }
         try:
             self._native(item, kind, text, action)
             return {"ok": True, "code": "", "error": ""}

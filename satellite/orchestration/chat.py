@@ -262,6 +262,102 @@ class ChatSession:
             return False
         return self._store().rename(self.session_id, name)
 
+    def delete_session(self, session_id: str) -> bool:
+        """Borra una conversación; si era la activa, carga la que quede activa."""
+        was_active = session_id == self.session_id
+        if not self._store().delete(session_id):
+            return False
+        if was_active:
+            self.load()
+        return True
+
+    def _summary_provider(self):
+        """Proveedor del rol ``context`` (respaldo: el activo)."""
+        services = getattr(self.orchestrator, "services", None)
+        factory = getattr(services, "factory", None) if services is not None else None
+        resolver = getattr(factory, "provider_resolver", None)
+        if callable(resolver):
+            try:
+                provider = resolver("context")
+                if provider is not None:
+                    return provider
+            except Exception:  # noqa: BLE001 — degradar al proveedor activo
+                pass
+        return getattr(services, "provider", None) if services is not None else None
+
+    def _session_memory(self) -> str:
+        """Bloque de resúmenes persistentes de esta conversación."""
+        from satellite.context.turn_summaries import (
+            load_turn_summaries,
+            render_turn_summaries,
+        )
+
+        return render_turn_summaries(
+            load_turn_summaries(self.project_root, self.session_id)
+        )
+
+    async def _record_turn_summary(
+        self,
+        user_text: str,
+        assistant_text: str,
+        *,
+        task_id: str = "",
+        status: str = "",
+        language: str = "",
+    ) -> None:
+        """Resume y guarda el par usuario→modelo. Nunca rompe el turno."""
+        if not self.persist:
+            return
+        from satellite.context.turn_summaries import (
+            append_turn_summary,
+            make_entry,
+            summarize_turn,
+        )
+
+        summary = await summarize_turn(
+            self._summary_provider(),
+            user_text=user_text,
+            assistant_text=assistant_text,
+            language=language,
+        )
+        append_turn_summary(
+            self.project_root,
+            self.session_id,
+            make_entry(
+                user_summary=str(summary.get("user_summary") or ""),
+                assistant_summary=str(summary.get("assistant_summary") or ""),
+                task_id=task_id,
+                status=status,
+            ),
+        )
+
+    def _autoname(self, text: str) -> None:
+        """Renombra el placeholder con un resumen de 2-3 palabras del primer mensaje."""
+        if not self.persist:
+            return
+        from satellite.orchestration.sessions import (
+            DEFAULT_SESSION_NAME,
+            NEW_SESSION_NAME,
+            summarize_session_name,
+        )
+
+        store = self._store()
+        info, _turns = store.read(self.session_id)
+        current = (info.name or "").strip().lower()
+        placeholders = {
+            "",
+            DEFAULT_SESSION_NAME.lower(),
+            NEW_SESSION_NAME.lower(),
+            self.session_id.lower(),
+        }
+        if current not in placeholders and not re.fullmatch(
+            r"ses[ií][oó]n\s+[0-9a-z]{4,}", current
+        ):
+            return
+        title = summarize_session_name(text)
+        if title:
+            store.rename(self.session_id, title)
+
     def add(
         self,
         role: str,
@@ -387,7 +483,18 @@ class ChatSession:
         if summary:
             text, method = summary, "manual"
         else:
-            text, method = await summarize_turns(dropped_turns, self.provider())
+            # Al compactar se usa el JSON de resúmenes por turno + el compactador.
+            from satellite.context.turn_summaries import (
+                load_turn_summaries,
+                render_turn_summaries,
+            )
+
+            persistent = render_turn_summaries(
+                load_turn_summaries(self.project_root, self.session_id)
+            )
+            text, method = await summarize_turns(
+                dropped_turns, self.provider(), persistent_summary=persistent
+            )
         text = strip_code_fences(text)
         header = (
             [Turn(role="summary", content=text, status="compactado")]
@@ -475,8 +582,14 @@ class ChatSession:
             extra["allow_plan_options"] = False
             extra["execute_choice"] = True
         self.add("user", turn_text)
+        self._autoname(turn_text)
 
-        metadata: dict = {"history": history, "conversation": True}
+        metadata: dict = {
+            "history": history,
+            "conversation": True,
+            # Los grants "durante esta sesión" se guardan por este id, no por tarea.
+            "session_id": self.session_id,
+        }
         # Las menciones (@archivo, @símbolo) viajan con la tarea para que el runner las
         # resuelva como contexto de los nodos, igual que el historial.
         from satellite.context.mentions import parse as parse_mentions
@@ -531,6 +644,11 @@ class ChatSession:
         if bloque_externo:
             metadata["context_external"] = ApprovedExternalContext(bloque_externo)
 
+        # Memoria persistente: siempre viaja con el prompt (acotada en el render).
+        memoria = self._session_memory().strip()
+        if memoria:
+            metadata["session_memory"] = memoria
+
         task = Task(goal=text, project_root=self.project_root, metadata=metadata)
         services = getattr(self.orchestrator, "services", None)
         if services is not None and approval is not None:
@@ -545,6 +663,9 @@ class ChatSession:
                 f"I couldn't complete it: {exc}",
             )
             self.add("assistant", text, status="failed")
+            await self._record_turn_summary(
+                turn_text, text, status="failed", language=language
+            )
             return ChatReply(
                 text=text,
                 status="failed",
@@ -575,6 +696,13 @@ class ChatSession:
             task_id=result.task_id,
             status=result.status.value,
             diagram=diagram,
+        )
+        await self._record_turn_summary(
+            turn_text,
+            reply_text,
+            task_id=result.task_id,
+            status=result.status.value,
+            language=language,
         )
         # Si este turno ofreció alternativas, quedan pendientes para el siguiente.
         self._pending_plan = self._plan_from_result(result)

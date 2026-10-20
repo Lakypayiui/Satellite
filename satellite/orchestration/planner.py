@@ -111,6 +111,9 @@ class LLMPlanner(Planner):
         catalog_text = build_catalog_context(catalog.all(), context_hint)
         # El historial es dinámico: va al slot {context}, nunca al bloque estable.
         history_text = render_history(task.metadata.get("history"))
+        memoria = str(task.metadata.get("session_memory") or "").strip()
+        if memoria:
+            history_text = "\n\n".join(part for part in (memoria, history_text) if part)
         project_context = str(task.metadata.get("project_context") or "").strip()
         if project_context:
             history_text = "\n\n".join(

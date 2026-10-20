@@ -185,6 +185,7 @@ class DelegationManager:
                 # A directly-created agent may not have a task id yet; the child must
                 # still emit valid events (empty ids are rejected by ExecutionEvent).
                 task_id=parent_ctx.task_id or SYSTEM_TASK_ID,
+                session_id=getattr(parent_ctx, "session_id", ""),
                 node_id=agent_id,
                 project_root=project_root,
                 user_language=parent_ctx.user_language,

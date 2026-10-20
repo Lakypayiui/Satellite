@@ -473,6 +473,13 @@ textarea:focus {
   user-select: none;
 }
 
+/* Espacio para los semáforos nativos de macOS (rojo/amarillo/verde). */
+.barra-hueco-mac {
+  flex: 0 0 72px;
+  height: 100%;
+  -webkit-app-region: drag;
+}
+
 .barra-marca {
   display: flex;
   align-items: baseline;
@@ -1850,6 +1857,11 @@ pre.salida,
 
 .menu-item button {
   border-color: var(--line);
+}
+
+.menu-item button.peligro {
+  color: var(--bad);
+  border-color: var(--bad);
 }
 
 /* Marca de conversación fijada. */

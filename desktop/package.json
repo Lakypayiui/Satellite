@@ -5,13 +5,17 @@
   "description": "Satellite desktop app (development build over the local Python backend)",
   "main": "dist-electron/main.js",
   "scripts": {
+    "dev-app-name": "node scripts/dev-app-name.mjs",
+    "postinstall": "node scripts/dev-app-name.mjs",
+    "predev": "node scripts/dev-app-name.mjs",
+    "prestart": "node scripts/dev-app-name.mjs",
     "dev": "npm run build:electron && node scripts/dev.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "test": "node --test tests/*.test.mts",
     "build:renderer": "vite build",
     "build:electron": "tsc -p tsconfig.node.json",
     "build": "npm run typecheck && npm run build:renderer && npm run build:electron",
-    "start": "npm run build && electron .",
+    "start": "npm run build && node scripts/launch.mjs",
     "smoke": "node scripts/smoke.mjs",
     "icons": "node scripts/icons.mjs",
     "dist": "npm run icons && npm run build && electron-builder"
@@ -35,6 +39,7 @@
     }
   },
   "dependencies": {
+    "pele": "^1.7.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

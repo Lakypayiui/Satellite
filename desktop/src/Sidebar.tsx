@@ -23,6 +23,7 @@ interface Props {
   onRenombrar: (id: string, nombre: string) => void;
   onFijar: (id: string, pinned: boolean) => void;
   onArchivar: (id: string, archived: boolean) => void;
+  onBorrar: (id: string) => void;
   onAjustes: () => void;
 }
 
@@ -233,6 +234,16 @@ export function Sidebar(props: Props) {
                   >
                     {t("sidebar.rename")}
                   </button>
+                  <button
+                    className="peligro"
+                    onClick={(evento) => {
+                      evento.stopPropagation();
+                      props.onBorrar(sesion.id);
+                      setMenu("");
+                    }}
+                  >
+                    {t("sidebar.delete")}
+                  </button>
                 </div>
               )}
             </div>
@@ -293,6 +304,15 @@ export function Sidebar(props: Props) {
                       }}
                     >
                       {t("sidebar.unarchive")}
+                    </button>
+                    <button
+                      className="peligro"
+                      onClick={() => {
+                        props.onBorrar(sesion.id);
+                        setMenu("");
+                      }}
+                    >
+                      {t("sidebar.delete")}
                     </button>
                   </div>
                 )}

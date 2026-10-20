@@ -11,7 +11,13 @@ import shutil
 from pathlib import Path
 
 RESERVED_AGENT_IDS: frozenset[str] = frozenset(
-    {"orchestrator", "agent_creator", "skill_curator", "pele_diagram_agent"}
+    {
+        "orchestrator",
+        "agent_creator",
+        "skill_curator",
+        "pele_diagram_agent",
+        "desktop_operator",
+    }
 )
 
 # Ids del kernel: ni agentes ni skills pueden crearse o sobrescribirse con ellos.

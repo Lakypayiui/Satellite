@@ -527,6 +527,16 @@ export function App() {
     }
     setAviso(null);
     setOcupado(true);
+    // El mensaje del usuario se muestra de inmediato; la respuesta del backend lo
+    // reconciliará con el turno persistido al terminar (cargarTodo reemplaza la lista).
+    const optimista: Turn = {
+      role: "user",
+      content: texto,
+      task_id: "",
+      status: "pending",
+      diagram: null,
+    };
+    setTurnos((previos) => [...previos, optimista]);
     try {
       const respuesta = await api<{ error?: string | null; context?: MentionSummary }>("/messages", {
         method: "POST",
@@ -692,6 +702,41 @@ export function App() {
         }
         setAtencionCambios(false);
       }
+    } catch (exc) {
+      setAviso(error(exc));
+    }
+  }
+
+  /** Confirmación explícita: borrar una conversación es irreversible. */
+  function pedirBorrarSesion(id: string) {
+    const sesion = sesiones.find((item) => item.id === id);
+    const nombre = sesion?.name || id;
+    setConfirmacion({
+      titulo: t("sidebar.deleteTitle", { nombre }),
+      detalle: t("sidebar.deleteDetail"),
+      accion: () => void borrarSesion(id, nombre),
+    });
+  }
+
+  async function borrarSesion(id: string, nombre: string) {
+    try {
+      const vista = await api<{ session_id: string; current: string; sessions: SessionInfo[] }>(
+        `/sessions/${id}`,
+        { method: "DELETE" },
+      );
+      setSesiones(vista.sessions);
+      const activa =
+        vista.sessions.find((s) => s.id === vista.current && !s.archived)?.id ?? "";
+      setSesionActiva(activa);
+      if (activa) {
+        const detalle = await api<{ turns: Turn[] }>(`/sessions/${activa}/turns`);
+        setTurnos(detalle.turns);
+      } else {
+        setTurnos([]);
+      }
+      setPlan(null);
+      setAtencionCambios(false);
+      setAviso(t("sidebar.deleted", { nombre }));
     } catch (exc) {
       setAviso(error(exc));
     }
@@ -1608,6 +1653,7 @@ export function App() {
         onRenombrar={(id, nombre) => void renombrarSesion(id, nombre)}
         onFijar={(id, pinned) => void fijarSesion(id, pinned)}
         onArchivar={(id, archived) => void archivarSesion(id, archived)}
+        onBorrar={(id) => pedirBorrarSesion(id)}
         onAjustes={() => irAAjustes(null)}
       />
 

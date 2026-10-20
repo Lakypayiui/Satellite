@@ -27,6 +27,30 @@ def test_build_runtime_registers_base_agents(tmp_path: Path, monkeypatch) -> Non
     assert (tmp_path / "home" / "agents" / "orchestrator.user.txt").exists()
 
 
+def test_desktop_operator_requires_human_surface_and_the_settings_flag(
+    tmp_path: Path, monkeypatch
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("SATELLITE_HOME", str(home))
+    write_config(tmp_path)
+
+    # MCP nunca lo ve.
+    _o, _b, _s, registry = build_runtime(tmp_path, allow_desktop=False)
+    assert "desktop_operator" not in {spec.id for spec in registry.all()}
+
+    # Una superficie con humano tampoco si el flag está apagado.
+    _o, _b, _s, registry = build_runtime(tmp_path, allow_desktop=True)
+    assert "desktop_operator" not in {spec.id for spec in registry.all()}
+
+    # Con «enable desktop control» encendido sí.
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "desktop_control.json").write_text(
+        json.dumps({"enabled": True}), encoding="utf-8"
+    )
+    _o, _b, _s, registry = build_runtime(tmp_path, allow_desktop=True)
+    assert "desktop_operator" in {spec.id for spec in registry.all()}
+
+
 def test_build_runtime_wires_services(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SATELLITE_HOME", str(tmp_path / "home"))
     write_config(tmp_path)

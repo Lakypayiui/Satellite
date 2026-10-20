@@ -9,8 +9,9 @@ import { Logo } from "./Logo";
  * blanco que arrastraba) desaparece. Arrastra la ventana y ofrece minimizar, maximizar/restaurar
  * y cerrar por IPC validado. Sigue el tema activo porque usa las variables `--titlebar-*`.
  *
- * En macOS los controles van a la izquierda (como el resto de la plataforma); en Windows y Linux,
- * a la derecha. Los botones son `<button>` normales: tabulables y operables con teclado.
+ * En macOS se usan los semáforos NATIVOS (rojo/amarillo/verde) que dibuja el sistema con
+ * `titleBarStyle: hiddenInset`; aquí sólo se reserva su espacio. En Windows y Linux los botones
+ * propios van a la derecha y son `<button>` normales: tabulables y operables con teclado.
  * Los rótulos visibles (títulos y aria) salen del i18n tipado (`useT`).
  */
 export function TitleBar({ proyecto }: { proyecto: string }) {
@@ -37,6 +38,7 @@ export function TitleBar({ proyecto }: { proyecto: string }) {
   const esMac = plataforma === "darwin";
 
   const control = (clave: "minimizar" | "maximizar" | "cerrar") => {
+    if (esMac) return null;
     if (clave === "minimizar") {
       return (
         <button
@@ -79,9 +81,7 @@ export function TitleBar({ proyecto }: { proyecto: string }) {
     );
   };
 
-  const orden = esMac
-    ? (["cerrar", "minimizar", "maximizar"] as const)
-    : (["minimizar", "maximizar", "cerrar"] as const);
+  const orden = ["minimizar", "maximizar", "cerrar"] as const;
 
   const controles = (
     <div className="barra-controles" role="group" aria-label={t("titlebar.controls")}>
@@ -90,8 +90,12 @@ export function TitleBar({ proyecto }: { proyecto: string }) {
   );
 
   return (
-    <header className="barra-titulo" aria-label={t("titlebar.bar")}>
-      {esMac && controles}
+    <header
+      className="barra-titulo"
+      aria-label={t("titlebar.bar")}
+      data-mac={esMac ? "true" : undefined}
+    >
+      {esMac && <span className="barra-hueco-mac" aria-hidden="true" />}
       <div className="barra-marca">
         <Logo className="barra-logo" />
         <span className="barra-app">Satellite</span>

@@ -4,15 +4,14 @@
  */
 
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { createServer } from "vite";
 
-const require = createRequire(import.meta.url);
-const electronBinario = require("electron");
+import { electronBinary } from "./electron-path.mjs";
+
 const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const vite = await createServer({ configFile: path.join(raiz, "vite.config.ts") });
@@ -20,7 +19,7 @@ await vite.listen();
 const url = vite.resolvedUrls?.local?.[0] ?? "http://localhost:5173";
 console.log(`[dev] interfaz en ${url}`);
 
-const electron = spawn(electronBinario, ["."], {
+const electron = spawn(electronBinary(), ["."], {
   cwd: raiz,
   env: { ...process.env, VITE_DEV_SERVER_URL: url },
   stdio: "inherit",

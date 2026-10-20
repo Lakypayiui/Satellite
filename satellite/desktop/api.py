@@ -71,9 +71,11 @@ class ConfigIn(BaseModel):
 
 
 class DesktopControlPatchIn(BaseModel):
-    """Activa/desactiva control de escritorio y elige proveedor/modelo de visión."""
+    """Activa/desactiva el control, edita la allowlist y elige visión."""
 
     enabled: bool | None = None
+    # Apps permitidas por la política (la denylist local siempre gana).
+    allowed_processes: list[str] | None = None
     vision_provider: str | None = None
     vision_model: str | None = None
 
@@ -321,6 +323,11 @@ def build_router(backend: DesktopBackend, auth: Callable) -> APIRouter:
             session_id, name=payload.name, pinned=payload.pinned, archived=payload.archived
         )
 
+    @router.delete("/sessions/{session_id}")
+    def delete_session(session_id: str) -> dict:
+        """Borra la conversación y sus turnos. No se puede deshacer."""
+        return backend.delete_session(session_id)
+
     @router.post("/sessions/{session_id}/activate")
     def activate_session(session_id: str) -> dict:
         return backend.activate_session(session_id)
@@ -562,6 +569,7 @@ def build_router(backend: DesktopBackend, auth: Callable) -> APIRouter:
         """Sólo configuración local; no concede permisos ni se expone por MCP."""
         return backend.update_desktop_control(
             enabled=payload.enabled,
+            allowed_processes=payload.allowed_processes,
             vision_provider=payload.vision_provider,
             vision_model=payload.vision_model,
         )

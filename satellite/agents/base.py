@@ -23,6 +23,9 @@ class AgentContext:
     feedback: tuple[Finding, ...] = ()
     sink: EventSink | None = None
     task_id: str = ""
+    # Conversación a la que pertenece el turno. Viaja a ToolContext para que los
+    # grants "durante esta sesión" sobrevivan a tareas nuevas del mismo chat.
+    session_id: str = ""
     node_id: str = ""
     project_root: Path | None = None
     # Idioma del mensaje original de la persona, no del brief interno del planificador.

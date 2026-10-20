@@ -11,6 +11,7 @@ hasta que el humano edite el archivo a mano. La denylist gana siempre.
 from __future__ import annotations
 
 import json
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,12 +23,14 @@ FILE_NAME = "desktop_control.json"
 # Apps vetadas por defecto: gestores de contraseñas, terminales y configuración del
 # sistema. La comparación es exacta contra el nombre de proceso normalizado.
 DEFAULT_DENIED_APPS: tuple[str, ...] = (
+    # Gestores de contraseñas (multiplataforma).
     "1password",
     "bitwarden",
     "dashlane",
     "keepass",
     "keepassxc",
     "lastpass",
+    # Terminales y shells: Windows.
     "cmd",
     "powershell",
     "pwsh",
@@ -36,21 +39,78 @@ DEFAULT_DENIED_APPS: tuple[str, ...] = (
     "conhost",
     "bash",
     "wsl",
+    # Terminales y shells: macOS.
+    "terminal",
+    "iterm",
+    "iterm2",
+    "warp",
+    "alacritty",
+    "kitty",
+    "hyper",
+    "tabby",
+    # Terminales y shells: Linux.
+    "gnome-terminal",
+    "konsole",
+    "xfce4-terminal",
+    "tilix",
+    "terminator",
+    "xterm",
+    "zsh",
+    "fish",
+    # Ajustes del sistema y llaveros.
     "regedit",
     "mmc",
     "control",
     "systemsettings",
+    "system settings",
+    "system preferences",
     "taskmgr",
+    "gnome-control-center",
+    "keychain access",
+    "keychainaccess",
+    "passwords",
+    "seahorse",
+    "kwallet",
+    "kwalletmanager",
 )
 
 
+# Nombres localizados que el usuario escribe y nombre real del proceso/app. Sin
+# esto, "Música" nunca coincidía con la app "Music" de macOS y la allowlist
+# parecía no guardarse.
+APP_ALIASES: dict[str, str] = {
+    "musica": "music",
+    "correo": "mail",
+    "calendario": "calendar",
+    "notas": "notes",
+    "mensajes": "messages",
+    "fotos": "photos",
+    "mapas": "maps",
+    "recordatorios": "reminders",
+    "calculadora": "calculator",
+    "vistas previas": "preview",
+    "reproductor quicktime": "quicktime player",
+    "ajustes del sistema": "system settings",
+    "preferencias del sistema": "system settings",
+}
+
+
 def normalize_app(value: object) -> str:
-    """Nombre de proceso normalizado (sin ruta, sin ``.exe``, minúsculas)."""
+    """Nombre de proceso normalizado (sin ruta, sin ``.exe``/``.app``, sin acentos)."""
     raw = str(value or "").strip().replace("\\", "/").rsplit("/", 1)[-1]
+    # NFKD + quitar diacríticos: "Música" -> "musica".
+    raw = "".join(
+        char
+        for char in unicodedata.normalize("NFKD", raw)
+        if not unicodedata.combining(char)
+    )
     raw = raw.strip().lower()
-    if raw.endswith(".exe"):
-        raw = raw[:-4]
-    return " ".join(raw.split())
+    for suffix in (".exe", ".app"):
+        if raw.endswith(suffix):
+            raw = raw[: -len(suffix)]
+            break
+    name = " ".join(raw.split())
+    return APP_ALIASES.get(name, name)
 
 
 def _app_tuple(values: object) -> tuple[str, ...]:
@@ -91,8 +151,8 @@ class DesktopControlSettings:
     enabled: bool = False
     allowed_processes: tuple[str, ...] = ()
     denied_apps: tuple[str, ...] = DEFAULT_DENIED_APPS
-    max_actions_per_run: int = 20
-    max_seconds_per_run: float = 120.0
+    max_actions_per_run: int = 50
+    max_seconds_per_run: float = 300.0
     rate_per_minute: int = 30
     confirm_destructive: bool = True
 
@@ -132,12 +192,15 @@ class DesktopControlSettings:
             return cls()
         defaults = cls()
         denied = data.get("denied_apps")
+        extra_denied = _app_tuple(denied) if isinstance(denied, (list, tuple)) else ()
+        # La denylist por defecto es un suelo de seguridad: una config antigua no
+        # puede reactivar terminales/llaveros sólo porque no los listaba. El usuario
+        # puede añadir más apps, pero no quitar las protegidas.
+        denied_apps = tuple(dict.fromkeys((*defaults.denied_apps, *extra_denied)))
         return cls(
             enabled=bool(data.get("enabled", False)),
             allowed_processes=_app_tuple(data.get("allowed_processes")),
-            denied_apps=(
-                _app_tuple(denied) if isinstance(denied, (list, tuple)) else defaults.denied_apps
-            ),
+            denied_apps=denied_apps,
             max_actions_per_run=_positive_int(
                 data.get("max_actions_per_run"), defaults.max_actions_per_run
             ),

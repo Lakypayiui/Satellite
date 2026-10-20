@@ -162,7 +162,53 @@ def _set_updated(store: SessionStore, session_id: str, when: str) -> None:
     path.write_text(json.dumps(data), encoding="utf-8")
 
 
+def test_delete_removes_the_file_and_moves_the_active(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    first = store.create("primera")
+    second = store.create("segunda")  # activa
+
+    assert store.delete(second) is True
+    assert not store.session_path(second).exists()
+    assert store.active_id() == first
+    assert {info.id for info in store.list()} == {first}
+
+    assert store.delete(first) is True
+    assert store.active_id() == "default"  # no queda ninguna: vuelve a la principal
+
+
+def test_summarize_session_name_is_short_and_useful() -> None:
+    from satellite.orchestration.sessions import summarize_session_name
+
+    assert summarize_session_name("necesito agregar login") == "Agregar login"
+    assert (
+        summarize_session_name(
+            "Quiero que me hagas un diagrama de flujo de como funciona este proyecto"
+        )
+        == "Diagrama flujo proyecto"
+    )
+    assert summarize_session_name("") == ""
+
+
 # --- el chat ---
+
+
+def test_the_first_message_autonames_a_new_session(tmp_path: Path) -> None:
+    chat = _chat(tmp_path)
+    chat.new_session()  # placeholder: "nueva conversación"
+
+    run(chat.send("necesito agregar login"))
+
+    assert chat.session_name == "Agregar login"
+    assert chat.sessions()[0].name == "Agregar login"
+
+
+def test_an_explicit_name_is_not_overwritten_by_the_first_message(tmp_path: Path) -> None:
+    chat = _chat(tmp_path)
+    chat.new_session("mi nombre")
+
+    run(chat.send("necesito agregar login"))
+
+    assert chat.session_name == "mi nombre"
 
 
 def test_each_session_keeps_its_own_conversation(tmp_path: Path) -> None:

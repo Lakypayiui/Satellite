@@ -94,6 +94,17 @@ def test_resolve_pele_module_from_env(tmp_path: Path, monkeypatch) -> None:
     assert resolve_pele_module(tmp_path) == fake_module
 
 
+def test_find_node_falls_back_to_common_locations(tmp_path: Path, monkeypatch) -> None:
+    """Una app de macOS sin PATH de shell no ve nvm: se buscan rutas habituales."""
+    fake = tmp_path / "bin" / "node"
+    fake.parent.mkdir(parents=True)
+    fake.write_text("#!/bin/sh\n", encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setattr(diagram_module.shutil, "which", lambda name: None)
+    monkeypatch.setattr(diagram_module, "_candidate_node_paths", lambda: [str(fake)])
+    assert diagram_module.find_node() == str(fake)
+
+
 def test_pele_status_reports_missing_node(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("SATELLITE_PELE_MODULE", raising=False)
     monkeypatch.delenv("SATELLITE_PELE_PATH", raising=False)

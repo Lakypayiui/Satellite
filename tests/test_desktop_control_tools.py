@@ -138,7 +138,14 @@ def test_tool_ids_match_manifest_and_contract() -> None:
 def test_desktop_act_schema_is_the_addendum_schema() -> None:
     schema = DesktopActTool().parameters_schema
     assert schema["required"] == ["action", "snapshot_id"]
-    assert set(schema["properties"]) == {"action", "target", "text", "snapshot_id"}
+    assert set(schema["properties"]) == {
+        "action",
+        "target",
+        "text",
+        "direction",
+        "amount",
+        "snapshot_id",
+    }
     assert schema["additionalProperties"] is False
     assert "coordinates" not in schema["properties"]
 
@@ -161,6 +168,41 @@ def test_list_windows_auto_port_is_not_human(tmp_path) -> None:
     result = run(tool.execute({}, _ctx(tmp_path, approval=AutoApprovalPort())))
     assert result.error_code == "approval_required"
     assert backend.list_calls == 0
+
+
+def test_unrestricted_auto_port_is_accepted(tmp_path) -> None:
+    """En ``unrestricted`` el humano ya decidió no recibir preguntas."""
+    backend = CountingBackend()
+    policy = DesktopControlPolicy(_settings(), allow_auto_approval=True)
+    tool = DesktopListWindowsTool(backend=backend, policy=policy)
+    result = run(tool.execute({}, _ctx(tmp_path, approval=AutoApprovalPort())))
+    assert result.success is True
+    assert backend.list_calls == 1
+
+
+def test_grant_survives_a_new_task_in_the_same_session(tmp_path) -> None:
+    """«Permitir para esta sesión» se guarda por sesión, no por tarea."""
+    policy = _policy()
+    port = FakeHumanPort()
+    tool = DesktopObserveTool(backend=FakeBackend(), policy=policy)
+
+    first = run(
+        tool.execute(
+            {"window": "win-main"},
+            _ctx(tmp_path, approval=port, session="s1", task="t1"),
+        )
+    )
+    assert first.success is True
+    asked = len(port.contexts)
+
+    second = run(
+        tool.execute(
+            {"window": "win-main"},
+            _ctx(tmp_path, approval=port, session="s1", task="t2"),
+        )
+    )
+    assert second.success is True
+    assert len(port.contexts) == asked  # no vuelve a preguntar
 
 
 def test_list_windows_human_approval_grants_and_sanitizes(tmp_path) -> None:
@@ -538,3 +580,10 @@ def test_schemas_expose_closed_action_allowlist() -> None:
         "scroll",
         "focus",
     }
+    assert set(schema["properties"]["direction"]["enum"]) == {
+        "up",
+        "down",
+        "left",
+        "right",
+    }
+    assert schema["properties"]["amount"]["minimum"] == 1

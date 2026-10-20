@@ -42,7 +42,6 @@ from satellite.agents.schemas import (
     PLAN_STEP_SCHEMA,
     PROPOSED_AGENT_SCHEMA,
 )
-from satellite.agents.templates import desktop_operator_template
 from satellite.context.compaction import summarize_turns
 from satellite.core.spec import AgentSpec
 from satellite.core.task import Task, TaskResult, TaskStatus
@@ -111,7 +110,7 @@ def test_example_prompt_templates_are_in_english(name: str) -> None:
 
 
 def test_desktop_operator_prompt_is_in_english() -> None:
-    system = desktop_operator_template().system_prompt
+    system = (PROMPTS / "desktop_operator.system.txt").read_text(encoding="utf-8")
     assert _SPANISH_PROMPT.search(system) is None, system
     assert "UNTRUSTED" in system
 
@@ -432,11 +431,13 @@ def test_agent_creator_schema_matches_its_prompt() -> None:
 
 
 def test_desktop_operator_prompt_and_schema_agree() -> None:
-    template = desktop_operator_template()
-    schema = template.output_schema or {}
+    registry = DefaultAgentRegistry()
+    registry.load_dir(PKG / "specs")
+    schema = registry.get("desktop_operator").output_schema or {}
+    prompt = (PROMPTS / "desktop_operator.system.txt").read_text(encoding="utf-8")
     assert schema.get("required")
     for key in schema["required"]:
-        assert key in template.system_prompt, key
+        assert key in prompt, key
 
 
 def test_agent_creator_asks_for_prompt_schema_coherence() -> None:

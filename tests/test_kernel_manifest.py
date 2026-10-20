@@ -83,6 +83,7 @@ def test_reserved_ids() -> None:
         "agent_creator",
         "skill_curator",
         "pele_diagram_agent",
+        "desktop_operator",
     }
     assert "run_python" in RESERVED_SKILL_IDS
     assert is_reserved("orchestrator")

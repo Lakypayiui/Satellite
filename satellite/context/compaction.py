@@ -526,12 +526,15 @@ def extractive_summary(turns, max_chars: int | None = None) -> str:
     return body[:budget]
 
 
-async def summarize_turns(turns, provider) -> tuple[str, str]:
+async def summarize_turns(
+    turns, provider, *, persistent_summary: str = ""
+) -> tuple[str, str]:
     """Resume turnos con el LLM; ``(resumen, método)``. Nunca lanza.
 
-    Si no hay proveedor o la llamada falla, devuelve el resumen determinista.
-    El resumen nunca es más largo que el texto que sustituye: si lo fuera,
-    compactar no serviría de nada.
+    ``persistent_summary`` es la memoria por turno (JSON de resúmenes) que debe
+    conservarse al compactar. Si no hay proveedor o la llamada falla, devuelve el
+    resumen determinista. El resumen nunca es más largo que el texto que sustituye:
+    si lo fuera, compactar no serviría de nada.
     """
     dropped_text = history_text(turns)
     budget = min(SUMMARY_MAX_CHARS, max(1, len(dropped_text)))
@@ -539,7 +542,9 @@ async def summarize_turns(turns, provider) -> tuple[str, str]:
     if provider is None or not turns:
         return fallback, ("determinista" if fallback else "sin-cambios")
 
-    conversation = wrap_data("conversacion", dropped_text)
+    memorias = str(persistent_summary or "").strip()
+    contenido = f"{memorias}\n\n{dropped_text}" if memorias else dropped_text
+    conversation = wrap_data("conversacion", contenido)
     request = LLMRequest(
         messages=(
             Message(

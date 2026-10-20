@@ -28,10 +28,12 @@ Discovery order: ``SATELLITE_PELE_MODULE`` → ``SATELLITE_PELE_PATH`` → the p
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -80,22 +82,93 @@ class PeleStatus:
         return bool(self.node and self.module)
 
 
+def _candidate_node_paths() -> list[str]:
+    """Rutas habituales de ``node`` cuando el PATH no lo incluye.
+
+    Una app de macOS lanzada desde Finder hereda un PATH mínimo
+    (``/usr/bin:/bin:/usr/sbin:/sbin``), así que ``shutil.which`` no ve una
+    instalación de nvm, Homebrew, Volta o asdf aunque exista. Se revisan esas
+    ubicaciones también en Linux y Windows (nvm-windows, Node por defecto).
+    """
+    candidates: list[str] = []
+    explicit = os.environ.get("SATELLITE_NODE")
+    if explicit:
+        candidates.append(explicit)
+    found = shutil.which("node")
+    if found:
+        candidates.append(found)
+    home = Path.home()
+    if sys.platform.startswith("win"):
+        for base in (
+            os.environ.get("ProgramFiles"),
+            os.environ.get("ProgramFiles(x86)"),
+            os.environ.get("LOCALAPPDATA"),
+        ):
+            if base:
+                candidates.append(str(Path(base) / "nodejs" / "node.exe"))
+                candidates.append(str(Path(base) / "Programs" / "nodejs" / "node.exe"))
+        candidates.append(str(home / "scoop" / "apps" / "nodejs" / "current" / "node.exe"))
+    else:
+        candidates.extend(
+            ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"]
+        )
+        candidates.extend(
+            sorted(
+                glob.glob(str(home / ".nvm" / "versions" / "node" / "*" / "bin" / "node")),
+                reverse=True,
+            )
+        )
+        candidates.extend(
+            [
+                str(home / ".volta" / "bin" / "node"),
+                str(home / ".asdf" / "shims" / "node"),
+                str(home / ".local" / "bin" / "node"),
+                str(home / "n" / "bin" / "node"),
+            ]
+        )
+    return candidates
+
+
 def find_node() -> str | None:
-    """Ruta del ejecutable ``node``, o ``None`` si no está en el PATH."""
-    return shutil.which("node")
+    """Ruta del ejecutable ``node`` (PATH y ubicaciones habituales), o ``None``."""
+    for candidate in _candidate_node_paths():
+        try:
+            path = Path(candidate).expanduser()
+        except (OSError, ValueError):
+            continue
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    return None
 
 
-def _npm_global_root() -> Path | None:
+def _npm_binary(node: str | None = None) -> str | None:
+    """Ejecutable ``npm``: el del PATH o el que acompaña al ``node`` hallado."""
+    found = shutil.which("npm")
+    if found:
+        return found
+    if node:
+        name = "npm.cmd" if sys.platform.startswith("win") else "npm"
+        candidate = Path(node).parent / name
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _npm_global_root(node: str | None = None) -> Path | None:
     """Raíz global de npm (``npm root -g``), o ``None`` si npm no está disponible."""
-    npm = shutil.which("npm")
+    npm = _npm_binary(node)
     if npm is None:
         return None
+    env = dict(os.environ)
+    if node:
+        env["PATH"] = str(Path(node).parent) + os.pathsep + env.get("PATH", "")
     try:
         proc = subprocess.run(
             [npm, "root", "-g"],
             capture_output=True,
             text=True,
             timeout=10,
+            env=env,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -105,20 +178,68 @@ def _npm_global_root() -> Path | None:
     return candidate if candidate.is_dir() else None
 
 
-def _module_candidates(explicit: str | None, project_root: Path | None) -> list[Path]:
+def _global_module_roots(node: str | None) -> list[Path]:
+    """Directorios ``node_modules`` globales probables (sin depender del PATH)."""
+    roots: list[Path] = []
+    resolved = _npm_global_root(node)
+    if resolved is not None:
+        roots.append(resolved)
+    if node:
+        node_path = Path(node)
+        if sys.platform.startswith("win"):
+            roots.append(node_path.parent / "node_modules")
+        else:
+            # <nvm>/versions/node/<v>/bin/node -> <nvm>/.../<v>/lib/node_modules
+            roots.append(node_path.parent.parent / "lib" / "node_modules")
+    home = Path.home()
+    if sys.platform.startswith("win"):
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            roots.append(Path(appdata) / "npm" / "node_modules")
+    else:
+        roots.extend(
+            [
+                Path("/opt/homebrew/lib/node_modules"),
+                Path("/usr/local/lib/node_modules"),
+                home / ".npm-global" / "lib" / "node_modules",
+                home / ".npm" / "lib" / "node_modules",
+            ]
+        )
+        for entry in glob.glob(str(home / ".nvm" / "versions" / "node" / "*" / "lib" / "node_modules")):
+            roots.append(Path(entry))
+    return roots
+
+
+def _self_bundled_module() -> Path | None:
+    """``pele`` instalado junto a la app de escritorio de este mismo repo.
+
+    En desarrollo, ``npm install`` dentro de ``desktop/`` deja ``pele`` ahí aunque
+    el proyecto abierto sea otro. El paquete Python vive en
+    ``<repo>/satellite/tools/diagram.py``, así que el repo está dos niveles arriba.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    candidate = repo_root / "desktop" / "node_modules" / "pele" / "dist" / "pele.js"
+    return candidate if candidate.is_file() else None
+
+
+def _module_candidates(
+    explicit: str | None, project_root: Path | None, node: str | None = None
+) -> list[Path]:
     """Rutas candidatas a ``pele/dist/pele.js``, en orden de prioridad."""
     candidates: list[Path] = []
     if explicit:
         raw = Path(explicit).expanduser()
-        if raw.suffix == ".js" or raw.is_file():
+        if raw.suffix in (".js", ".mjs") or raw.is_file():
             candidates.append(raw)
         candidates.append(raw / "dist" / "pele.js")
         candidates.append(raw / "pele" / "dist" / "pele.js")
         candidates.append(raw / "node_modules" / "pele" / "dist" / "pele.js")
     if project_root is not None:
         candidates.append(Path(project_root) / "node_modules" / "pele" / "dist" / "pele.js")
-    root = _npm_global_root()
-    if root is not None:
+    bundled = _self_bundled_module()
+    if bundled is not None:
+        candidates.append(bundled)
+    for root in _global_module_roots(node):
         candidates.append(root / "pele" / "dist" / "pele.js")
     for entry in os.environ.get("NODE_PATH", "").split(os.pathsep):
         if entry.strip():
@@ -126,10 +247,12 @@ def _module_candidates(explicit: str | None, project_root: Path | None) -> list[
     return candidates
 
 
-def resolve_pele_module(project_root: Path | None = None) -> Path | None:
+def resolve_pele_module(
+    project_root: Path | None = None, *, node: str | None = None
+) -> Path | None:
     """Ubica el ``pele/dist/pele.js`` instalado por el usuario, o ``None``."""
     explicit = os.environ.get("SATELLITE_PELE_MODULE") or os.environ.get("SATELLITE_PELE_PATH")
-    for candidate in _module_candidates(explicit, project_root):
+    for candidate in _module_candidates(explicit, project_root, node):
         if candidate.is_file():
             return candidate
     return None
@@ -138,7 +261,7 @@ def resolve_pele_module(project_root: Path | None = None) -> Path | None:
 def pele_status(project_root: Path | None = None) -> PeleStatus:
     """Diagnóstico: qué falta para poder renderizar (Node / módulo pele)."""
     node = find_node()
-    module = resolve_pele_module(project_root)
+    module = resolve_pele_module(project_root, node=node)
     return PeleStatus(
         node=node,
         module=module,
@@ -165,7 +288,7 @@ def render_mermaid(
     node = node or find_node()
     if node is None:
         return RenderOutcome(ok=False, error_code="pele_unavailable", error=SETUP_INSTRUCTIONS)
-    module = module or resolve_pele_module(project_root)
+    module = module or resolve_pele_module(project_root, node=node)
     if module is None:
         return RenderOutcome(ok=False, error_code="pele_unavailable", error=SETUP_INSTRUCTIONS)
     if not HELPER_PATH.is_file():
@@ -179,6 +302,10 @@ def render_mermaid(
         request["outPath"] = str(out_path)
     if options:
         request["options"] = options
+    # El PATH del proceso puede ser mínimo (app de macOS desde Finder); el helper
+    # y sus hijos deben poder resolver el mismo node aunque no esté en el PATH.
+    env = dict(os.environ)
+    env["PATH"] = str(Path(node).parent) + os.pathsep + env.get("PATH", "")
     try:
         proc = subprocess.run(
             [node, str(HELPER_PATH)],
@@ -186,6 +313,7 @@ def render_mermaid(
             capture_output=True,
             text=True,
             timeout=timeout_s,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         return RenderOutcome(ok=False, error_code="pele_timeout", error="pele tardó demasiado")

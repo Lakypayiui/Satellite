@@ -44,6 +44,7 @@ from satellite.orchestration.chat_detector import (
     async_is_chat_goal,
     classify_project_question,
     has_task_hint,
+    is_desktop_action,
     is_project_overview,
 )
 from satellite.orchestration.diagram_intent import is_diagram_request
@@ -219,6 +220,9 @@ class DefaultOrchestrator(Orchestrator):
         # Capacidad condicional de diagramas (Pele): si está, las peticiones de
         # diagrama/arquitectura se enrutan aquí en vez de al planificador.
         self.diagram_flow = None
+        # Ruta determinista para control del escritorio (desktop_operator). Sólo se
+        # inyecta en superficies con humano; MCP no la tiene.
+        self.desktop_flow = None
         self.max_replans = 1
 
     async def execute(self, task: Task) -> TaskResult:
@@ -299,6 +303,13 @@ class DefaultOrchestrator(Orchestrator):
         # el planificador. Sólo dispara cuando el mensaje encaja de verdad.
         if self.diagram_flow is not None and not execute_choice and is_diagram_request(task.goal):
             routed = await self.diagram_flow.run(task)
+            if routed is not None:
+                return await self._finish(task, routed)
+
+        # Control del escritorio: "abre Safari y entra a Google Docs" se enruta al
+        # agente base, sin depender de que el planificador reconozca la capacidad.
+        if self.desktop_flow is not None and not execute_choice and is_desktop_action(task.goal):
+            routed = await self.desktop_flow.run(task)
             if routed is not None:
                 return await self._finish(task, routed)
 
@@ -574,6 +585,7 @@ class DefaultOrchestrator(Orchestrator):
         from satellite.orchestration.planner_prompt import render_history
 
         conversacion = render_history(task.metadata.get("history")).strip()
+        memoria = str(task.metadata.get("session_memory") or "").strip()
         language = detect_user_language(task.goal, task.metadata.get("history")) or "es"
         project_context = str(task.metadata.get("project_context") or "").strip()
         project_intent = None
@@ -618,6 +630,8 @@ class DefaultOrchestrator(Orchestrator):
             "\"and why\"), resolve it with the conversation below. If the antecedent is "
             "genuinely missing, say so instead of inventing it.",
         ]
+        if memoria:
+            trozos.append(memoria)
         if conversacion:
             trozos.append(f"RECENT CONVERSATION:\n{conversacion}")
         if project_context:

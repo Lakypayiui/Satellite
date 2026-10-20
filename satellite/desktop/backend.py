@@ -80,6 +80,53 @@ class BackendError(RuntimeError):
         self.status = status
 
 
+def _desktop_backend_status() -> dict:
+    """Disponibilidad del backend nativo de control para esta plataforma.
+
+    Sólo diagnostica: no concede permisos ni crea el adaptador. ``trusted`` se
+    rellena donde la plataforma sabe responder (macOS: permiso de Accesibilidad).
+    """
+    import sys
+
+    platform = sys.platform
+    try:
+        if platform.startswith("darwin"):
+            from satellite.desktop_control import macos
+
+            return {
+                "platform": platform,
+                "available": macos.ax_available(),
+                "trusted": macos.ax_trusted(),
+                "extra": macos.EXTRA,
+            }
+        if platform.startswith("win"):
+            from satellite.desktop_control import windows
+
+            return {
+                "platform": platform,
+                "available": windows.pywinauto_available(),
+                "trusted": None,
+                "extra": windows.EXTRA,
+            }
+        if platform.startswith("linux"):
+            from satellite.desktop_control import linux
+
+            return {
+                "platform": platform,
+                "available": linux.atspi_available(),
+                "trusted": None,
+                "extra": linux.EXTRA,
+            }
+    except Exception as exc:  # noqa: BLE001 — el diagnóstico nunca debe romper la vista
+        return {"platform": platform, "available": False, "trusted": None, "error": str(exc)}
+    return {
+        "platform": platform,
+        "available": False,
+        "trusted": None,
+        "error": "plataforma sin backend de control de escritorio",
+    }
+
+
 def to_jsonable(value: Any) -> Any:
     """Convierte lo que devuelve el runtime a algo serializable, sin inventar datos."""
     if isinstance(value, Enum):
@@ -553,6 +600,26 @@ class DesktopBackend:
             "name": info.name,
             "pinned": info.pinned,
             "archived": info.archived,
+            "current": store.active_id(),
+            "sessions": self.sessions(project_root),
+        }
+
+    def delete_session(self, session_id: str, project_root=None) -> dict:
+        """Borra una conversación y sus turnos (irreversible). Devuelve el estado nuevo."""
+        store = SessionStore(self.resolve(project_root))
+        if store.find(session_id) is None:
+            raise BackendError(
+                "session_not_found", f"no existe la sesión {session_id!r}", 404
+            )
+        era_activa = store.active_id() == session_id
+        try:
+            self.session(project_root).delete_session(session_id)
+        except Exception:  # noqa: BLE001 — el puntero del store es suficiente
+            store.delete(session_id)
+        if era_activa:
+            self._plans.pop(str(self.resolve(project_root)), None)
+        return {
+            "session_id": session_id,
             "current": store.active_id(),
             "sessions": self.sessions(project_root),
         }
@@ -1178,6 +1245,10 @@ class DesktopBackend:
         selection = resolve_vision_selection(root)
         return {
             "enabled": settings.enabled,
+            # Allowlist local del host: sin apps aquí, la política deniega todo.
+            "allowed_processes": list(settings.allowed_processes),
+            # Diagnóstico del backend nativo de esta plataforma.
+            "backend": _desktop_backend_status(),
             "vision": {
                 "provider": selection.provider,
                 "model": selection.model,
@@ -1202,20 +1273,24 @@ class DesktopBackend:
         self,
         *,
         enabled: bool | None = None,
+        allowed_processes: list[str] | None = None,
         vision_provider: str | None = None,
         vision_model: str | None = None,
         project_root=None,
     ) -> dict:
-        """Activa/desactiva (host local) y/o elige proveedor/modelo de visión (config).
+        """Activa/desactiva y edita la allowlist local (host) y/o la visión.
 
-        Escribir esto **no** concede permisos: los gates de F4 (aprobación, grants,
-        topes y auditoría) siguen aplicándose. MCP no tiene esta ruta.
+        ``allowed_processes`` es la lista de apps que la política puede considerar
+        (la denylist siempre gana). Escribirla **no** concede permisos en sí: cada
+        observación/acción sigue pasando por aprobación humana, grants, topes y
+        auditoría. MCP no tiene esta ruta.
         """
         from dataclasses import replace as dataclass_replace
 
         from satellite.config import providers as provider_config
         from satellite.desktop_control.config import (
             load_desktop_settings,
+            normalize_app,
             write_desktop_settings,
         )
         from satellite.desktop_control.vision import (
@@ -1225,12 +1300,27 @@ class DesktopBackend:
 
         root = self.resolve(project_root)
         changed = False
-        if enabled is not None:
+        if enabled is not None or allowed_processes is not None:
             settings = load_desktop_settings()
-            if bool(enabled) != settings.enabled:
-                write_desktop_settings(
-                    dataclass_replace(settings, enabled=bool(enabled))
-                )
+            updates: dict = {}
+            if enabled is not None and bool(enabled) != settings.enabled:
+                updates["enabled"] = bool(enabled)
+            if allowed_processes is not None:
+                names: list[str] = []
+                for item in allowed_processes:
+                    name = normalize_app(item)
+                    if name and name not in names:
+                        names.append(name)
+                denied = [name for name in names if name in settings.denied_apps]
+                if denied:
+                    raise BackendError(
+                        "app_denied",
+                        f"app vetada por la config local: {denied[0]!r}",
+                        422,
+                    )
+                updates["allowed_processes"] = tuple(names)
+            if updates:
+                write_desktop_settings(dataclass_replace(settings, **updates))
                 changed = True
         if vision_provider is not None or vision_model is not None:
             current = resolve_vision_selection(root)
