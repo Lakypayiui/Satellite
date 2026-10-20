@@ -7,10 +7,10 @@ y nada fuera del directorio de datos.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 from pathlib import Path
 
+from satellite.core.atomic import atomic_write_text
 from satellite.core.errors import SpecValidationError
 from satellite.core.spec import AgentSpec
 
@@ -81,9 +81,7 @@ class AgentCatalogStore:
         return prompts
 
     def _atomic_write(self, path: Path, content: str) -> None:
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(content, encoding="utf-8")
-        os.replace(tmp, path)
+        atomic_write_text(path, content)
 
     def _quarantine(self, file: Path, reason: str) -> None:
         self.quarantine_dir.mkdir(parents=True, exist_ok=True)

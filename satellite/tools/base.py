@@ -52,6 +52,10 @@ class ToolContext:
     # Nivel de sandbox anunciado. Se usa para fallar cerrado cuando un nivel aislado
     # (N1) fue declarado pero no se inyectó ningún runner.
     sandbox_level: str = ""
+    # Parent-only spawn manager and child marker. The marker is enforced in code:
+    # a child has no manager and its tool calls are checked against a write guard.
+    spawn_manager: object | None = None
+    is_child: bool = False
 
 
 def granted_for_this_call(argv: list[str] | tuple[str, ...], tool_ctx) -> bool:

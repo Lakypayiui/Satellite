@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import ipaddress
 import json
-import os
 import secrets
 from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from satellite.core.atomic import atomic_write_text
 from satellite.kernel.paths import resolve_paths
 
 FILE_NAME = "safe_proxy.json"
@@ -372,14 +372,11 @@ def write_settings(settings: SafeProxySettings, path: Path | str | None = None) 
     if not isinstance(settings, SafeProxySettings):
         raise ValueError("write_settings espera SafeProxySettings")
     target = Path(path) if path is not None else default_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(settings.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
-    try:
-        os.chmod(tmp, 0o600)
-    except OSError:
-        pass
-    tmp.replace(target)
+    atomic_write_text(
+        target,
+        json.dumps(settings.to_dict(), ensure_ascii=False, indent=2),
+        mode=0o600,
+    )
     return target
 
 

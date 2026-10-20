@@ -73,6 +73,29 @@ def test_a_follow_up_reaches_the_model_with_the_previous_turns(tmp_path: Path) -
     assert "explícamela" in enviado
 
 
+def test_direct_answer_reads_a_named_file_on_demand(tmp_path: Path) -> None:
+    """Nombrar `test.py` no puede quedarse en el listado: se lee su contenido."""
+    from satellite.context.engine import DefaultContextEngine
+    from satellite.core.task import Task
+
+    (tmp_path / "test.py").write_text(
+        "# test.py\n\nprint('contenido unico')\n", encoding="utf-8"
+    )
+    provider = FakeLLM(script=[{"content": "Es un script de prueba."}])
+    services = RuntimeServices(
+        registry=DefaultAgentRegistry(),
+        provider=provider,
+        context=DefaultContextEngine(tmp_path),
+    )
+    orch = DefaultOrchestrator(_PlannerQueNoPlanifica(), _RunnerQueNoCorre(), services)
+
+    run(orch._answer_direct(Task(goal="¿Qué hace test.py?", project_root=tmp_path)))
+
+    enviado = _enviado(provider)
+    assert "FILE CONTENT READ FOR THIS QUESTION" in enviado
+    assert "contenido unico" in enviado
+
+
 def test_without_history_there_is_no_conversation_block(tmp_path: Path) -> None:
     """El primer turno no paga tokens de conversación que no existe."""
     provider = FakeLLM(script=[{"content": "hola"}])

@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from satellite.core.atomic import atomic_write_text
 from satellite.core.language import OUTPUT_LANGUAGE_RULE
 from satellite.core.messages import LLMRequest, Message, Role
 from satellite.kernel.policy import CompactionConfig
@@ -265,10 +266,9 @@ def remember_window(project_root, model: str, tokens: int) -> None:
             data = {}
     data[str(model)] = int(tokens or 0)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(path)
+        atomic_write_text(
+            path, json.dumps(data, ensure_ascii=False, indent=2)
+        )
     except OSError:
         return
 
@@ -295,11 +295,7 @@ def forget_window(project_root, model: str) -> None:
         return
     data.pop(model, None)
     try:
-        import os
-
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, path)
+        atomic_write_text(path, json.dumps(data, ensure_ascii=False))
     except OSError:
         return
 

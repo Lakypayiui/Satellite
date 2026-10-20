@@ -15,9 +15,10 @@ por la capa de observación.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
+
+from satellite.core.atomic import atomic_write_text
 
 OBSERVATIONS_FILE = Path(".satellite") / "state" / "desktop_observations.json"
 MAX_PREVIOUS_LINES = 10
@@ -122,11 +123,8 @@ class ObservationHistory:
         if self.path is None:
             return
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-            tmp.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            atomic_write_text(
+                self.path, json.dumps(data, ensure_ascii=False, indent=2)
             )
-            os.replace(tmp, self.path)
         except OSError:
             return

@@ -115,6 +115,106 @@ def test_max_turns_respected(tmp_path: Path) -> None:
     assert len(provider.requests) == 3
 
 
+def test_agent_inherits_the_task_id_into_delegation_context(tmp_path: Path) -> None:
+    """Directly-created agents start with an empty root context; the task id must win."""
+    from satellite.orchestration.delegation import DelegationContext
+
+    class Manager:
+        def root_context(self):
+            return DelegationContext(task_id="")
+
+    spec = AgentSpec(
+        id="coder",
+        name="Coder",
+        capabilities=("write_code",),
+        prompt_ref="coder",
+        tools=(),
+    )
+    agent = LLMAgent(
+        spec=spec,
+        system_prompt="System",
+        user_template="Task: {task}",
+        tools=[],
+        provider=FakeLLM(script=[{"content": "ok"}]),
+        project_root=tmp_path,
+        delegation_manager=Manager(),
+    )
+
+    run(agent.execute({"node_id": "n1"}, AgentContext(task_id="task-123")))
+
+    assert agent.delegation_ctx is not None
+    assert agent.delegation_ctx.task_id == "task-123"
+
+
+def test_propose_skill_sees_successful_run_of_the_same_task(tmp_path: Path) -> None:
+    """`task_state` must live across tool calls, or propose_skill can never be used."""
+    from satellite.tools.skills import ProposeSkillTool
+
+    class FakeRunPython(Tool):
+        @property
+        def id(self) -> str:
+            return "run_python"
+
+        @property
+        def description(self) -> str:
+            return "fake python runner"
+
+        async def execute(self, arguments: dict, tool_ctx: ToolContext) -> ToolResult:
+            return ToolResult(success=True, output={"stdout": "ok"})
+
+    spec = AgentSpec(
+        id="coder",
+        name="Coder",
+        capabilities=("write_code", "run_tests"),
+        prompt_ref="coder",
+        tools=("run_python", "propose_skill"),
+        max_turns=3,
+    )
+    registry = DefaultToolRegistry(
+        policy=DefaultSecurityPolicy(allowed_tools={"run_python", "propose_skill"})
+    )
+    registry.register(FakeRunPython())
+    registry.register(ProposeSkillTool())
+    provider = FakeLLM(
+        script=[
+            {"tool_calls": [{"id": "c1", "name": "run_python", "arguments": {}}]},
+            {
+                "tool_calls": [
+                    {
+                        "id": "c2",
+                        "name": "propose_skill",
+                        "arguments": {
+                            "id": "run_tests",
+                            "description": "Runs the project tests.",
+                            "script": "print('ok')",
+                            "rationale": "the run succeeded",
+                        },
+                    }
+                ]
+            },
+            {"content": "done"},
+        ]
+    )
+    agent = LLMAgent(
+        spec=spec,
+        system_prompt="System",
+        user_template="Task: {task}",
+        tools=registry.list_for(spec.tools),
+        provider=provider,
+        tool_registry=registry,
+        policy=DefaultSecurityPolicy(allowed_tools={"run_python", "propose_skill"}),
+        project_root=tmp_path,
+    )
+
+    context = AgentContext()
+    result = run(agent.execute({"node_id": "n1", "goal": "codifica"}, context))
+
+    assert result.status is AgentStatus.OK
+    assert [call.success for call in result.tool_calls] == [True, True]
+    assert context.task_state["successful_runs"]
+    assert context.task_state["pending_skills"][0]["id"] == "run_tests"
+
+
 def test_agent_with_tools_survives_metered_provider(tmp_path: Path) -> None:
     """Regresión: el bucle de tools no debe pisar el ``CallContext`` de la llamada.
 

@@ -85,6 +85,9 @@ class Turn:
     content: str
     task_id: str = ""
     status: str = ""
+    # Artifact produced by the turn (currently a rendered Mermaid diagram). Persisted
+    # with the conversation so the graphical chat can show it again after a reload.
+    diagram: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -92,15 +95,18 @@ class Turn:
             "content": self.content,
             "task_id": self.task_id,
             "status": self.status,
+            "diagram": dict(self.diagram) if isinstance(self.diagram, dict) else None,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "Turn":
+        raw_diagram = d.get("diagram")
         return cls(
             role=str(d.get("role", "")),
             content=str(d.get("content", "")),
             task_id=str(d.get("task_id", "")),
             status=str(d.get("status", "")),
+            diagram=dict(raw_diagram) if isinstance(raw_diagram, dict) else None,
         )
 
 
@@ -118,6 +124,39 @@ class ChatReply:
     metrics: dict = field(default_factory=dict)
     # @menciones del mensaje: qué se adjuntó, qué está fuera y qué no existía (para la UI).
     context: dict = field(default_factory=dict)
+    # Artefacto del turno (diagrama renderizado o su fuente Mermaid) para la UI.
+    diagram: dict | None = None
+
+
+def _diagram_payload(output: dict | None) -> dict | None:
+    """Diagram metadata to persist with the turn (``None`` for other outputs).
+
+    The dedicated diagram flow sets ``mode="diagram"``. A node that used the
+    ``render_diagram`` tool may return the tool output directly (``path`` +
+    ``rendered``), so that shape is accepted too.
+    """
+    if not isinstance(output, dict):
+        return None
+    is_diagram = output.get("mode") == "diagram" or bool(output.get("svg_path"))
+    if not is_diagram:
+        tool_path = output.get("path")
+        is_diagram = (
+            bool(output.get("rendered"))
+            and isinstance(tool_path, str)
+            and tool_path.lower().endswith(".svg")
+        )
+    if not is_diagram:
+        return None
+    payload: dict = {}
+    for key in ("rendered", "svg_path", "mermaid", "diagram_type"):
+        value = output.get(key)
+        if isinstance(value, bool) or (isinstance(value, str) and value.strip()):
+            payload[key] = value
+    if "svg_path" not in payload:
+        tool_path = output.get("path")
+        if isinstance(tool_path, str) and tool_path.lower().endswith(".svg"):
+            payload["svg_path"] = tool_path
+    return payload or None
 
 
 class ChatSession:
@@ -223,17 +262,30 @@ class ChatSession:
             return False
         return self._store().rename(self.session_id, name)
 
-    def add(self, role: str, content: str, *, task_id: str = "", status: str = "") -> Turn:
+    def add(
+        self,
+        role: str,
+        content: str,
+        *,
+        task_id: str = "",
+        status: str = "",
+        diagram: dict | None = None,
+    ) -> Turn:
         """Añade un turno (sanitizado). El historial es **append-only**: nunca se
 
         reescribe ni se reordena; el único punto que puede acortarlo es
         :meth:`compact_now`/:meth:`compact`. Se persiste al vuelo.
         """
+        # User input is capped to keep the stored conversation bounded. Assistant
+        # replies are NOT: capping them cut long answers in half (the UI showed
+        # "[contenido truncado]" right after 1200 chars).
+        limit = MAX_TURN_CHARS if role == "user" else None
         turn = Turn(
             role=role,
-            content=sanitize(content, max_chars=MAX_TURN_CHARS),
+            content=sanitize(content, max_chars=limit),
             task_id=task_id,
             status=status,
+            diagram=diagram,
         )
         self.history.append(turn)
         self.save()
@@ -516,11 +568,13 @@ class ChatSession:
             # El aviso va delante para que no se pierda: si una ruta externa se denegó,
             # el usuario tiene que saberlo aunque la respuesta sea correcta.
             reply_text = "\n\n".join([*notas, reply_text])
+        diagram = _diagram_payload(result.output)
         self.add(
             "assistant",
             reply_text,
             task_id=result.task_id,
             status=result.status.value,
+            diagram=diagram,
         )
         # Si este turno ofreció alternativas, quedan pendientes para el siguiente.
         self._pending_plan = self._plan_from_result(result)
@@ -533,6 +587,7 @@ class ChatSession:
             compaction=compaction.to_dict() if compaction else None,
             metrics=result.metrics.to_dict() if result.metrics else {},
             context=contexto,
+            diagram=diagram,
         )
 
     def _mention_report(self, menciones, externo: list[dict]) -> dict:

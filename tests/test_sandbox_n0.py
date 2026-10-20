@@ -20,6 +20,10 @@ from satellite.sandbox.setup import (
     setup_instructions,
 )
 from satellite.sandbox.subprocess_sandbox import SubprocessSandbox
+from satellite.sandbox.levels import resolve_sandbox
+from satellite.security.policy import DefaultSecurityPolicy
+from satellite.tools.base import ToolContext
+from satellite.tools.terminal import RunCommandTool
 
 
 def run(coro):
@@ -36,6 +40,33 @@ def test_n0_runs_and_captures(tmp_path: Path) -> None:
     )
     assert result.success is True
     assert "2" in result.stdout
+
+
+def test_run_command_uses_the_runtime_venv_python(tmp_path: Path) -> None:
+    """A bare `python` in a command should be the interpreter running Satellite.
+
+    Without this, `python -m pytest` in a venv-based runtime used the OS Python and
+    failed with "No module named pytest".
+    """
+    import pytest
+
+    if sys.prefix == sys.base_prefix:
+        pytest.skip("el intérprete de pruebas no está en un venv")
+    ctx = ToolContext(
+        project_root=tmp_path,
+        policy=DefaultSecurityPolicy(
+            allowed_tools={"run_command"}, allow_terminal=True, allowed_commands={"python"}
+        ),
+        sandbox=resolve_sandbox("N0"),
+        sandbox_level="N0",
+    )
+    result = run(
+        RunCommandTool().execute(
+            {"command": 'python -c "import sys; print(sys.executable)"'}, ctx
+        )
+    )
+    assert result.success is True, result.error
+    assert Path(result.output["stdout"].strip()).resolve() == Path(sys.executable).resolve()
 
 
 def test_n0_timeout(tmp_path: Path) -> None:

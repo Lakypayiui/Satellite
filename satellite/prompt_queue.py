@@ -11,10 +11,11 @@ La cancelación es independiente: cancelar corta el turno actual, no vacía la c
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
+
+from satellite.core.atomic import atomic_write_text
 
 QUEUE_FILE = Path(".satellite") / "state" / "queue.json"
 MAX_ITEMS = 50
@@ -53,11 +54,9 @@ def _normalize(item: dict) -> dict:
 
 
 def _save(root: Path | str, items: list[dict]) -> None:
-    path = _path(root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_text(
+        _path(root), json.dumps(items, ensure_ascii=False, indent=2)
+    )
 
 
 def list_items(root: Path | str) -> list[dict]:

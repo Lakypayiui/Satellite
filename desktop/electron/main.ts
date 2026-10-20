@@ -63,6 +63,7 @@ const RUTAS = [
   "/status",
   "/projects",
   "/sessions",
+  "/diagrams",
   "/messages",
   "/plan",
   "/approvals",

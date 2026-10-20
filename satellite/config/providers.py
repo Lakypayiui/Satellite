@@ -23,12 +23,14 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from satellite.config.catalog import ANTHROPIC, OPENAI
+from satellite.core.atomic import atomic_write_text
 from satellite.kernel.paths import resolve_paths
 
 CONFIG_PATH = Path(".satellite") / "config" / "config.json"
 
-# Roles que el runtime sabe resolver (``llm.<rol>``) y el orden de la UI.
-ROLES: tuple[str, ...] = ("orchestrator", "context", "agents", "creator")
+# Roles the runtime can resolve (``llm.<role>``), in UI order. ``subagents`` only
+# affects children; the parent and orchestrator keep their own role/provider.
+ROLES: tuple[str, ...] = ("orchestrator", "context", "agents", "creator", "subagents")
 
 
 def config_path(project_root: Path | str) -> Path:
@@ -51,10 +53,7 @@ def load_config(project_root: Path | str) -> dict:
 def save_config(project_root: Path | str, data: dict) -> Path:
     """Escribe ``config.json`` de forma atómica."""
     path = config_path(project_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    atomic_write_text(path, json.dumps(data, indent=2, ensure_ascii=False))
     return path
 
 
@@ -76,12 +75,11 @@ def _load_global() -> dict:
 
 def _save_global(data: dict) -> Path:
     path = global_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    if os.name != "nt":
-        tmp.chmod(0o600)
-    tmp.replace(path)
+    atomic_write_text(
+        path,
+        json.dumps(data, indent=2, ensure_ascii=False),
+        mode=None if os.name == "nt" else 0o600,
+    )
     return path
 
 

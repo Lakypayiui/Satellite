@@ -11,7 +11,7 @@ import { createInterface } from "node:readline";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -21,6 +21,7 @@ const python =
     ? path.join(raiz, ".venv", "Scripts", "python.exe")
     : path.join(raiz, ".venv", "bin", "python"));
 
+const proyectoPropio = !process.env.SATELLITE_PROJECT;
 const proyecto = process.env.SATELLITE_PROJECT ?? mkdtempSync(path.join(tmpdir(), "satellite-smoke-"));
 
 let fallos = 0;
@@ -93,6 +94,25 @@ try {
   comprobar("lista de sesiones", sesiones.estado === 200 && Array.isArray(sesiones.data.sessions));
   comprobar("la sesión por defecto existe desde el principio", Boolean(sesiones.data.current));
 
+  // The chat shows diagrams by fetching their SVG from the project.
+  const diagramas = path.join(proyecto, "diagrams");
+  const diagramaArchivo = path.join(diagramas, `smoke-${process.pid}.svg`);
+  mkdirSync(diagramas, { recursive: true });
+  writeFileSync(
+    diagramaArchivo,
+    '<svg xmlns="http://www.w3.org/2000/svg"><text>ok</text></svg>',
+    "utf8",
+  );
+  const diagrama = await json(
+    `/api/diagrams?path=${encodeURIComponent(path.relative(proyecto, diagramaArchivo))}`,
+    { headers: conToken },
+  );
+  rmSync(diagramaArchivo, { force: true });
+  comprobar(
+    "diagrama SVG servido",
+    diagrama.estado === 200 && String(diagrama.data.svg ?? "").includes("<svg"),
+  );
+
   const tareas = await json("/api/tasks", { headers: conToken });
   comprobar("lista de tareas", tareas.estado === 200 && Array.isArray(tareas.data.tasks));
 
@@ -135,6 +155,11 @@ try {
 } finally {
   hijo.kill();
   await new Promise((resolve) => setTimeout(resolve, 300));
+  // The smoke creates its own temp project: delete it instead of leaving
+  // satellite-smoke-* directories behind in the OS temp folder.
+  if (proyectoPropio) {
+    rmSync(proyecto, { recursive: true, force: true });
+  }
 }
 
 // --- coherencia: lo que llama la interfaz tiene que estar permitido en el proceso principal ---
@@ -212,6 +237,12 @@ try {
   comprobar(
     "el preload expone la intensidad",
     preload.includes("initialIntensity") && preload.includes("setIntensity"),
+  );
+
+  const html = readFileSync(path.join(raiz, "desktop", "index.html"), "utf8");
+  comprobar(
+    "la CSP permite los SVG en data: del chat",
+    /img-src[^;]*data:/.test(html),
   );
 
   const estilos = readFileSync(path.join(raiz, "desktop", "src", "styles.css"), "utf8");

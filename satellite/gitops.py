@@ -22,6 +22,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from satellite.core.atomic import atomic_write_text
+
 GIT_TIMEOUT_S = 30
 WORKTREE_TIMEOUT_S = 120
 WORKTREES_DIR = Path(".satellite") / "worktrees"
@@ -460,7 +462,4 @@ def set_active_workdir(root: Path | str, path: str | None) -> Path | None:
 
 
 def _write_json(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))

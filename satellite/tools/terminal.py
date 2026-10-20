@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shlex
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -192,17 +193,32 @@ class RunCommandTool(Tool):
         if not isinstance(cmd_raw, str) or not cmd_raw.strip():
             return ToolResult(success=False, error="se requiere el argumento 'command'")
         argv = shlex.split(cmd_raw)
+        requested = list(argv)  # what the user/model asked for (policy identity)
         from satellite.sandbox.levels import background_error, execution_sandbox
         from satellite.tools.base import granted_for_this_call
 
         policy = tool_ctx.policy
-        if policy is not None and not policy.check_command(argv) and not granted_for_this_call(argv, tool_ctx):
+        if policy is not None and not policy.check_command(requested) and not granted_for_this_call(requested, tool_ctx):
             return ToolResult(
                 success=False,
-                error=f"permiso denegado: comando '{argv[0]}' no permitido",
+                error=f"permiso denegado: comando '{requested[0]}' no permitido",
                 error_code="command_not_allowed",
-                output={"command": cmd_raw, "binary": argv[0], "argv": list(argv)},
+                output={"command": cmd_raw, "binary": requested[0], "argv": list(requested)},
             )
+
+        # When Satellite runs inside a venv, a bare `python` in a command should use
+        # that venv (the same interpreter as the runtime), not whatever `python` the
+        # OS PATH happens to expose. Policy still sees the requested `python`; only
+        # the executed argv is rewritten. A Docker level keeps it as-is because the
+        # host path does not exist inside the container.
+        if (
+            argv
+            and sys.prefix != sys.base_prefix
+            and Path(argv[0]).name.lower() in {"python", "python.exe", "python3", "python3.exe"}
+        ):
+            sandbox, _ = execution_sandbox(tool_ctx)
+            if sandbox is None or getattr(sandbox, "level", None) is not SandboxLevel.N1:
+                argv[0] = sys.executable
         base = tool_ctx.workdir or tool_ctx.project_root
         cwd = base
         rel = arguments.get("cwd_relative")

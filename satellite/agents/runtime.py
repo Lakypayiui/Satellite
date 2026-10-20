@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import replace
@@ -9,6 +10,7 @@ from pathlib import Path
 
 from satellite.agents.base import Agent, AgentContext
 from satellite.agents.prompts import render_system, render_template
+from satellite.agents.subagents import SpawnGuard, SpawnManager
 from satellite.core.context_models import ContextBundle
 from satellite.core.events import EventType, ExecutionEvent
 from satellite.core.language import output_language_hint, with_output_language
@@ -31,6 +33,24 @@ from satellite.security.base import SecurityPolicy
 from satellite.tools.base import Tool, ToolContext, ToolRegistry
 
 
+SPAWN_RULES = """# SUBAGENTS
+You can create up to four subagents with `spawn_agent`, but splitting is the exception, not the rule. Decide at the start, before writing code or calling tools:
+- Solve the task yourself (no children) when it is short, sequential (each step needs the previous one), touches few files or lines, coordination and contract definition would cost more than the time saved, or you are unsure.
+- Split only when it is clearly large and separable into independent parts: reading several files that do not depend on each other, writing several files from scratch, or a very long code task with separable parts.
+- When in doubt, do not split.
+
+If you decide to split:
+1. Create only the children you really need, between one and four.
+2. Define the contracts before spawning: function signatures, filenames, data formats and expected imports.
+3. Give each child exactly one file or one clearly delimited region as exclusive ownership. Never assign the same file or function to two children. If two children must touch the same file, assign disjoint regions, instruct them to make targeted edits instead of rewriting the file, and state explicitly which parts belong to the other child.
+4. Each child message must include its exact task, the file or region it owns, the files it may only read, the interfaces with the other children's work (which functions will exist, with which signatures, and that it must NOT implement them), and the restrictions on what it must not touch. It must be enough to work without hallucinating or overwriting another child's work, but must not include the full task context.
+5. You count as one of the five agents and also work on your part while the children run.
+6. When all children finish, integrate and verify that the result works as a whole (imports, signatures, consistency), fix incompatibilities, and report a short summary to the orchestrator.
+7. If a child fails or times out, you receive `failed` with the reason. Decide whether to retry, do that part yourself or report the error. The other children are not cancelled.
+8. If you decide not to split, do the whole task yourself and report normally without mentioning subagents.
+"""
+
+
 def build_system_prompt(
     system_prompt: str,
     *,
@@ -38,6 +58,7 @@ def build_system_prompt(
     tools: list[Tool] | None = None,
     tools_text: str | None = None,
     can_call=None,
+    spawn_enabled: bool = False,
 ) -> str:
     """System **estático**: resuelve ``{tools}`` y ``{output_schema}`` (build time).
 
@@ -68,6 +89,8 @@ def build_system_prompt(
             "\n\n# DELEGATION\nYou may delegate to these agents with the "
             "`delegate(agent_id, task)` tool:\n" + lines
         )
+    if spawn_enabled and "# SUBAGENTS" not in rendered:
+        rendered += "\n\n" + SPAWN_RULES
     if "untrusted" not in rendered.lower():
         rendered = f"# UNTRUSTED DATA\n{UNTRUSTED_RULE}\n\n{rendered}"
     if "outside the project" not in rendered.lower():
@@ -149,6 +172,11 @@ class LLMAgent(Agent):
         sandbox=None,
         delegation_manager=None,
         delegation_ctx=None,
+        skills=None,
+        spawn_child_provider=None,
+        spawn_manager=None,
+        spawn_guard: SpawnGuard | None = None,
+        is_child: bool = False,
     ) -> None:
         self.spec = spec
         self.system_prompt = system_prompt
@@ -169,6 +197,19 @@ class LLMAgent(Agent):
         self.sandbox = sandbox
         self.delegation_manager = delegation_manager
         self.delegation_ctx = delegation_ctx
+        self.skills = skills
+        # Parent-only spawn manager. Children receive a guard instead and can never
+        # create more agents, even if the model tries to call the tool.
+        self.spawn_child_provider = spawn_child_provider
+        self.spawn_manager = spawn_manager
+        self.spawn_guard = spawn_guard
+        self.is_child = bool(is_child or spawn_guard is not None)
+        self._active_ctx: AgentContext | None = None
+        if not self.is_child and self.spawn_manager is None:
+            if any(tool.id == "spawn_agent" for tool in self.tools):
+                self.spawn_manager = SpawnManager(self)
+        # Shared with every ToolContext call of this execution (see AgentContext).
+        self._task_state: dict = {}
         if self.delegation_ctx is None and delegation_manager is not None:
             root_factory = getattr(delegation_manager, "root_context", None)
             if callable(root_factory):
@@ -177,11 +218,16 @@ class LLMAgent(Agent):
     async def execute(self, task: dict, ctx: AgentContext) -> AgentResult:
         """Ejecuta el flujo completo de un nodo."""
         node_id = str(task.get("node_id", ""))
+        self._task_state = ctx.task_state
+        self._active_ctx = ctx
         self._emit(ctx, EventType.NODE_STARTED, {"agent_id": self.spec.id, "task": task})
         if self.delegation_ctx is not None and hasattr(self.delegation_ctx, "user_language"):
-            self.delegation_ctx = replace(
-                self.delegation_ctx, user_language=ctx.user_language
-            )
+            # The root delegation context is created by the factory before a task
+            # exists; inherit the real task id here or every delegated event crashes.
+            updates = {"user_language": ctx.user_language}
+            if ctx.task_id:
+                updates["task_id"] = ctx.task_id
+            self.delegation_ctx = replace(self.delegation_ctx, **updates)
         started = time.monotonic()
         tool_records: list[ToolRecord] = []
         usage_total = Usage()
@@ -194,6 +240,7 @@ class LLMAgent(Agent):
             output_schema=self.spec.output_schema,
             tools=self.tools,
             can_call=self.spec.can_call,
+            spawn_enabled=self.spawn_manager is not None,
         )
         user = build_user_prompt(
             self.user_template,
@@ -244,15 +291,59 @@ class LLMAgent(Agent):
                         tool_calls=response.tool_calls,
                     )
                 )
+                # All spawn calls of one turn run concurrently. The parent waits for
+                # every child before continuing, so it can integrate the complete set.
+                runs: dict[str, tuple] = {}
+                spawn_calls = [
+                    call for call in response.tool_calls if call.name == "spawn_agent"
+                ]
+                spawn_tasks: dict[str, asyncio.Task] = {}
+                # Start the children first, then run the parent's own tools while they
+                # are still working. Both sides are independent by construction: they
+                # were requested in the same assistant turn.
+                if spawn_calls:
+                    spawn_tasks = {
+                        call.id: asyncio.create_task(self._run_tool(call, ctx))
+                        for call in spawn_calls
+                    }
                 for tool_call in response.tool_calls:
-                    # Antes de cada herramienta: si pidieron cancelar, no se lanza.
+                    if tool_call.id in spawn_tasks:
+                        continue
+                    # Before each non-spawn tool: stop if cancellation was requested.
                     if getattr(ctx, "cancel", None) is not None and getattr(
                         ctx.cancel, "cancelled", False
                     ):
+                        for task in spawn_tasks.values():
+                            task.cancel()
+                        if spawn_tasks:
+                            await asyncio.gather(
+                                *spawn_tasks.values(), return_exceptions=True
+                            )
+                        for done in response.tool_calls:
+                            if done.id in runs:
+                                tool_records.append(runs[done.id][0])
                         return self._cancelled(
                             ctx, node_id, started, usage_total, tuple(tool_records)
                         )
-                    record, tool_result = await self._run_tool(tool_call, ctx)
+                    runs[tool_call.id] = await self._run_tool(tool_call, ctx)
+                if spawn_tasks:
+                    gathered = await asyncio.gather(
+                        *spawn_tasks.values(), return_exceptions=True
+                    )
+                    for call, item in zip(spawn_calls, gathered):
+                        if isinstance(item, BaseException):
+                            runs[call.id] = self._failed_tool(call, item)
+                        else:
+                            runs[call.id] = item
+                # Preserve the model's tool_call order in the conversation even
+                # though spawn calls were executed first/concurrently.
+                for tool_call in response.tool_calls:
+                    record, tool_result = runs.get(
+                        tool_call.id,
+                        self._failed_tool(
+                            tool_call, RuntimeError("tool call produced no result")
+                        ),
+                    )
                     tool_records.append(record)
                     messages.append(
                         Message(
@@ -509,8 +600,111 @@ class LLMAgent(Agent):
         current = tuple(getattr(self.policy, "allowed_commands", ()) or ())
         self.policy.allowed_commands = current + (binary,)
 
+    def _failed_tool(self, call: ToolCall, exc: BaseException):
+        from satellite.core.tool_models import ToolResult
+
+        message = f"tool call failed: {exc}"
+        result = ToolResult(
+            call_id=call.id,
+            success=False,
+            error=message,
+            error_code="tool_runtime_error",
+        )
+        record = ToolRecord(
+            tool_name=call.name,
+            arguments=dict(call.arguments or {}),
+            success=False,
+            error=message,
+            duration_ms=0,
+        )
+        return record, result
+
+    def _child_tool_denial(self, call: ToolCall) -> tuple[str, str] | None:
+        """Code-enforced boundary for subagents.
+
+        The child prompt states the rules; this method makes them real even if the
+        model ignores them. It returns ``(message, error_code)`` or ``None``.
+        """
+        guard = self.spawn_guard
+        if guard is None:
+            return None
+        if call.name in {"spawn_agent", "delegate"}:
+            return ("Subagents cannot create other agents.", "subagent_cannot_spawn")
+        if call.name == "request_context":
+            return (
+                "Subagents do not receive the parent conversation.",
+                "subagent_no_parent_context",
+            )
+        if call.name in {"run_command", "run_argv", "run_python", "job"}:
+            return (
+                "Subagents cannot run commands. The parent runs and verifies them "
+                "after integration.",
+                "subagent_command_denied",
+            )
+        if call.name == "propose_skill":
+            return (
+                "Subagents cannot create skills.",
+                "subagent_skill_denied",
+            )
+        if call.name.startswith("desktop_"):
+            return (
+                "Subagents cannot control the desktop.",
+                "subagent_desktop_denied",
+            )
+        if call.name in {"write_file", "edit_file", "render_diagram"}:
+            arguments = dict(call.arguments or {})
+            path = _path_from_arguments(arguments)
+            if not guard.allows_tool(call.name, arguments):
+                detail = (
+                    "Region owners must use edit_file for focused changes; "
+                    "write_file/render_diagram would replace the whole file. "
+                    if guard.can_write(path)
+                    else ""
+                )
+                return (
+                    "Subagent may only modify its owned files or regions. "
+                    + detail
+                    + f"Owned: {guard.owned_labels}. Attempted: {path or '(no path)'}.",
+                    "subagent_path_not_owned",
+                )
+        return None
+
     async def _run_tool(self, call: ToolCall, ctx: AgentContext):
         started = time.monotonic()
+        denial = self._child_tool_denial(call)
+        if denial is not None:
+            from satellite.core.tool_models import ToolResult
+
+            message, code = denial
+            result = ToolResult(
+                call_id=call.id,
+                success=False,
+                error=message,
+                error_code=code,
+            )
+            if ctx.sink is not None:
+                ctx.sink.emit(
+                    ExecutionEvent(
+                        event_type=EventType.TOOL_CALLED,
+                        task_id=ctx.task_id,
+                        node_id=ctx.node_id or None,
+                        tool_name=call.name,
+                        payload={
+                            "arguments": call.arguments,
+                            "success": False,
+                            "error": message,
+                            "output": None,
+                        },
+                    )
+                )
+            record = ToolRecord(
+                tool_name=call.name,
+                arguments=call.arguments,
+                success=False,
+                error=message,
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
+            return record, result
         tool_ctx = ToolContext(
             project_root=self.project_root or Path("."),
             workdir=self.workdir,
@@ -523,17 +717,26 @@ class LLMAgent(Agent):
             delegation=self.delegation_manager,
             delegation_ctx=self.delegation_ctx,
             active_spec=self.spec,
+            skills=self.skills,
+            task_state=self._task_state,
             approval=getattr(ctx, "approval", None),
             # Y el token, para que una tool que lanza un proceso pueda terminarlo.
             cancel=getattr(ctx, "cancel", None),
             # El sandbox del nivel configurado: los procesos del agente corren por él.
             sandbox=self.sandbox,
+            spawn_manager=self.spawn_manager,
+            is_child=self.is_child,
         )
         result = await self.tool_registry.execute(call, tool_ctx)
         if result.error_code == "path_outside_project" and tool_ctx.approval is not None:
             result = await self._ask_for_path(call, tool_ctx, result)
         elif result.error_code == "command_not_allowed" and tool_ctx.approval is not None:
             result = await self._ask_for_command(call, tool_ctx, result)
+        if result.success and call.name in ("run_command", "run_argv", "run_python"):
+            # Evidence for propose_skill: a successful execution happened in this task.
+            self._task_state.setdefault("successful_runs", []).append(
+                {"tool": call.name, "arguments": dict(call.arguments)}
+            )
         record = ToolRecord(
             tool_name=call.name,
             arguments=call.arguments,
@@ -693,6 +896,14 @@ def _accumulate(total: Usage, part: Usage | None) -> Usage:
         completion_tokens=total.completion_tokens + part.completion_tokens,
         total_tokens=total.total_tokens + part.total_tokens,
     )
+
+
+def _path_from_arguments(arguments: dict) -> str:
+    for key in ("path", "file", "file_path", "out_path", "output", "target"):
+        value = arguments.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
 
 
 def _context_to_text(context: ContextBundle) -> str:

@@ -13,7 +13,8 @@ from pathlib import Path
 from satellite.context.sensitive import is_index_excluded
 
 IGNORED_DIRS = {
-    ".git", ".venv", "venv", "node_modules", ".satellite", ".agent",
+    ".git", ".venv", "venv", "virtualenv", "myenv", "site-packages",
+    "node_modules", ".satellite", ".agent",
     "__pycache__", "build", "dist", "out",
     ".pytest_cache", ".mypy_cache", ".ruff_cache", ".idea", ".vscode",
 }
@@ -192,13 +193,30 @@ class ProjectIndex:
         if not rels:
             return ""
 
-        words = {word.lower() for word in re.findall(r"[\w.-]{3,}", goal)}
+        # Path-like tokens (`test.py`, `src/main.ts`) are explicit references: the file
+        # the user names must be preferred over generic "main.*" or README heuristics.
+        words = {
+            word.lower().strip(".,:;!?")
+            for word in re.findall(r"[\w./\\-]{3,}", goal)
+        }
         explain = explain_goal(goal)
         ranked: list[tuple[int, str, Path]] = []
         for rel in rels:
             path = self.project_root / rel
             name = Path(rel).name.lower()
-            score = sum(1 for word in words if word in rel.lower()) * 3
+            rel_lower = rel.lower()
+            score = sum(1 for word in words if word in rel_lower) * 3
+            for word in words:
+                normalized = word.replace("\\", "/")
+                if not ("." in normalized or "/" in normalized):
+                    continue
+                if (
+                    normalized == name
+                    or normalized == rel_lower
+                    or rel_lower.endswith("/" + normalized)
+                ):
+                    score += 300
+                    break
             if name in {"readme.md", "readme.rst", "readme.txt"}:
                 score += 100 if explain else 12
             if name in {"pyproject.toml", "package.json", "cargo.toml", "go.mod", "requirements.txt"}:
@@ -361,7 +379,14 @@ class ProjectIndex:
         files: list[Path] = []
         for raw_root, dirs, names in os.walk(self.project_root):
             root = Path(raw_root)
-            dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
+            dirs[:] = [
+                d
+                for d in dirs
+                if d not in IGNORED_DIRS
+                # Generic virtualenv detection: a directory with `pyvenv.cfg` is a
+                # Python environment, whatever the user named it (`myenv`, `env`...).
+                and not (root / d / "pyvenv.cfg").exists()
+            ]
             for name in names:
                 candidate = root / name
                 if not self._safe_index_file(candidate):

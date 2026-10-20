@@ -207,7 +207,7 @@ class _PywinautoAdapter:
         # `key` es global (no necesita un control concreto).
         if kind == "key":
             try:
-                win.type_keys(text, set_foreground=True)
+                self._type_keys(win, text, set_foreground=True)
                 return {"ok": True, "code": "", "error": ""}
             except Exception as exc:
                 return {"ok": False, "code": "act_failed", "error": str(exc)}
@@ -253,13 +253,40 @@ class _PywinautoAdapter:
                 item.set_focus()
             except Exception:
                 pass
-            return self._first(item, ("type_keys",), text)
+            method = getattr(item, "type_keys", None)
+            if not callable(method):
+                raise _NoPattern("el control no admite type_keys")
+            try:
+                return self._type_keys(item, text)
+            except Exception as exc:
+                raise _NoPattern(f"el control no admite type_keys ({exc})") from exc
         if kind == "scroll":
             direction = str(action.get("direction") or "down")
             amount = action.get("amount")
             amount = amount if isinstance(amount, int) else 1
             return self._first(item, ("scroll",), direction, amount)
         raise _NoPattern(f"acción sin patrón nativo: {kind}")
+
+    @staticmethod
+    def _type_keys(item: Any, text: str, *, set_foreground: bool = False) -> Any:
+        """Type literal text, including spaces/tabs/newlines.
+
+        pywinauto's ``type_keys`` ignores spaces, tabs and newlines unless asked
+        explicitly; without this, "hola mundo" was typed as "holamundo".
+        """
+        kwargs: dict[str, Any] = {
+            "with_spaces": True,
+            "with_tabs": True,
+            "with_newlines": True,
+        }
+        if set_foreground:
+            kwargs["set_foreground"] = True
+        try:
+            return item.type_keys(text, **kwargs)
+        except TypeError:
+            # Older pywinauto versions do not accept these keyword arguments.
+            fallback: dict[str, Any] = {"set_foreground": True} if set_foreground else {}
+            return item.type_keys(text, **fallback)
 
     @staticmethod
     def _first(item: Any, methods: tuple[str, ...], *args: Any) -> Any:

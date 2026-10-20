@@ -855,6 +855,65 @@ textarea:focus {
   color: var(--text-soft);
 }
 
+/* Diagrama del turno: mismo fondo que la apariencia elegida. El SVG se recolorea
+   solo para mostrarlo (el archivo guardado sigue siendo claro). */
+.diagrama {
+  max-width: 100%;
+  margin: 8px 0 12px;
+  padding: 0;
+}
+
+.diagrama figcaption {
+  margin-bottom: 6px;
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--muted);
+}
+
+.diagrama-caja {
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.diagrama-svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.diagrama-mermaid {
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--bg-2);
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  white-space: pre-wrap;
+}
+
+.diagrama-fuente {
+  margin-top: 6px;
+  font-family: var(--mono);
+  font-size: var(--fs-dato);
+  color: var(--muted);
+}
+
+.diagrama-fuente summary {
+  cursor: pointer;
+}
+
+.diagrama-fuente pre {
+  margin: 6px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
 /* ------------------------------------- progreso del turno (plegable) */
 
 .progreso {

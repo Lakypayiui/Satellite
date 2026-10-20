@@ -77,10 +77,20 @@ function saveCredentials(value: ChatGPTCredentials): void {
   }
   const destination = credentialsPath();
   const temporary = `${destination}.tmp`;
-  writeFileSync(temporary, safeStorage.encryptString(JSON.stringify(value)), {
-    mode: 0o600,
-  });
-  renameSync(temporary, destination);
+  try {
+    writeFileSync(temporary, safeStorage.encryptString(JSON.stringify(value)), {
+      mode: 0o600,
+    });
+    renameSync(temporary, destination);
+  } catch (error) {
+    // Never leave the encrypted temp copy behind if the atomic rename failed.
+    try {
+      unlinkSync(temporary);
+    } catch {
+      // The temp file may not have been created.
+    }
+    throw error;
+  }
 }
 
 function storageAvailable(): boolean {

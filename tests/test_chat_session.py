@@ -33,6 +33,53 @@ def test_send_records_history(tmp_path: Path) -> None:
     assert chat.history[0].content == "necesito agregar login"
 
 
+def test_diagram_is_persisted_with_the_assistant_turn(tmp_path: Path) -> None:
+    """The graphical chat needs the diagram after a reload, not only in the reply."""
+    diagram = {
+        "rendered": True,
+        "svg_path": str(tmp_path / "diagrams" / "flow.svg"),
+        "mermaid": "flowchart LR\n  A --> B",
+        "diagram_type": "flowchart",
+    }
+
+    class DiagramOrchestrator(StubOrchestrator):
+        async def execute(self, task):
+            return TaskResult(
+                task_id=task.task_id,
+                status=TaskStatus.OK,
+                summary="Diagrama listo.",
+                output={
+                    "mode": "diagram",
+                    "content": "Diagrama listo.",
+                    **diagram,
+                },
+            )
+
+    chat = ChatSession(tmp_path, DiagramOrchestrator(), persist=True)
+    reply = run(chat.send("dibuja un diagrama"))
+
+    assert reply.diagram == diagram
+    assert chat.history[-1].diagram == diagram
+
+    otra = ChatSession(tmp_path, StubOrchestrator(), persist=True)
+    otra.load()
+    assert otra.history[-1].diagram == diagram
+
+
+def test_long_assistant_replies_are_not_truncated(tmp_path: Path) -> None:
+    """Se cortaba la respuesta del asistente a 1200 caracteres al guardarla."""
+    long_reply = "x" * 5000
+    chat = ChatSession(tmp_path, StubOrchestrator(long_reply))
+
+    reply = run(chat.send("explícame el proyecto"))
+
+    assert reply.text == long_reply
+    assert chat.history[-1].content == long_reply
+    # el mensaje del usuario sí sigue acotado
+    chat.add("user", "y" * 2000)
+    assert len(chat.history[-1].content) <= 1200 + len("\n[contenido truncado]")
+
+
 def test_followup_carries_previous_turns(tmp_path: Path) -> None:
     orchestrator = StubOrchestrator()
     chat = ChatSession(tmp_path, orchestrator)

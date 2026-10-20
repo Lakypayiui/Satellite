@@ -329,6 +329,11 @@ def build_router(backend: DesktopBackend, auth: Callable) -> APIRouter:
     def session_turns(session_id: str) -> dict:
         return {"session_id": session_id, "turns": backend.session_turns(session_id)}
 
+    @router.get("/diagrams")
+    def diagram_svg(path: str) -> dict:
+        """SVG markup for a diagram artifact (confined to the open project)."""
+        return backend.diagram_svg(path)
+
     # --- conversación ---
 
     @router.post("/messages")

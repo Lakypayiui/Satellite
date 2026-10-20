@@ -314,14 +314,22 @@ class RenderDiagramTool(Tool):
                     "out_path": str(path),
                 },
             )
+        # Pele writes the SVG to outPath and omits it from its JSON response. Read the
+        # artifact back so `svg`/`bytes` describe the real file instead of reporting 0.
+        svg = outcome.svg
+        if not svg:
+            try:
+                svg = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                svg = ""
         output = {
             "path": str(path),
             "diagram_type": outcome.diagram_type,
             "width": outcome.width,
             "height": outcome.height,
-            "bytes": len(outcome.svg.encode("utf-8")),
+            "bytes": len(svg.encode("utf-8")),
             "rendered": True,
-            "svg": outcome.svg,
+            "svg": svg,
         }
         if not _record_change(tool_ctx, path, previous):
             output["aviso"] = "no se pudo registrar el cambio para poder deshacerlo"

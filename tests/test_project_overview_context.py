@@ -79,6 +79,24 @@ def test_context_includes_content_for_non_classic_extension(tmp_path: Path) -> N
     assert "hola lua" in context
 
 
+def test_named_file_is_read_and_virtualenvs_are_ignored(tmp_path: Path) -> None:
+    """Un archivo nombrado se prioriza; un virtualenv no contamina el contexto."""
+    (tmp_path / "test.py").write_text(
+        "# test.py\n\nprint('contenido unico')\n", encoding="utf-8"
+    )
+    venv = tmp_path / "custom_env"
+    (venv / "Lib").mkdir(parents=True)
+    (venv / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
+    (venv / "Lib" / "__main__.py").write_text("print('venv interno')\n", encoding="utf-8")
+
+    context = ProjectIndex(tmp_path).context_for_goal("¿qué hace test.py?")
+
+    assert "test.py ---" in context
+    assert "contenido unico" in context
+    assert "custom_env" not in context
+    assert "venv interno" not in context
+
+
 def test_context_inventory_lists_files_even_without_readable_content(tmp_path: Path) -> None:
     """El inventario (árbol) lista los archivos aunque no se pueda leer su contenido."""
     (tmp_path / "data.bin").write_bytes(b"\x00\x01\x02binario")

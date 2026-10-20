@@ -65,6 +65,7 @@ _RISKY_VALUES: tuple[str, ...] = (
     "write_file",
     "edit_file",
     "delegate",
+    "spawn_agent",
 )
 _FALSEY = (False, None, 0, "", (), [], {})
 # Nunca se manda por elicitación nada que parezca un secreto (la spec lo prohíbe).

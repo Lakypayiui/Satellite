@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Approval,
   CommandSpecView,
+  DiagramView,
   ETIQUETA_EVENTO,
   MentionSuggestion,
   PlanOptionsView,
@@ -18,9 +19,11 @@ import {
   mensajeDe,
 } from "./api";
 import { comandoTraducido } from "./commandsI18n";
+import { applyDiagramTheme } from "./diagramTheme";
 import { useT, type Clave } from "./i18n";
 import { Logo } from "./Logo";
 import { pasosDelTurno } from "./turnActivity";
+import { useDiagramColors } from "./useDiagramTheme";
 
 interface Props {
   turnos: Turn[];
@@ -147,6 +150,84 @@ function tokenEnCaret(texto: string, caret: number): Token | null {
   }
 
   return null;
+}
+
+/**
+ * Diagram attached to a turn. The SVG is served by the backend (the renderer cannot
+ * read file paths), and it is shown as an <img> so any script inside the SVG cannot
+ * execute in the app document. If rendering failed, the Mermaid source is shown.
+ */
+function Diagrama({ diagram }: { diagram: DiagramView }) {
+  const t = useT();
+  const colors = useDiagramColors();
+  const [svg, setSvg] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let vigente = true;
+    setSvg("");
+    setError("");
+    if (!diagram.rendered || !diagram.svg_path) return;
+    void api<{ svg: string }>(
+      `/diagrams?path=${encodeURIComponent(diagram.svg_path)}`,
+    )
+      .then((datos) => {
+        if (vigente) setSvg(datos.svg || "");
+      })
+      .catch((exc) => {
+        if (vigente) setError(mensajeDe(exc));
+      });
+    return () => {
+      vigente = false;
+    };
+  }, [diagram.rendered, diagram.svg_path]);
+
+  // Display-only theme copy: the SVG file on disk keeps its white defaults.
+  const shownSvg = svg && colors ? applyDiagramTheme(svg, colors) : svg;
+
+  const source = diagram.mermaid ? (
+    <details className="diagrama-fuente">
+      <summary>{t("chat.diagram.source")}</summary>
+      <pre>{diagram.mermaid}</pre>
+    </details>
+  ) : null;
+
+  if (!diagram.rendered || !diagram.svg_path) {
+    if (!diagram.mermaid) return null;
+    return (
+      <figure className="diagrama">
+        <figcaption>
+          {t("chat.diagram.title")}
+          {diagram.diagram_type ? ` · ${diagram.diagram_type}` : ""}
+        </figcaption>
+        <pre className="diagrama-mermaid">{diagram.mermaid}</pre>
+        <p className="nota">{t("chat.diagram.notRendered")}</p>
+      </figure>
+    );
+  }
+
+  return (
+    <figure className="diagrama">
+      <figcaption>
+        {t("chat.diagram.title")}
+        {diagram.diagram_type ? ` · ${diagram.diagram_type}` : ""}
+      </figcaption>
+      {shownSvg ? (
+        <div className="diagrama-caja">
+          <img
+            className="diagrama-svg"
+            src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(shownSvg)}`}
+            alt={t("chat.diagram.alt")}
+          />
+        </div>
+      ) : error ? (
+        <p className="nota">{t("chat.diagram.error", { error })}</p>
+      ) : (
+        <p className="nota">{t("chat.diagram.loading")}</p>
+      )}
+      {source}
+    </figure>
+  );
 }
 
 export function Chat(props: Props) {
@@ -411,6 +492,7 @@ export function Chat(props: Props) {
             key={`${indice}-${turno.task_id}`}
             className={turno.role === "user" ? "turno usuario" : "turno agente"}
           >
+            {turno.role !== "user" && turno.diagram && <Diagrama diagram={turno.diagram} />}
             {turno.content}
           </div>
         ))}

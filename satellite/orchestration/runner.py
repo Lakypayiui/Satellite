@@ -105,15 +105,26 @@ class DefaultGraphRunner(GraphRunner):
         roots = [node_id for node_id in graph.nodes if node_id not in incoming]
         if not roots:
             roots = [graph.entry_node]
-        # For acyclic plans, hold a shared downstream node until every incoming
-        # dependency has produced an active edge. Feedback cycles keep their
-        # existing event-driven scheduling semantics.
+        # Shared across the task's nodes (successful runs, pending skill proposals…).
+        task_state: dict = {}
+        # Feedback cycles keep the existing event-driven scheduling semantics.
+        # Acyclic plans use a wave scheduler: every node whose dependencies are
+        # already satisfied runs concurrently, and joins wait for all sources.
         is_dag = _is_acyclic(graph)
-        join_sources: dict[str, set[str]] = {}
         if is_dag:
-            for edge in graph.edges:
-                join_sources.setdefault(edge.target, set()).add(edge.source)
-            join_sources = {target: sources for target, sources in join_sources.items() if len(sources) > 1}
+            return await self._run_dag_parallel(
+                graph=graph,
+                task=task,
+                services=services,
+                factory=factory,
+                engine=engine,
+                sink=sink,
+                started=started,
+                results=results,
+                attempts=attempts,
+                task_state=task_state,
+            )
+        join_sources: dict[str, set[str]] = {}
         join_arrivals: dict[str, dict[str, dict]] = {}
         frontier: list[tuple[str, dict]] = []
         for entry in roots:
@@ -204,6 +215,7 @@ class DefaultGraphRunner(GraphRunner):
                 approval=getattr(services, "approval", None),
                 # Y el token, para que el agente pueda parar entre llamadas.
                 cancel=getattr(services, "cancel", None),
+                task_state=task_state,
             )
             remaining = graph.limits.timeout_s - (time.monotonic() - started)
             try:
@@ -279,7 +291,7 @@ class DefaultGraphRunner(GraphRunner):
                     continue  # una rama puede acabar antes que sus hermanas
                 return self._abort(
                     task, sink, node_id,
-                    f"dead-end: nodo '{node_id}' sin salida para estado {result.status.value}",
+                    f"dead-end: node '{node_id}' has no outgoing edge for status {result.status.value}",
                     results, attempts, started,
                 )
 
@@ -361,6 +373,327 @@ class DefaultGraphRunner(GraphRunner):
         self._emit(sink, task, EventType.TASK_FINISHED, payload={"status": result.status.value})
         return result
 
+    async def _run_dag_parallel(
+        self,
+        *,
+        graph: ExecutionGraph,
+        task: Task,
+        services: RuntimeServices,
+        factory: AgentFactory,
+        engine,
+        sink: EventSink | None,
+        started: float,
+        results: dict[str, AgentResult],
+        attempts: dict[str, int],
+        task_state: dict,
+    ) -> TaskResult:
+        """Run every ready wave concurrently; dependent nodes wait for all sources."""
+        sources_by_target: dict[str, set[str]] = {}
+        for edge in graph.edges:
+            sources_by_target.setdefault(edge.target, set()).add(edge.source)
+        roots = [node_id for node_id in graph.nodes if node_id not in sources_by_target]
+        if not roots:
+            roots = [graph.entry_node]
+
+        entries: dict[str, dict] = {}
+        ready: list[str] = []
+        for node_id in roots:
+            node = graph.nodes[node_id]
+            initial_task = dict(node.task) if node.task else {"goal": task.goal}
+            entries[node_id] = {
+                "task": initial_task,
+                "feedback": None,
+                "context_refs": list(node.context_refs),
+            }
+            ready.append(node_id)
+
+        arrivals: dict[str, dict[str, dict]] = {}
+        user_language = detect_user_language(
+            str(task.metadata.get("refined_from") or task.goal),
+            task.metadata.get("history"),
+        )
+
+        while ready:
+            current = sorted(set(ready))
+            ready = []
+            cancel = getattr(services, "cancel", None)
+            if cancel is not None and getattr(cancel, "cancelled", False):
+                return self._cancelled(
+                    task, sink, current[0], cancel, results, attempts, started
+                )
+            elapsed = time.monotonic() - started
+            if elapsed >= graph.limits.timeout_s:
+                return self._abort(
+                    task,
+                    sink,
+                    current[0],
+                    f"timeout_s={graph.limits.timeout_s} limit exceeded",
+                    results,
+                    attempts,
+                    started,
+                )
+            if len(results) + len(current) > graph.limits.max_total_steps:
+                return self._abort(
+                    task,
+                    sink,
+                    current[0],
+                    f"max_total_steps={graph.limits.max_total_steps} limit exceeded",
+                    results,
+                    attempts,
+                    started,
+                )
+
+            for node_id in current:
+                self._emit(
+                    sink,
+                    task,
+                    EventType.NODE_STARTED,
+                    node_id=node_id,
+                    payload={"agent_id": graph.nodes[node_id].spec_id},
+                )
+
+            outcomes = await asyncio.gather(
+                *(
+                    self._execute_dag_node(
+                        graph=graph,
+                        task=task,
+                        services=services,
+                        factory=factory,
+                        engine=engine,
+                        sink=sink,
+                        node_id=node_id,
+                        entry=entries[node_id],
+                        task_state=task_state,
+                        user_language=user_language,
+                        started=started,
+                    )
+                    for node_id in current
+                )
+            )
+
+            first_error: tuple[str, str] | None = None
+            failed_dead_end: tuple[str, AgentResult] | None = None
+            for outcome in outcomes:
+                node_id = outcome["node_id"]
+                if outcome.get("error"):
+                    first_error = first_error or (node_id, str(outcome["error"]))
+                    continue
+                result = outcome["result"]
+                results[node_id] = result
+                node = graph.nodes[node_id]
+
+                if self.logger is not None:
+                    metrics = result.metrics
+                    self.logger.log(
+                        ExecutionRecord(
+                            provider="",
+                            model=node.model_role or "",
+                            agent_id=node.spec_id,
+                            input=dict(outcome["entry"].get("task", {})),
+                            output=dict(result.output),
+                            duration_ms=float(metrics.duration_ms),
+                            status=result.status.value,
+                            error_message=result.error or "",
+                            tokens_before=metrics.tokens_in,
+                            tokens_after=metrics.tokens_out,
+                            task_id=task.task_id,
+                            findings_count=len(result.findings),
+                        )
+                    )
+                self._emit(
+                    sink,
+                    task,
+                    EventType.NODE_FINISHED,
+                    node_id=node_id,
+                    payload={
+                        "agent_id": node.spec_id,
+                        "status": result.status.value,
+                        "summary": result.summary,
+                    },
+                )
+                if result.status is AgentStatus.CANCELLED:
+                    return self._cancelled(
+                        task,
+                        sink,
+                        node_id,
+                        getattr(services, "cancel", None),
+                        results,
+                        attempts,
+                        started,
+                    )
+                if (
+                    graph.limits.token_budget is not None
+                    and sum(
+                        item.metrics.tokens_in + item.metrics.tokens_out
+                        for item in results.values()
+                    )
+                    > graph.limits.token_budget
+                ):
+                    return self._abort(
+                        task,
+                        sink,
+                        node_id,
+                        f"token_budget={graph.limits.token_budget} limit exceeded",
+                        results,
+                        attempts,
+                        started,
+                    )
+
+                edges = graph.successors(node_id, result)
+                if not edges:
+                    if result.status is not AgentStatus.OK:
+                        failed_dead_end = failed_dead_end or (node_id, result)
+                    continue
+                for edge in edges:
+                    target = edge.target
+                    if target in results:
+                        continue
+                    target_entry = self._build_target_entry(
+                        graph,
+                        node,
+                        edge,
+                        result,
+                        outcome["entry"],
+                        outcome["bundle"],
+                    )
+                    arrivals.setdefault(target, {})[node_id] = target_entry
+
+            if first_error is not None:
+                node_id, error = first_error
+                return self._abort(
+                    task, sink, node_id, error, results, attempts, started
+                )
+            if failed_dead_end is not None:
+                node_id, result = failed_dead_end
+                return self._abort(
+                    task,
+                    sink,
+                    node_id,
+                    f"dead-end: node '{node_id}' has no outgoing edge for status {result.status.value}",
+                    results,
+                    attempts,
+                    started,
+                )
+
+            next_ready: list[str] = []
+            for target, source_entries in list(arrivals.items()):
+                if target in results:
+                    arrivals.pop(target, None)
+                    continue
+                required = sources_by_target.get(target, set())
+                if required and required.issubset(source_entries):
+                    if len(required) > 1:
+                        entries[target] = _merge_join_entries(source_entries, required)
+                    else:
+                        entries[target] = source_entries[next(iter(required))]
+                    next_ready.append(target)
+                    arrivals.pop(target, None)
+            ready = sorted(set(next_ready))
+
+        duration = int((time.monotonic() - started) * 1000)
+        last_result = list(results.values())[-1] if results else None
+        all_findings: list[Finding] = []
+        for result in results.values():
+            all_findings.extend(result.findings)
+        cancelados = [r for r in results.values() if r.status is AgentStatus.CANCELLED]
+        summary = (
+            cancelados[-1].summary
+            if cancelados
+            else (
+                last_result.summary
+                if last_result and last_result.summary
+                else "Task completed"
+            )
+        )
+        result = TaskResult(
+            task_id=task.task_id,
+            status=TaskStatus.CANCELLED if cancelados else TaskStatus.OK,
+            summary=summary,
+            output=last_result.output if last_result else None,
+            findings=tuple(all_findings),
+            metrics=ExecutionMetrics(
+                duration_ms=duration,
+                retries=sum(attempts.values()),
+            ),
+        )
+        self._emit(
+            sink,
+            task,
+            EventType.TASK_FINISHED,
+            payload={"status": result.status.value},
+        )
+        return result
+
+    async def _execute_dag_node(
+        self,
+        *,
+        graph: ExecutionGraph,
+        task: Task,
+        services: RuntimeServices,
+        factory: AgentFactory,
+        engine,
+        sink: EventSink | None,
+        node_id: str,
+        entry: dict,
+        task_state: dict,
+        user_language: str,
+        started: float,
+    ) -> dict:
+        """Resolve one node and run its agent. Exceptions become a node-local error."""
+        node = graph.nodes[node_id]
+        entrada = entry
+        try:
+            from satellite.context.instructions import instructions_ref
+            from satellite.context.mentions import user_refs
+
+            refs: list[ContextRef] | tuple[ContextRef, ...] = entrada.get(
+                "context_refs", []
+            )
+            refs = tuple(refs) + user_refs(task) + instructions_ref(task)
+            bundle = ContextBundle()
+            if engine is not None and refs:
+                remaining = graph.limits.timeout_s - (time.monotonic() - started)
+                bundle = await asyncio.wait_for(
+                    engine.resolve(refs), timeout=max(0.001, remaining)
+                )
+            bundle = _with_conversation(bundle, task)
+
+            agent = factory.create(node.spec_id, model_role=node.model_role)
+            entrada["task"].setdefault("node_id", node_id)
+            agent_ctx = AgentContext(
+                context=bundle,
+                feedback=tuple(entrada.get("feedback") or ()),
+                sink=sink,
+                task_id=task.task_id,
+                node_id=node_id,
+                project_root=task.project_root,
+                user_language=user_language,
+                approval=getattr(services, "approval", None),
+                cancel=getattr(services, "cancel", None),
+                task_state=task_state,
+            )
+            remaining = graph.limits.timeout_s - (time.monotonic() - started)
+            result = await asyncio.wait_for(
+                agent.execute(entrada["task"], agent_ctx),
+                timeout=max(0.001, remaining),
+            )
+            return {
+                "node_id": node_id,
+                "result": result,
+                "entry": entrada,
+                "bundle": bundle,
+            }
+        except asyncio.TimeoutError:
+            return {
+                "node_id": node_id,
+                "error": (
+                    f"timeout_s={graph.limits.timeout_s} limit exceeded during "
+                    f"'{node_id}'"
+                ),
+            }
+        except Exception as exc:  # noqa: BLE001 — report the node, keep siblings' data
+            return {"node_id": node_id, "error": f"node '{node_id}' failed: {exc}"}
+
     # --- helpers ---
 
     def _build_target_entry(self, graph, node, edge, result, entrada, bundle):
@@ -407,7 +740,7 @@ class DefaultGraphRunner(GraphRunner):
         result = TaskResult(
             task_id=task.task_id,
             status=TaskStatus.CANCELLED,
-            summary=f"Tarea cancelada: {reason} (se paró antes de '{node_id}')",
+            summary=f"Task cancelled: {reason} (stopped before '{node_id}')",
             output={"cancelled": True, "reason": reason, "nodes_done": len(results)},
             findings=tuple(all_findings),
             metrics=ExecutionMetrics(
@@ -438,7 +771,7 @@ class DefaultGraphRunner(GraphRunner):
         result = TaskResult(
             task_id=task.task_id,
             status=TaskStatus.FAILED,
-            summary=f"Tarea falló: {error}",
+            summary=f"Task failed: {error}",
             error=error,
             findings=tuple(all_findings),
             metrics=ExecutionMetrics(

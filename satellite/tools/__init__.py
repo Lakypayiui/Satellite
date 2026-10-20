@@ -4,6 +4,7 @@ from satellite.tools.base import Tool, ToolContext, ToolRegistry
 from satellite.tools.registry import DefaultToolRegistry
 from satellite.tools.context_tool import RequestContextTool
 from satellite.tools.delegate import DelegateTool
+from satellite.tools.spawn_agent import SpawnAgentTool
 from satellite.tools.primitives import (
     ListDirTool,
     ReadFileTool,
@@ -21,6 +22,7 @@ __all__ = [
     "DefaultToolRegistry",
     "RequestContextTool",
     "DelegateTool",
+    "SpawnAgentTool",
     "RunPythonTool",
     "RunArgvTool",
     "SearchFilesTool",

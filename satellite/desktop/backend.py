@@ -581,6 +581,48 @@ class DesktopBackend:
         _info, turns = SessionStore(self.resolve(project_root)).read(session_id)
         return turns
 
+    def diagram_svg(self, path: str, project_root=None) -> dict:
+        """SVG markup of a diagram artifact inside the project (for the graphical chat).
+
+        The renderer cannot read ``file://`` paths, and the runtime stores diagrams as
+        files. This serves only ``.svg`` files confined to the project root; no path
+        outside the workspace is read.
+        """
+        root = self.resolve(project_root)
+        raw = str(path or "").strip()
+        if not raw:
+            raise BackendError("diagram_path_missing", "falta la ruta del diagrama", 422)
+        from satellite.context.paths import confine
+
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        resolved = confine(candidate, root)
+        if resolved is None:
+            raise BackendError(
+                "diagram_outside_project",
+                "el diagrama está fuera del proyecto y no se lee",
+                403,
+            )
+        if resolved.suffix.lower() != ".svg":
+            raise BackendError("diagram_not_svg", "el artefacto no es un SVG", 415)
+        if not resolved.is_file():
+            raise BackendError("diagram_not_found", "el diagrama no existe", 404)
+        try:
+            if resolved.stat().st_size > 4_000_000:
+                raise BackendError("diagram_too_large", "el diagrama es demasiado grande", 413)
+            svg = resolved.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise BackendError(
+                "diagram_read_failed", f"no se pudo leer el diagrama: {exc}", 500
+            ) from exc
+        if "<svg" not in svg.lower():
+            raise BackendError("diagram_invalid", "el artefacto no contiene un SVG", 422)
+        return {
+            "path": resolved.relative_to(root).as_posix(),
+            "svg": svg,
+        }
+
     # --- modo plan (alternativas para elegir) ---
 
     def _remember_plan(self, reply, project_root=None) -> dict | None:

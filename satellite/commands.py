@@ -302,7 +302,7 @@ CATALOG: tuple[CommandSpec, ...] = (
     ),
     CommandSpec(
         "roles", "Proveedores y roles",
-        "Roles: orchestrator, context, agents, creator",
+        "Roles: orchestrator, context, agents, creator, subagents",
         surfaces=("cli", "desktop"),
     ),
 

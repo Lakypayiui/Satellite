@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
+from satellite.core.atomic import atomic_write_text
 from satellite.core.events import ExecutionEvent
 from satellite.core.graph import ExecutionGraph
 from satellite.core.task import Task
@@ -119,10 +119,7 @@ class FileStore(Store):
         package = Path(__file__).resolve().parents[1]
         if target == package or package in target.parents:
             raise KernelWriteError(f"el store no escribe dentro del paquete: {target}")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
 
     def _read_json(self, path: Path) -> dict:
         return json.loads(path.read_text(encoding="utf-8"))

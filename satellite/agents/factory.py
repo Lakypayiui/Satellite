@@ -10,6 +10,7 @@ from satellite.agents.prompts import DefaultPromptRegistry
 from satellite.agents.runtime import LLMAgent
 from satellite.core.errors import ToolError
 from satellite.core.spec import AgentSpec
+from satellite.kernel.manifest import RESERVED_AGENT_IDS
 from satellite.providers.base import LLMProvider
 from satellite.security.base import SecurityPolicy
 from satellite.tools.base import Tool, ToolRegistry
@@ -52,7 +53,9 @@ class DefaultAgentFactory(AgentFactory):
         workdir: Path | None = None,
         sandbox=None,
         delegation_manager=None,
+        skills=None,
         provider_resolver: Callable[[str], LLMProvider | None] | None = None,
+        subagent_provider: LLMProvider | None = None,
     ) -> None:
         self.registry = registry
         self.prompts = prompts
@@ -70,6 +73,11 @@ class DefaultAgentFactory(AgentFactory):
         # Sandbox del nivel configurado que hereda cada agente (procesos y filesystem).
         self.sandbox = sandbox
         self.delegation_manager = delegation_manager
+        # Shared skill registry, so `search_skills`/skill execution see the catalog.
+        self.skills = skills
+        # Optional provider for children. ``None`` means each child inherits its
+        # parent's provider; a configured ``llm.subagents`` overrides all children.
+        self.subagent_provider = subagent_provider
         # request_context siempre disponible; la registra si no existe
         try:
             self.tools.get(RequestContextTool().id)
@@ -88,6 +96,19 @@ class DefaultAgentFactory(AgentFactory):
                 tool_ids.append("delegate")
             except ToolError:
                 pass
+        # Only specialized agents get spawn_agent. Kernel meta-agents (orchestrator,
+        # creator, curator, diagram agent) never do, and children are built directly
+        # without this tool.
+        if spec.id not in RESERVED_AGENT_IDS:
+            try:
+                self.tools.get("spawn_agent")
+                tool_ids.append("spawn_agent")
+            except ToolError:
+                pass
+        # Deduplicate while preserving order: `request_context` is added always and
+        # many specs already declare it. A repeated function name makes OpenAI-
+        # compatible providers reject the whole request with HTTP 400.
+        tool_ids = list(dict.fromkeys(tool_ids))
         if self.policy is not None:
             allowed = {
                 tid
@@ -123,6 +144,8 @@ class DefaultAgentFactory(AgentFactory):
             workdir=self.workdir,
             sandbox=self.sandbox,
             delegation_manager=self.delegation_manager,
+            skills=self.skills,
+            spawn_child_provider=self.subagent_provider,
         )
 
     def can_create(self, spec_id: str) -> bool:

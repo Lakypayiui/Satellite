@@ -27,6 +27,29 @@ from satellite.desktop_control import windows as win
 from satellite.desktop_control.errors import MissingDependency, UnsupportedPlatform
 
 
+def test_type_keys_preserves_spaces_tabs_and_newlines() -> None:
+    """pywinauto drops spaces unless `with_spaces=True` (it typed "holamundo")."""
+    from satellite.desktop_control.windows import _PywinautoAdapter
+
+    class Capture:
+        def __init__(self) -> None:
+            self.text = ""
+            self.kwargs: dict = {}
+
+        def type_keys(self, text, **kwargs):
+            self.text = text
+            self.kwargs = kwargs
+            return "ok"
+
+    item = Capture()
+    _PywinautoAdapter._type_keys(item, "hola mundo")
+
+    assert item.text == "hola mundo"
+    assert item.kwargs["with_spaces"] is True
+    assert item.kwargs["with_tabs"] is True
+    assert item.kwargs["with_newlines"] is True
+
+
 class FakeUiaAdapter:
     """Adaptador falso: devuelve diccionarios fijos en el contrato de F2."""
 

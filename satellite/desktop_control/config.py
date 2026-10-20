@@ -14,6 +14,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from satellite.core.atomic import atomic_write_text
 from satellite.kernel.paths import resolve_paths
 
 FILE_NAME = "desktop_control.json"
@@ -177,10 +178,7 @@ def write_desktop_settings(
     if not isinstance(settings, DesktopControlSettings):
         raise ValueError("write_desktop_settings espera DesktopControlSettings")
     target = Path(path) if path is not None else default_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(settings.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+    atomic_write_text(
+        target, json.dumps(settings.to_dict(), ensure_ascii=False, indent=2)
     )
-    tmp.replace(target)
     return target

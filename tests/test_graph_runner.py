@@ -234,6 +234,41 @@ def test_feedback_cycle_retry_success(tmp_path: Path) -> None:
     assert cfactory.a.count >= 2
 
 
+def test_independent_roots_run_concurrently(tmp_path: Path) -> None:
+    """A and B have no data dependency: the DAG scheduler must overlap them."""
+    state = {"active": 0, "peak": 0}
+
+    class ParallelAgent(Agent):
+        def __init__(self, spec_id: str) -> None:
+            self.spec_id = spec_id
+
+        async def execute(self, task, ctx):
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+            await asyncio.sleep(0.05)
+            state["active"] -= 1
+            return AgentResult(
+                node_id=ctx.node_id,
+                spec_id=self.spec_id,
+                status=AgentStatus.OK,
+                output={"spec": self.spec_id},
+            )
+
+    class ParallelFactory(AgentFactory):
+        def create(self, spec_id, *, model_role=None):
+            return ParallelAgent(spec_id)
+
+    graph = ExecutionGraph(entry_node="a")
+    graph.add_node(Node(id="a", spec_id="sA"))
+    graph.add_node(Node(id="b", spec_id="sB"))
+    factory = ParallelFactory()
+    result = run(DefaultGraphRunner(factory).run(
+        graph, make_task(tmp_path), RuntimeServices(factory=factory)
+    ))
+    assert result.status.value == "ok"
+    assert state["peak"] == 2
+
+
 def test_events_sequence(tmp_path: Path) -> None:
     factory = FakeFactory({"sA": {"status": "ok"}})
     graph = ExecutionGraph(entry_node="n1")

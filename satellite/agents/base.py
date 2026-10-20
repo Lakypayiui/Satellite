@@ -34,6 +34,9 @@ class AgentContext:
     # Token de cancelación de la ejecución en curso: el agente lo mira antes de gastar
     # una llamada al LLM o de lanzar una herramienta.
     cancel: object | None = None
+    # Estado compartido entre las tools de la MISMA tarea (p. ej. ejecuciones exitosas
+    # que `propose_skill` necesita como evidencia). El runner lo reutiliza entre nodos.
+    task_state: dict = field(default_factory=dict)
 
 
 class Agent(ABC):

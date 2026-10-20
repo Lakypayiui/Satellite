@@ -50,6 +50,24 @@ def test_render_success_writes_artifact(tmp_path: Path, monkeypatch) -> None:
     assert tmp_path in artifact.parents
 
 
+def test_render_reads_the_artifact_when_pele_only_writes_the_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Pele escribe en outPath y no devuelve `svg`: el tool debe leer el archivo."""
+
+    def fake_render(source, *, project_root=None, out_path=None, **kwargs):
+        Path(out_path).write_text("<svg>from-file</svg>", encoding="utf-8")
+        return RenderOutcome(ok=True, svg="", diagram_type="flowchart")
+
+    monkeypatch.setattr(diagram_module, "render_mermaid", fake_render)
+    ctx = ToolContext(project_root=tmp_path)
+    result = run(RenderDiagramTool().execute({"diagram": "flowchart LR\n A --> B"}, ctx))
+
+    assert result.success is True
+    assert result.output["svg"] == "<svg>from-file</svg>"
+    assert result.output["bytes"] == len("<svg>from-file</svg>".encode("utf-8"))
+
+
 def test_render_unavailable_falls_back_to_mermaid(tmp_path: Path, monkeypatch) -> None:
     def fake_render(source, *, project_root=None, out_path=None, **kwargs):
         return RenderOutcome(ok=False, error_code="pele_unavailable", error="no hay pele")

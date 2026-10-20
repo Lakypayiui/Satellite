@@ -13,10 +13,11 @@ operaciones explícitas.
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
+
+from satellite.core.atomic import atomic_write_text
 
 COMMENTS_FILE = Path(".satellite") / "state" / "comments.json"
 MAX_TEXT_CHARS = 4000
@@ -45,11 +46,9 @@ def _load(root: Path | str) -> list[dict]:
 
 
 def _save(root: Path | str, items: list[dict]) -> None:
-    path = _path(root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_text(
+        _path(root), json.dumps(items, ensure_ascii=False, indent=2)
+    )
 
 
 def _entero(valor: object, default: int = 0) -> int:

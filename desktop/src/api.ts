@@ -52,11 +52,22 @@ export interface SessionMutationView extends SessionsView {
   archived: boolean;
 }
 
+/** Diagram artifact produced by a turn (rendered SVG or its Mermaid source). */
+export interface DiagramView {
+  rendered?: boolean;
+  /** Absolute path of the generated SVG; the chat fetches it through `/diagrams`. */
+  svg_path?: string;
+  /** Mermaid source, kept as a fallback when the SVG could not be rendered. */
+  mermaid?: string;
+  diagram_type?: string;
+}
+
 export interface Turn {
   role: string;
   content: string;
   task_id: string;
   status: string;
+  diagram?: DiagramView | null;
 }
 
 export interface ChatReply {
@@ -69,6 +80,10 @@ export interface ChatReply {
   context?: MentionSummary;
   /** Alternativas del modo plan, si la respuesta las trae (`null` = no hay ninguna). */
   plan?: PlanOptionsView | null;
+  /** Salida completa del runtime (incluye el diagrama, si lo hay). */
+  output?: Record<string, unknown> | null;
+  /** Diagrama del turno, si la respuesta produjo uno. */
+  diagram?: DiagramView | null;
 }
 
 /** Una alternativa concreta del modo plan. */

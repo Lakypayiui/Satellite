@@ -182,7 +182,9 @@ class DelegationManager:
                 context=ContextBundle(),
                 feedback=(),
                 sink=self.sink,
-                task_id=parent_ctx.task_id,
+                # A directly-created agent may not have a task id yet; the child must
+                # still emit valid events (empty ids are rejected by ExecutionEvent).
+                task_id=parent_ctx.task_id or SYSTEM_TASK_ID,
                 node_id=agent_id,
                 project_root=project_root,
                 user_language=parent_ctx.user_language,

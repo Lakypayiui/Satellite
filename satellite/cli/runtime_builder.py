@@ -23,6 +23,7 @@ from satellite.approval.cli import CliApproval
 from satellite.approval.policy import ApprovalPolicy
 from satellite.context.engine import DefaultContextEngine
 from satellite.context.preprocessor import LocalPreprocessor
+from satellite.core.tempfiles import cleanup_orphan_temps
 from satellite.cli.console import say
 from satellite.config import providers as provider_config
 from satellite.core.errors import ProviderError
@@ -60,6 +61,7 @@ from satellite.skills.registry import SkillRegistry
 from satellite.skills.runner import SkillRunner
 from satellite.tools.context_tool import RequestContextTool
 from satellite.tools.delegate import DelegateTool
+from satellite.tools.spawn_agent import SpawnAgentTool
 from satellite.tools.diagram import RenderDiagramTool
 from satellite.tools.fs import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from satellite.tools.git import GitStatusTool
@@ -85,6 +87,7 @@ DEFAULT_ALLOWED_TOOLS: set[str] = {
     "search_skills",
     "propose_skill",
     "delegate",
+    "spawn_agent",
     "render_diagram",
 }
 
@@ -114,6 +117,11 @@ def build_runtime(
     project_root = Path(project_root).resolve()
     base_dir = Path(__file__).parent.parent / "agents"
     paths = ensure_dirs(resolve_paths(project_root))
+    # Remove `.tmp` files left behind by a crash/kill. Recent ones are untouched:
+    # another process could still be writing them.
+    cleanup_orphan_temps(
+        [paths.global_root] + ([paths.project_data] if paths.project_data else [])
+    )
     # Migraciones de esquema del directorio de datos (idempotente): sin esto el
     # proyecto queda en v0 y `doctor` falla hasta que alguien corra `init`.
     if paths.project_data is not None:
@@ -205,6 +213,19 @@ def build_runtime(
             role_providers[key] = _role_provider(project_root, key, provider)
         return role_providers[key]
 
+    # Children inherit the parent's provider unless the user configured a specific
+    # model for subagents. ``None`` here means "inherit"; it is not a global fallback.
+    subagent_provider = _optional_role_provider(project_root, "subagents")
+    if subagent_provider is not None:
+        subagent_provider = _safe_proxy(
+            _metered(
+                subagent_provider,
+                project_root=project_root,
+                settings=settings,
+                role="subagents",
+            )
+        )
+
     factory = DefaultAgentFactory(
         registry=registry,
         prompts=prompt_reg,
@@ -218,9 +239,14 @@ def build_runtime(
         workdir=_active_workdir(project_root),
         # Sandbox del nivel configurado: los agentes ejecutan sus procesos por él.
         sandbox=sandbox,
+        # Shared skill catalog: `search_skills`/skill execution must see it.
+        skills=skill_registry,
         # A node with ``model_role`` uses the provider configured for that role
         # (``llm.agents`` by default) instead of always the global one.
         provider_resolver=provider_for_role,
+        # Optional child model (``llm.subagents``). The parent and orchestrator are
+        # untouched; only children use it.
+        subagent_provider=subagent_provider,
     )
     delegation = DelegationManager(
         factory,
@@ -393,6 +419,7 @@ def build_tool_registry(
         GitStatusTool(),
         RequestContextTool(),
         DelegateTool(),
+        SpawnAgentTool(),
         SearchSkillsTool(),
         ProposeSkillTool(),
         RenderDiagramTool(),
@@ -423,6 +450,9 @@ def build_agent_catalog(project_root: Path):
     """
     project_root = Path(project_root).resolve()
     paths = ensure_dirs(resolve_paths(project_root))
+    cleanup_orphan_temps(
+        [paths.global_root] + ([paths.project_data] if paths.project_data else [])
+    )
     base_dir = Path(__file__).parent.parent / "agents"
     verify_and_restore(base_dir / "specs", paths.agents_root, patterns=("*.json",))
     verify_and_restore(base_dir / "prompts", paths.agents_root, patterns=("*.txt",))
@@ -506,6 +536,30 @@ def _load_provider(project_root: Path) -> LLMProvider:
         f"no hay proveedor global configurado: {config_path}. "
         "Configura uno desde satellite provider o desde Ajustes globales."
     )
+
+
+def _optional_role_provider(project_root: Path, role: str) -> LLMProvider | None:
+    """Provider for ``llm.<role>`` only when that role is explicitly configured.
+
+    Used for subagents: no configuration means the child inherits its parent's
+    provider, not the global default.
+    """
+    config_path = project_root / CONFIG_PATH
+    if not config_path.exists():
+        return None
+    try:
+        from satellite.config.providers import runtime_config
+
+        data = runtime_config(project_root)
+        llm = data.get("llm") if isinstance(data.get("llm"), dict) else {}
+        if not isinstance(llm.get(role), dict) or not llm.get(role):
+            return None
+        cfg = _provider_config_from(data, role=role)
+        if cfg is None:
+            return None
+        return ProviderFactory.create(cfg)
+    except Exception:  # noqa: BLE001 — a broken optional role must not break the runtime
+        return None
 
 
 def _role_provider(project_root: Path, role: str, default: LLMProvider) -> LLMProvider:

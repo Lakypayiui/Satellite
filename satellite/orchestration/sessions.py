@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from satellite.core.atomic import atomic_write_text
+
 LEGACY_FILE = "conversation.json"
 SESSION_DIR = "conversations"
 CURRENT_FILE = "current_session.json"
@@ -147,12 +149,9 @@ class SessionStore:
             "archived": bool(previous.get("archived")) if archived is None else bool(archived),
         }
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_name(path.name + ".tmp")
-            tmp.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            atomic_write_text(
+                path, json.dumps(payload, ensure_ascii=False, indent=2)
             )
-            tmp.replace(path)
         except OSError:
             return False
         return True

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -54,6 +55,9 @@ class ChatGPTPlanProvider(LLMProvider):
                         raise ProviderError(self._error_message(response.status_code, body))
                     completed: dict | None = None
                     failure = ""
+                    streamed_text = ""
+                    streamed_deltas: list[str] = []
+                    streamed_calls: list[ToolCall] = []
                     async for line in response.aiter_lines():
                         if not line.startswith("data:"):
                             continue
@@ -76,11 +80,53 @@ class ChatGPTPlanProvider(LLMProvider):
                             incomplete = event.get("response") if isinstance(event.get("response"), dict) else {}
                             details = incomplete.get("incomplete_details") or {}
                             failure = f"respuesta incompleta ({details.get('reason') or 'sin motivo'})"
+                        elif kind == "response.output_text.delta":
+                            streamed_deltas.append(str(event.get("delta") or ""))
+                        elif kind == "response.output_text.done":
+                            streamed_text = str(event.get("text") or streamed_text)
+                        elif kind == "response.refusal.done":
+                            streamed_text = str(event.get("refusal") or streamed_text)
+                        elif kind in {
+                            "response.output_item.done",
+                            "response.function_call_arguments.done",
+                        }:
+                            # This account endpoint sends the real content in the
+                            # streamed events and an empty `output` array in
+                            # ``response.completed``. Collect it here instead.
+                            if kind == "response.output_item.done":
+                                item = event.get("item")
+                            else:
+                                # The arguments event has the call fields at the top
+                                # level (not nested under an `item`).
+                                item = {
+                                    "type": "function_call",
+                                    "call_id": event.get("call_id"),
+                                    "item_id": event.get("item_id"),
+                                    "name": event.get("name"),
+                                    "arguments": event.get("arguments", {}),
+                                }
+                            if isinstance(item, dict):
+                                text = self._text_from_item(item)
+                                if text:
+                                    streamed_text = text
+                                call = self._call_from_item(item)
+                                if call is not None and all(c.id != call.id for c in streamed_calls):
+                                    streamed_calls.append(call)
                     if failure:
                         raise ProviderError(f"ChatGPT: {failure}")
                     if completed is None:
                         raise ProviderError("ChatGPT cerró el flujo sin completar la respuesta.")
-                    return self._response(completed)
+                    result = self._response(completed)
+                    fallback_text = streamed_text or "".join(streamed_deltas)
+                    if not (result.content or "").strip() and fallback_text:
+                        result = replace(result, content=fallback_text)
+                    if not result.tool_calls and streamed_calls:
+                        result = replace(
+                            result,
+                            tool_calls=tuple(streamed_calls),
+                            stop_reason="tool_calls",
+                        )
+                    return result
         except ProviderError:
             raise
         except httpx.HTTPStatusError as exc:
@@ -115,7 +161,7 @@ class ChatGPTPlanProvider(LLMProvider):
             "store": False,
             "stream": True,
         }
-        if request.tools is not None:
+        if request.tools:
             payload["tools"] = [
                 {
                     "type": "function",
@@ -133,23 +179,55 @@ class ChatGPTPlanProvider(LLMProvider):
         return payload
 
     @staticmethod
-    def _response(data: dict) -> LLMResponse:
+    def _text_from_item(item: object) -> str:
+        """Visible text carried by one Responses output item (message/text/refusal)."""
+        if not isinstance(item, dict):
+            return ""
+        kind = str(item.get("type") or "")
+        if kind == "output_text":
+            return str(item.get("text") or "")
+        if kind != "message":
+            return ""
+        parts: list[str] = []
+        for block in item.get("content", []) or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") in ("output_text", "text"):
+                parts.append(str(block.get("text") or ""))
+            elif block.get("type") == "refusal":
+                parts.append(str(block.get("refusal") or ""))
+        return "".join(parts)
+
+    @staticmethod
+    def _call_from_item(item: object) -> ToolCall | None:
+        """Function call carried by an output item / arguments event (or ``None``)."""
+        if not isinstance(item, dict):
+            return None
+        if item.get("type") not in (None, "function_call"):
+            return None
+        name = str(item.get("name") or "").strip()
+        if not name:
+            return None
+        return ToolCall(
+            id=str(item.get("call_id") or item.get("id") or item.get("item_id") or ""),
+            name=name,
+            arguments=coerce_arguments(item.get("arguments", {})),
+        )
+
+    @classmethod
+    def _response(cls, data: dict) -> LLMResponse:
         text_parts: list[str] = []
         calls: list[ToolCall] = []
         for item in data.get("output", []) or []:
-            if not isinstance(item, dict):
-                continue
-            if item.get("type") == "message":
-                for block in item.get("content", []) or []:
-                    if isinstance(block, dict) and block.get("type") == "output_text":
-                        text_parts.append(str(block.get("text") or ""))
-            elif item.get("type") == "function_call":
-                arguments = item.get("arguments", {})
-                calls.append(ToolCall(
-                    id=str(item.get("call_id") or item.get("id") or ""),
-                    name=str(item.get("name") or ""),
-                    arguments=coerce_arguments(arguments),
-                ))
+            text = cls._text_from_item(item)
+            if text:
+                text_parts.append(text)
+            call = cls._call_from_item(item)
+            if call is not None:
+                calls.append(call)
+        # Some responses expose the convenience field even when `output` is empty.
+        if not text_parts and isinstance(data.get("output_text"), str):
+            text_parts.append(data["output_text"])
         raw_usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
         input_tokens = int(raw_usage.get("input_tokens") or 0)
         output_tokens = int(raw_usage.get("output_tokens") or 0)

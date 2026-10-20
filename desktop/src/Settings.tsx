@@ -1853,17 +1853,25 @@ function FilaRol(props: FilaProps) {
       <div className="rejilla" style={{ marginTop: 8, alignItems: "end" }}>
         <div className="campo" style={{ marginBottom: 0 }}>
           <label>
-            {props.rol}
-            {props.actual.provider ? "" : t("settings.roles.row.usesGlobal")}
+            {props.rol === "subagents"
+              ? t("settings.roles.row.subagents")
+              : props.rol}
+            {props.actual.provider
+              ? ""
+              : props.rol === "subagents"
+                ? t("settings.roles.row.inheritsParent")
+                : t("settings.roles.row.usesGlobal")}
             {props.actual.provider && esfuerzo !== "auto"
               ? t("settings.roles.row.effort", { esfuerzo })
               : ""}
           </label>
           <select value={proveedor} onChange={(evento) => setProveedor(evento.target.value)}>
             <option value="">
-              {t("settings.roles.row.global", {
-                proveedor: global?.name || t("settings.models.none"),
-              })}
+              {props.rol === "subagents"
+                ? t("settings.roles.row.inheritParentOption")
+                : t("settings.roles.row.global", {
+                    proveedor: global?.name || t("settings.models.none"),
+                  })}
             </option>
             {props.proveedores.map((item) => (
               <option key={item.id} value={item.id}>

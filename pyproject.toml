@@ -43,6 +43,13 @@ desktop-control-linux = [
     "PyGObject>=3.42; platform_system == 'Linux'",
 ]
 
+[tool.setuptools.packages.find]
+# This repository is a flat layout with non-Python directories at the root
+# (`desktop/`, `Icono/`). Automatic discovery treats them as packages on Linux
+# and aborts the editable install; only the runtime package is shipped.
+include = ["satellite*"]
+exclude = ["desktop*", "Icono*", "tests*"]
+
 [tool.setuptools.package-data]
 # El servicio vendorizado viaja con su config de referencia, su README y su aviso.
 "satellite.safe_proxy" = ["*.md", "*.yaml"]

@@ -28,6 +28,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from satellite.core.atomic import atomic_write_text
 from satellite.skills.audit import Finding, audit_skill, reason_for
 from satellite.skills.models import ALLOWED_LANGUAGES, SkillManifest, SkillStatus
 from satellite.tool_manifest import is_tool_id
@@ -338,9 +339,8 @@ class SkillResultCache:
         """Escribe la cache en JSON (atómico); nunca lanza."""
         target = Path(path)
         try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            tmp = target.with_name(target.name + ".tmp")
-            tmp.write_text(
+            atomic_write_text(
+                target,
                 json.dumps(
                     {
                         "entries": self._entries,
@@ -354,9 +354,7 @@ class SkillResultCache:
                     },
                     ensure_ascii=False,
                 ),
-                encoding="utf-8",
             )
-            tmp.replace(target)
         except (OSError, TypeError):
             return
 

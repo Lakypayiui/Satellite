@@ -31,6 +31,7 @@ RESERVED_SKILL_IDS: frozenset[str] = frozenset(
         "git_status",
         "request_context",
         "delegate",
+        "spawn_agent",
         "search_skills",
         "propose_skill",
         "render_diagram",
