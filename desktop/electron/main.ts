@@ -10,6 +10,7 @@ import {
   ipcMain,
   nativeImage,
   nativeTheme,
+  shell,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
 } from "electron";
@@ -451,6 +452,22 @@ ipcMain.on("satellite:window-toggle-maximize", (evento) => {
 
 ipcMain.on("satellite:window-close", (evento) => {
   if (remitenteValido(evento)) ventana?.close();
+});
+
+// Enlaces del Markdown: se abren en el navegador del sistema, nunca dentro de la app.
+ipcMain.handle("satellite:open-external", async (evento, url: unknown) => {
+  if (!remitenteValido(evento)) throw new Error("remitente no autorizado");
+  const raw = typeof url === "string" ? url.trim() : "";
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("URL inválida");
+  }
+  if (!["http:", "https:", "mailto:"].includes(parsed.protocol)) {
+    throw new Error("protocolo no permitido");
+  }
+  await shell.openExternal(parsed.toString());
 });
 
 ipcMain.handle("satellite:preferences", (evento) => {

@@ -39,7 +39,7 @@ PROPOSAL = {
 }
 
 
-def make_generator(script, validator=None):
+def make_generator(script, validator=None, registry=None):
     prompts = DefaultPromptRegistry()
     prompts.register_pair(
         "agent_creator",
@@ -50,7 +50,11 @@ def make_generator(script, validator=None):
     tools.register(ReadFileTool())
     provider = FakeLLM(script=script)
     generator = AgentProposalGenerator(
-        provider, DefaultAgentRegistry(), prompts, tools, validator=validator
+        provider,
+        registry or DefaultAgentRegistry(),
+        prompts,
+        tools,
+        validator=validator,
     )
     return generator, provider
 
@@ -106,6 +110,97 @@ def test_validator_rejection_feeds_back() -> None:
     outcome = run(generator.propose("subir por ftp"))
     assert outcome.kind == "proposed_agent"
     assert "ftp_upload" in provider.requests[1].messages[-1].content
+
+
+CPP_PROPOSAL = {
+    **PROPOSAL,
+    "id": "cpp_code_reviewer",
+    "name": "Revisor de C++",
+    "description": "Revisa código C++ y reporta defectos cuando se pide una auditoría.",
+    "capabilities": ["detectar defectos en C++", "revisar fallos de C++"],
+}
+
+GENERAL_PROPOSAL = {
+    **PROPOSAL,
+    "id": "code_reviewer",
+    "name": "Revisor de código",
+    "description": "Revisa código fuente y reporta defectos cuando se pide una auditoría.",
+    "capabilities": ["detectar defectos", "revisar fallos"],
+}
+
+
+def test_generic_need_rejects_a_language_specific_agent() -> None:
+    """Un «audita el código» genérico no debe crear un agente sólo de C++."""
+    generator, provider = make_generator(
+        [{"content": _json(CPP_PROPOSAL)}, {"content": _json(GENERAL_PROPOSAL)}]
+    )
+    outcome = run(generator.propose("auditar código y revisar fallos"))
+    assert outcome.kind == "proposed_agent"
+    assert outcome.proposal is not None
+    assert outcome.proposal.id == "code_reviewer"
+    assert len(provider.requests) == 2
+    assert "language-agnostic" in provider.requests[1].messages[-1].content
+
+
+def test_the_original_user_scope_overrides_a_specialized_gap() -> None:
+    """El planificador puede inferir C++; el alcance del usuario manda."""
+    generator, _provider = make_generator(
+        [{"content": _json(CPP_PROPOSAL)}, {"content": _json(GENERAL_PROPOSAL)}]
+    )
+    outcome = run(
+        generator.propose(
+            "auditar código C++",
+            extra_context="Original user request:\nAudita el código y revisa fallos",
+        )
+    )
+    assert outcome.kind == "proposed_agent"
+    assert outcome.proposal is not None
+    assert outcome.proposal.id == "code_reviewer"
+
+
+def test_generic_need_does_not_extend_a_cpp_specific_agent() -> None:
+    from satellite.core.spec import AgentSpec
+
+    registry = DefaultAgentRegistry()
+    registry.register_spec(
+        AgentSpec(
+            id="cpp_code_reviewer",
+            name="Revisor de C++",
+            description="Revisa código C++",
+            capabilities=("revisar C++",),
+            prompt_ref="cpp_code_reviewer",
+        )
+    )
+    generator, provider = make_generator(
+        [
+            {
+                "content": _json(
+                    {
+                        "type": "extend",
+                        "agent_id": "cpp_code_reviewer",
+                        "add_capabilities": ["auditar Python"],
+                        "rationale": "ampliar el revisor",
+                    }
+                )
+            },
+            {"content": _json(GENERAL_PROPOSAL)},
+        ],
+        registry=registry,
+    )
+    outcome = run(generator.propose("audita el código y revisa fallos"))
+    assert outcome.kind == "proposed_agent"
+    assert outcome.proposal is not None
+    assert outcome.proposal.id == "code_reviewer"
+    assert "language-agnostic" in provider.requests[1].messages[-1].content
+
+
+def test_explicit_language_is_allowed() -> None:
+    generator, provider = make_generator([{"content": _json(CPP_PROPOSAL)}])
+    outcome = run(generator.propose("audita el código C++ y revisa fallos"))
+    assert outcome.kind == "proposed_agent"
+    assert outcome.proposal is not None
+    assert outcome.proposal.id == "cpp_code_reviewer"
+    assert len(provider.requests) == 1
 
 
 def test_exhausted_returns_error() -> None:

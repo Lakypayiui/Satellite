@@ -25,6 +25,7 @@ SHIPPED_PROMPTS = (
     "plan_options",
     "pele_diagram_agent",
     "desktop_operator",
+    "web_researcher",
 )
 
 
@@ -37,7 +38,18 @@ def test_base_specs_are_the_shipped_agents() -> None:
         "skill_curator",
         "pele_diagram_agent",
         "desktop_operator",
+        "web_researcher",
     }
+
+
+def test_web_researcher_is_a_primitive_agent() -> None:
+    reg = DefaultAgentRegistry()
+    reg.load_dir(SPECS)
+    spec = reg.get("web_researcher")
+    assert spec.tools == ("web_search", "web_fetch", "web_download")
+    assert {"web_search", "web_research"} <= set(spec.capabilities)
+    assert spec.output_schema is not None
+    assert "sources" in spec.output_schema["required"]
 
 
 def test_desktop_operator_is_a_primitive_agent() -> None:

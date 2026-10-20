@@ -1838,6 +1838,8 @@ export function App() {
             runtimeListo={Boolean(status?.runtime_ready)}
             marca={marca}
             plan={plan}
+            policyMode={config?.policy_mode ?? "ask"}
+            onPolicyMode={(modo) => void cambiarAjustes({ policy_mode: modo })}
             onEnviar={(texto, planMode) => void enviar(texto, planMode)}
             onPermiso={(id, decision, feedback) => void decidirPermiso(id, decision, feedback)}
             onElegirPlan={(id) => void elegirPlan(id)}

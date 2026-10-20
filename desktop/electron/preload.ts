@@ -78,6 +78,10 @@ const api = {
       dev: boolean;
     }>,
 
+  /** Abre un enlace http(s)/mailto en el navegador o cliente del sistema. */
+  openExternal: (url: string) =>
+    ipcRenderer.invoke("satellite:open-external", url) as Promise<void>,
+
   /** Conexión OpenAI guardada con cifrado del sistema operativo. */
   chatgpt: {
     status: () => ipcRenderer.invoke("satellite:chatgpt-status") as Promise<{ connected: boolean; email: string }>,

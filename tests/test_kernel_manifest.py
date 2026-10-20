@@ -84,8 +84,12 @@ def test_reserved_ids() -> None:
         "skill_curator",
         "pele_diagram_agent",
         "desktop_operator",
+        "web_researcher",
     }
     assert "run_python" in RESERVED_SKILL_IDS
+    assert "web_search" in RESERVED_SKILL_IDS
+    assert "web_fetch" in RESERVED_SKILL_IDS
+    assert "web_download" in RESERVED_SKILL_IDS
     assert is_reserved("orchestrator")
     assert is_reserved("pele_diagram_agent")
     assert is_reserved("search_files")

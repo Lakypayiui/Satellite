@@ -609,6 +609,7 @@ interface Bridge {
   restart: () => Promise<Envelope<unknown>>;
   pickFolder: () => Promise<string>;
   info: () => Promise<{ ready: boolean; repoRoot: string; dev: boolean }>;
+  openExternal: (url: string) => Promise<void>;
   chatgpt: {
     status: () => Promise<{ connected: boolean; email: string }>;
     login: () => Promise<{ email: string }>;
@@ -665,6 +666,7 @@ export const bridge = {
   restart: () => puente().restart(),
   pickFolder: () => puente().pickFolder(),
   info: () => puente().info(),
+  abrirExterno: (url: string) => puente().openExternal(url),
   chatgpt: {
     status: () => puente().chatgpt.status(),
     login: () => puente().chatgpt.login(),

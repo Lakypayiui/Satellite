@@ -17,6 +17,7 @@ RESERVED_AGENT_IDS: frozenset[str] = frozenset(
         "skill_curator",
         "pele_diagram_agent",
         "desktop_operator",
+        "web_researcher",
     }
 )
 
@@ -41,6 +42,9 @@ RESERVED_SKILL_IDS: frozenset[str] = frozenset(
         "search_skills",
         "propose_skill",
         "render_diagram",
+        "web_search",
+        "web_fetch",
+        "web_download",
     }
 )
 

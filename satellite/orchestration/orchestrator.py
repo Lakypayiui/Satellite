@@ -1057,6 +1057,12 @@ class DefaultOrchestrator(Orchestrator):
                     str(task.metadata.get("refined_from") or task.goal),
                     task.metadata.get("history"),
                 )
+                # El alcance real lo fija el usuario, no la inferencia del planner
+                # a partir de los archivos del proyecto.
+                kwargs["extra_context"] = (
+                    "Original user request (authoritative scope; do not narrow "
+                    "beyond it):\n" + str(task.metadata.get("refined_from") or task.goal)
+                )
             outcome = await self.expander.expand(planning.gap.missing, **kwargs)
         except Exception:
             return None

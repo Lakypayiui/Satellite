@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +22,37 @@ from satellite.retrieval.sanitize import sanitize
 from satellite.tools.base import ToolRegistry
 
 PACKAGE_PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+
+# Lenguajes que no deben aparecer en una propuesta si el usuario NO los nombró.
+# Un "audita el código" genérico debe producir un revisor agnóstico, no un
+# agente "cpp_code_reviewer" sólo porque el proyecto tenga archivos C++.
+# Ojo con ``C++``/``C#``: terminan en no-palabra, así que ``\b`` al final nunca
+# casa. Se usan lookarounds neutros respecto a ``+``/``#``.
+_LANGUAGE_RE = re.compile(
+    r"(?<!\w)(?:c\+\+|cpp|cxx|c#|csharp|python|py|javascript|typescript|java|"
+    r"kotlin|ruby|php|golang|go|rust|swift|verilog|vhdl|scala|perl|lua|haskell|"
+    r"elixir|dart|bash|powershell|sql)(?![\w+])",
+    re.IGNORECASE,
+)
+
+
+def _generic_scope(text: str) -> bool:
+    """True si el alcance no nombra un lenguaje de programación."""
+    return _LANGUAGE_RE.search(str(text or "")) is None
+
+
+def _proposal_language(proposal: ProposedAgent) -> str:
+    """Lenguaje al que la propuesta se estrecha, o ``""`` si es agnóstica."""
+    scope = " ".join(
+        (
+            proposal.id,
+            proposal.name,
+            proposal.description,
+            *proposal.capabilities,
+        )
+    )
+    match = _LANGUAGE_RE.search(scope)
+    return match.group(0) if match else ""
 
 
 @dataclass(frozen=True)
@@ -141,6 +173,23 @@ class AgentProposalGenerator:
                     last_errors.append(f"invalid extension: {exc}")
                     feedback = "; ".join(last_errors)
                     continue
+                # Tampoco se acepta ampliar un agente C++ (o de otro lenguaje)
+                # cuando el alcance del usuario es genérico.
+                scope = (extra_context or need).strip()
+                if _generic_scope(scope):
+                    try:
+                        existing = self.registry.get(extension.agent_id)
+                    except Exception:  # noqa: BLE001 — id inexistente: lo valida el expander
+                        existing = None
+                    language = _proposal_language(existing) if existing else ""
+                    if language:
+                        last_errors.append(
+                            "the request is language-agnostic; do not extend the "
+                            f"{language}-specific agent '{extension.agent_id}'. "
+                            "Propose a general code reviewer instead."
+                        )
+                        feedback = "; ".join(last_errors)
+                        continue
                 return CreatorOutcome(kind="extend", extension=extension)
             if kind == "skill_suggestion":
                 try:
@@ -161,6 +210,20 @@ class AgentProposalGenerator:
                 last_errors.append(f"invalid proposal: {exc}")
                 feedback = "; ".join(last_errors)
                 continue
+
+            # El alcance manda: si el usuario pidió algo genérico, no se acepta
+            # un agente estrechado a un lenguaje (p. ej. C++ por el proyecto).
+            scope = (extra_context or need).strip()
+            if _generic_scope(scope):
+                language = _proposal_language(proposal)
+                if language:
+                    last_errors.append(
+                        "the request is language-agnostic; do not specialize the "
+                        f"agent to {language}. Propose a general code reviewer that "
+                        "inspects the files named by the task."
+                    )
+                    feedback = "; ".join(last_errors)
+                    continue
 
             if self.validator is not None:
                 report = self.validator.validate(proposal)

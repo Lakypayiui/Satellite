@@ -53,7 +53,13 @@ from satellite.providers.fake import FakeLLM
 PKG = Path(__file__).resolve().parent.parent / "satellite" / "agents"
 PROMPTS = PKG / "prompts"
 EXAMPLES = PKG / "examples"
-BASE_PROMPT_IDS = ("orchestrator", "agent_creator", "skill_curator", "plan_options")
+BASE_PROMPT_IDS = (
+    "orchestrator",
+    "agent_creator",
+    "skill_curator",
+    "plan_options",
+    "web_researcher",
+)
 
 # Palabras inequívocamente españolas que aparecerían en un prompt escrito en
 # español. Los prompts en inglés usan sus equivalentes (ROLE, Task, Context,

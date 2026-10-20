@@ -71,6 +71,7 @@ from satellite.tools.jobs import JobTool
 from satellite.tools.registry import DefaultToolRegistry
 from satellite.tools.skills import ProposeSkillTool, SearchSkillsTool
 from satellite.tools.terminal import RunCommandTool
+from satellite.tools.web import WebDownloadTool, WebFetchTool, WebSearchTool
 from satellite.tool_manifest import TOOL_IDS as DESKTOP_TOOL_IDS
 
 DEFAULT_ALLOWED_TOOLS: set[str] = {
@@ -90,6 +91,9 @@ DEFAULT_ALLOWED_TOOLS: set[str] = {
     "delegate",
     "spawn_agent",
     "render_diagram",
+    "web_search",
+    "web_fetch",
+    "web_download",
 }
 
 AGENTS_SUBDIR = Path("agents")
@@ -447,6 +451,9 @@ def build_tool_registry(
         SearchSkillsTool(),
         ProposeSkillTool(),
         RenderDiagramTool(),
+        WebSearchTool(),
+        WebFetchTool(),
+        WebDownloadTool(),
     ):
         tools.register(tool)
     if allow_desktop:

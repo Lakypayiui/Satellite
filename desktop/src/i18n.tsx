@@ -192,6 +192,15 @@ export const TEXTOS = {
     en: "Proposes a plan before touching anything",
   },
   "chat.plan.aria": { es: "alternativas del plan", en: "plan alternatives" },
+  "chat.policy.label": { es: "permisos", en: "permissions" },
+  "chat.policy.aria": { es: "modo de permisos", en: "permission mode" },
+  "chat.policy.title": {
+    es: "ask pregunta cada permiso; auto aprueba lo de bajo riesgo; unrestricted no pregunta nada",
+    en: "ask asks for every permission; auto approves low-risk ones; unrestricted asks nothing",
+  },
+  "chat.policy.ask": { es: "ask", en: "ask" },
+  "chat.policy.auto": { es: "auto", en: "auto" },
+  "chat.policy.unrestricted": { es: "unrestricted", en: "unrestricted" },
   "chat.plan.header": {
     es: "modo plan · elige una alternativa",
     en: "plan mode · choose an alternative",

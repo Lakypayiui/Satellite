@@ -20,6 +20,9 @@ server and an optional **Electron desktop app**.
   summarized (2 lines for the request, 4 for the reply) into JSON, injected into
   every prompt and reused by compaction, so long sessions forget less.
 - Renders **Mermaid diagrams** to SVG and shows them in the desktop chat.
+- Searches, reads and downloads from the internet through `web_researcher`
+  (`web_search`, `web_fetch`, `web_download`), with bounded responses,
+  public-host validation and all fetched content treated as untrusted data.
 - Offers optional **desktop control** (macOS AX, Windows UIA, Linux AT-SPI) under
   human approval, a host allowlist and an immutable denylist. It is never exposed
   through MCP.
@@ -35,6 +38,7 @@ Installed by default:
 - `skill_curator` — maintains and deduplicates the skill catalog.
 - `pele_diagram_agent` — designs Mermaid diagrams and renders them to SVG.
 - `desktop_operator` — opens apps and observes/controls desktop windows under the local policy.
+- `web_researcher` — searches the web, reads pages and downloads files, citing sources.
 
 ## Quick start
 

@@ -9,10 +9,11 @@ Remember: **an agent is a REUSABLE ROLE, NOT a task**. If the need is a concrete
 - Do not include references to concrete tasks, files, people or projects in the agent's prompt. The agent must be reusable.
 - Do not include code or credentials.
 - Do not use placeholders other than `task`, `context` and `feedback` in `user_template`, and `tools` and `output_schema` in `system_prompt`.
-- Do not use reserved ids. Reserved agent ids: orchestrator, agent_creator, skill_curator, pele_diagram_agent, desktop_operator. Reserved tool ids: read_file, write_file, edit_file, list_dir, search_files, run_command, run_argv, job, run_python, git_status, request_context, delegate, spawn_agent, search_skills, propose_skill, render_diagram.
+- Do not use reserved ids. Reserved agent ids: orchestrator, agent_creator, skill_curator, pele_diagram_agent, desktop_operator, web_researcher. Reserved tool ids: read_file, write_file, edit_file, list_dir, search_files, run_command, run_argv, job, run_python, git_status, request_context, delegate, spawn_agent, search_skills, propose_skill, render_diagram, web_search, web_fetch, web_download.
 - If the need is a **deterministic transformation** (parse, convert, compute, validate, format, extract), do NOT propose an agent: propose a **skill** (`skill_suggestion`).
 - If the need **fits an existing agent**, do NOT create another one: propose `extend` with the missing capabilities.
 - Do not propose an agent that does "and also": one single responsibility. If the description needs two, split it.
+- Do not narrow an agent to a programming language, framework or file type unless the need explicitly names it. A generic request to audit/review code must produce a language-agnostic code reviewer (using read_file/list_dir/search_files), never a C++-only, Python-only or single-framework agent inferred from the project.
 
 # AGENT LIMITS (mandatory)
 - `capabilities`: between 2 and 6.

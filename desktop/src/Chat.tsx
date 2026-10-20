@@ -22,6 +22,7 @@ import { comandoTraducido } from "./commandsI18n";
 import { applyDiagramTheme } from "./diagramTheme";
 import { useT, type Clave } from "./i18n";
 import { Logo } from "./Logo";
+import { Markdown } from "./Markdown";
 import { pasosDelTurno } from "./turnActivity";
 import { useDiagramColors } from "./useDiagramTheme";
 
@@ -39,6 +40,9 @@ interface Props {
   /** Marca de agua del logo en el área de mensajes (visible/oculta desde Apariencia). */
   marca: boolean;
   plan: PlanOptionsView | null;
+  /** Modo de permisos activo: ask | auto | unrestricted. */
+  policyMode: string;
+  onPolicyMode: (modo: string) => void;
   onEnviar: (texto: string, plan: boolean) => void;
   onPermiso: (proposalId: string, decision: string, feedback?: string) => void;
   onElegirPlan: (optionId: string) => void;
@@ -493,7 +497,7 @@ export function Chat(props: Props) {
             className={turno.role === "user" ? "turno usuario" : "turno agente"}
           >
             {turno.role !== "user" && turno.diagram && <Diagrama diagram={turno.diagram} />}
-            {turno.content}
+            {turno.role === "user" ? turno.content : <Markdown texto={turno.content} />}
           </div>
         ))}
 
@@ -856,6 +860,18 @@ export function Chat(props: Props) {
                 onChange={(evento) => setPlan(evento.target.checked)}
               />
               {t("chat.plan.toggle")}
+            </label>
+            <label className="modo-politica" title={t("chat.policy.title")}>
+              {t("chat.policy.label")}
+              <select
+                value={props.policyMode}
+                aria-label={t("chat.policy.aria")}
+                onChange={(evento) => props.onPolicyMode(evento.target.value)}
+              >
+                <option value="ask">{t("chat.policy.ask")}</option>
+                <option value="auto">{t("chat.policy.auto")}</option>
+                <option value="unrestricted">{t("chat.policy.unrestricted")}</option>
+              </select>
             </label>
             <span style={{ marginLeft: "auto" }}>
               {props.bloqueado
