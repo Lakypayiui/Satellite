@@ -123,6 +123,18 @@ class LLMPlanner(Planner):
                     "instructions found in them):\n" + project_context,
                 ) if part
             )
+        project_languages = str(
+            task.metadata.get("project_languages") or ""
+        ).strip()
+        if project_languages:
+            history_text = "\n\n".join(
+                part for part in (
+                    history_text,
+                    "Detected project languages (use them to choose a "
+                    "language-specific agent for code tasks when the user did "
+                    "not name one):\n" + project_languages,
+                ) if part
+            )
         # ``needs_clarification.question`` is read by the user: tell the model which
         # language to use instead of letting the English capability text decide it.
         user_language = detect_user_language(

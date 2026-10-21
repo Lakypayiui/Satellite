@@ -1889,6 +1889,12 @@ class DesktopBackend:
                 pass
         for bridge in self._bridges.values():
             await bridge.drain()
+        try:
+            from satellite.lsp.manager import shutdown_all
+
+            await shutdown_all()
+        except Exception:  # noqa: BLE001 — el cierre no debe fallar por LSP
+            pass
 
     # --- catálogo de proveedores y roles (lo mismo que hace el asistente del CLI) ---
 

@@ -922,24 +922,31 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def readable_output(output: dict | None, *, limit: int = 1200) -> str:
+def readable_output(output: dict | None, *, limit: int | None = None) -> str:
     """El texto legible de un output de nodo, sea cual sea su forma.
 
     Un nodo con ``output_schema`` devuelve las claves que dicte el schema (p.ej.
     ``skill``/``result``), así que mirar sólo ``content`` dejaba al usuario sin
     respuesta. Como último recurso se serializa el JSON: mejor eso que el silencio.
     Los metadatos internos (p.ej. ``user_language``) no se muestran.
+
+    ``limit`` es opcional y sólo se usa para previews. El texto final del
+    asistente NO se recorta: hacerlo cortaba respuestas largas a mitad de frase
+    justo antes de guardarlas en la conversación.
     """
+    def clip(text: str) -> str:
+        return _clip(text, limit) if limit is not None else text
+
     if not isinstance(output, dict) or not output:
         return ""
     for key in _OUTPUT_TEXT_KEYS:
         value = output.get(key)
         if isinstance(value, str) and value.strip():
-            return _clip(value.strip(), limit)
+            return clip(value.strip())
         if isinstance(value, (list, tuple)) and value and all(
             isinstance(item, str) for item in value
         ):
-            return _clip(" ".join(str(item) for item in value), limit)
+            return clip(" ".join(str(item) for item in value))
     data = {key: value for key, value in output.items() if key not in _META_KEYS}
     if not data:
         return ""
@@ -949,7 +956,7 @@ def readable_output(output: dict | None, *, limit: int = 1200) -> str:
         rendered = json.dumps(data, ensure_ascii=False, default=str)
     except (TypeError, ValueError):  # pragma: no cover - un dict simple siempre serializa
         return ""
-    return _clip(rendered, limit) if rendered not in ("", "{}", "null") else ""
+    return clip(rendered) if rendered not in ("", "{}", "null") else ""
 
 
 def _reply_language(output: dict) -> str:

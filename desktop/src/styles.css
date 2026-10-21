@@ -846,6 +846,8 @@ textarea:focus {
   padding: 10px 20px;
   white-space: pre-wrap;
   word-break: break-word;
+  /* Al mostrar una respuesta nueva desde su primera línea, deja aire arriba. */
+  scroll-margin-top: var(--s3);
 }
 
 .turno.usuario {

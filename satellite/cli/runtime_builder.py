@@ -47,6 +47,7 @@ from satellite.orchestration.base import RuntimeServices
 from satellite.orchestration.delegation import DelegationManager
 from satellite.orchestration.desktop_flow import DesktopFlow
 from satellite.orchestration.diagram_flow import DiagramFlow
+from satellite.orchestration.web_research_flow import WebResearchFlow
 from satellite.orchestration.orchestrator import DefaultOrchestrator
 from satellite.orchestration.plan_mode import PlanOptionGenerator
 from satellite.orchestration.planner import LLMPlanner
@@ -67,7 +68,9 @@ from satellite.tools.diagram import RenderDiagramTool
 from satellite.tools.fs import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from satellite.tools.git import GitStatusTool
 from satellite.tools.primitives import RunPythonTool, RunArgvTool, SearchFilesTool
+from satellite.tools.code_task import CodeTaskTool
 from satellite.tools.jobs import JobTool
+from satellite.tools.lsp import LspTool
 from satellite.tools.registry import DefaultToolRegistry
 from satellite.tools.skills import ProposeSkillTool, SearchSkillsTool
 from satellite.tools.terminal import RunCommandTool
@@ -94,6 +97,8 @@ DEFAULT_ALLOWED_TOOLS: set[str] = {
     "web_search",
     "web_fetch",
     "web_download",
+    "lsp",
+    "code_task",
 }
 
 AGENTS_SUBDIR = Path("agents")
@@ -356,6 +361,12 @@ def build_runtime(
             project_root=project_root,
             services=services,
         )
+    # Búsquedas/investigación en internet: ruta determinista a web_researcher.
+    orchestrator.web_flow = WebResearchFlow(
+        factory=factory,
+        project_root=project_root,
+        services=services,
+    )
     return orchestrator, bus, store, registry
 
 
@@ -454,6 +465,8 @@ def build_tool_registry(
         WebSearchTool(),
         WebFetchTool(),
         WebDownloadTool(),
+        LspTool(),
+        CodeTaskTool(),
     ):
         tools.register(tool)
     if allow_desktop:

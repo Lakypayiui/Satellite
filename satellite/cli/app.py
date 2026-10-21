@@ -541,6 +541,18 @@ def doctor(
         if getattr(registry, "errors", None):
             say(f"✗ catálogo: {len(registry.errors)} specs inválidos")
             ok = False
+        try:
+            from satellite.lsp.installer import status as lsp_status
+
+            servers = lsp_status(project_root=root)
+            ready = sum(1 for server in servers if server["available"])
+            missing = [
+                server["id"] for server in servers if not server["available"]
+            ]
+            detail = f" (faltan: {', '.join(missing)})" if missing else ""
+            say(f"· LSP: {ready}/{len(servers)} servidores listos{detail}")
+        except Exception as exc:  # noqa: BLE001 — doctor no debe romperse por LSP
+            say(f"· LSP: no se pudo comprobar ({exc})")
 
     paths = ensure_dirs(resolve_paths(root))
     version = migrations.current_version(paths.project_data)

@@ -80,6 +80,20 @@ def test_long_assistant_replies_are_not_truncated(tmp_path: Path) -> None:
     assert len(chat.history[-1].content) <= 1200 + len("\n[contenido truncado]")
 
 
+def test_long_final_answers_are_not_clipped_by_readable_output() -> None:
+    from satellite.orchestration.chat import readable_output
+
+    long_text = "x" * 5000
+    assert readable_output({"content": long_text}) == long_text
+    result = TaskResult(
+        task_id="t",
+        status=TaskStatus.OK,
+        summary="",
+        output={"content": long_text},
+    )
+    assert reply_from_result(result) == long_text
+
+
 def test_followup_carries_previous_turns(tmp_path: Path) -> None:
     orchestrator = StubOrchestrator()
     chat = ChatSession(tmp_path, orchestrator)

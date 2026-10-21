@@ -1,0 +1,111 @@
+{
+  "id": "go_auditor",
+  "name": "Go Auditor",
+  "description": "Audits Go code and writes or runs its tests, reporting defects with file, line and severity",
+  "capabilities": [
+    "audit_go",
+    "review_go",
+    "test_go",
+    "go_tests"
+  ],
+  "prompt_ref": "go_auditor",
+  "tools": [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "list_dir",
+    "search_files",
+    "git_status",
+    "lsp",
+    "code_task"
+  ],
+  "validators": [],
+  "model_role": "agent",
+  "max_turns": 30,
+  "timeout_s": 600,
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "summary": {
+        "type": "string",
+        "description": "Audit result for the user, in the user's language."
+      },
+      "verdict": {
+        "type": "string",
+        "enum": [
+          "pass",
+          "issues",
+          "fail"
+        ]
+      },
+      "issues": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "severity": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ]
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "line",
+            "severity",
+            "message"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "tests_added": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "tests_run": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "details": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "passed",
+          "details"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "summary",
+      "verdict",
+      "issues",
+      "tests_added",
+      "tests_run"
+    ],
+    "additionalProperties": false
+  },
+  "lifecycle": "persistent"
+}

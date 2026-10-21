@@ -239,6 +239,9 @@ export function Chat(props: Props) {
   const [texto, setTexto] = useState("");
   const [plan, setPlan] = useState(false);
   const fondo = useRef<HTMLDivElement | null>(null);
+  const ultimoTurno = useRef<HTMLDivElement | null>(null);
+  const pegadoAlFondo = useRef(true);
+  const turnosPrevios = useRef(0);
   const area = useRef<HTMLTextAreaElement | null>(null);
   const [sugerencias, setSugerencias] = useState<MentionSuggestion[] | null>(null);
   const [errorSug, setErrorSug] = useState("");
@@ -252,8 +255,43 @@ export function Chat(props: Props) {
   const ultimo = props.eventos.at(-1) ?? null;
 
   useEffect(() => {
-    fondo.current?.scrollTo({ top: fondo.current.scrollHeight });
+    const el = fondo.current;
+    if (!el) return;
+    const previos = turnosPrevios.current;
+    const actuales = props.turnos.length;
+    turnosPrevios.current = actuales;
+    const nuevo =
+      actuales === previos + 1 ? props.turnos[actuales - 1] : null;
+
+    // Al enviar, muestra el mensaje del usuario.
+    if (nuevo?.role === "user") {
+      pegadoAlFondo.current = true;
+      el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+      return;
+    }
+    // Una respuesta nueva se lee desde el principio: antes se saltaba al final y
+    // las respuestas largas aparecían cortadas por arriba.
+    if (nuevo?.role === "assistant" && pegadoAlFondo.current) {
+      ultimoTurno.current?.scrollIntoView({
+        block: "start",
+        inline: "nearest",
+        behavior: "auto",
+      });
+      pegadoAlFondo.current = false;
+      return;
+    }
+    // Actividad/permisos: sólo sigue el fondo si el usuario ya estaba ahí.
+    if (pegadoAlFondo.current) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+    }
   }, [props.turnos.length, props.permisos.length, pasos.length]);
+
+  function alDesplazar() {
+    const el = fondo.current;
+    if (!el) return;
+    pegadoAlFondo.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  }
 
   // El catálogo es el compartido por las tres interfaces: no hay una segunda lista. Se filtra
   // a la superficie de escritorio, igual que la paleta.
@@ -419,7 +457,7 @@ export function Chat(props: Props) {
 
   return (
     <>
-      <div className="chat" ref={fondo}>
+      <div className="chat" ref={fondo} onScroll={alDesplazar}>
         {/* Marca de agua: detrás del contenido, sin capturar clics ni afectar al scroll.
             Su opacidad sale de `--chat-marca-opacidad` (mismo valor en ambos temas). */}
         {props.marca && (
@@ -494,6 +532,7 @@ export function Chat(props: Props) {
         {props.turnos.map((turno, indice) => (
           <div
             key={`${indice}-${turno.task_id}`}
+            ref={indice === props.turnos.length - 1 ? ultimoTurno : undefined}
             className={turno.role === "user" ? "turno usuario" : "turno agente"}
           >
             {turno.role !== "user" && turno.diagram && <Diagrama diagram={turno.diagram} />}

@@ -46,6 +46,7 @@ from satellite.orchestration.chat_detector import (
     has_task_hint,
     is_desktop_action,
     is_project_overview,
+    is_web_research_request,
 )
 from satellite.orchestration.diagram_intent import is_diagram_request
 from satellite.persistence.base import Store
@@ -223,6 +224,8 @@ class DefaultOrchestrator(Orchestrator):
         # Ruta determinista para control del escritorio (desktop_operator). Sólo se
         # inyecta en superficies con humano; MCP no la tiene.
         self.desktop_flow = None
+        # Ruta determinista para búsquedas/investigación en internet (web_researcher).
+        self.web_flow = None
         self.max_replans = 1
 
     async def execute(self, task: Task) -> TaskResult:
@@ -256,6 +259,14 @@ class DefaultOrchestrator(Orchestrator):
             # Un problema al indexar no debe impedir ejecutar una tarea normal.
             task.metadata.setdefault("project_context", "")
             task.metadata["project_context_status"] = "unavailable"
+        try:
+            from satellite.context.languages import project_language_hint
+
+            hint = project_language_hint(task.project_root)
+            if hint:
+                task.metadata["project_languages"] = hint
+        except (OSError, ValueError, TypeError):
+            task.metadata.pop("project_languages", None)
         _append_external_context(task, external_context)
 
         if self.preprocessor is not None:
@@ -313,6 +324,13 @@ class DefaultOrchestrator(Orchestrator):
             if routed is not None:
                 return await self._finish(task, routed)
 
+        # Investigación web: "investiga en internet", "busca en la web", ... se
+        # enrutan al agente base, sin depender del planner ni de la charla directa.
+        if self.web_flow is not None and not execute_choice and is_web_research_request(task.goal):
+            routed = await self.web_flow.run(task)
+            if routed is not None:
+                return await self._finish(task, routed)
+
         if self.allow_chat_direct and not execute_choice and self.services.provider is not None:
             if await async_is_chat_goal(task, self.services.provider):
                 return await self._finish(task, await self._answer_direct(task))
@@ -357,9 +375,11 @@ class DefaultOrchestrator(Orchestrator):
         if faltantes:
             cubierto = await self._cover_missing(task, faltantes)
             if cubierto is not None:
+                if cubierto.kind != "plan" or cubierto.graph is None:
+                    return await self._finish(
+                        task, self._non_plan_result(task, cubierto)
+                    )
                 graph = cubierto.graph
-                if graph is None:
-                    raise ContractError("planner devolvió kind='plan' sin grafo")
                 faltantes = self._missing_capabilities(graph)
             if faltantes:
                 return await self._finish(
@@ -379,15 +399,30 @@ class DefaultOrchestrator(Orchestrator):
             replanning = await self._replan(task)
             if replanning is None:
                 break
+            # El propio replan puede descubrir que hace falta una capacidad nueva;
+            # también ahí se intenta crear antes de rendirse.
+            if replanning.kind == "capability_gap":
+                expanded = await self._try_expand(task, replanning)
+                if expanded is not None:
+                    replanning = expanded
             if replanning.kind != "plan" or replanning.graph is None:
                 result = self._non_plan_result(task, replanning)
                 break
             # Preflight también en el replan: no se lanza un grafo que pide un agente
-            # inexistente (acabaría anunciándose al final, tras ejecutar en balde).
+            # inexistente. Si falta, se intenta crear igual que en el plan inicial;
+            # descubrirlo aquí sin intentarlo dejaba al usuario sin la creación.
             faltantes = self._missing_capabilities(replanning.graph)
             if faltantes:
-                result = self._capability_gap_result(task, faltantes)
-                break
+                cubierto = await self._cover_missing(task, faltantes)
+                if cubierto is not None:
+                    if cubierto.kind != "plan" or cubierto.graph is None:
+                        result = self._non_plan_result(task, cubierto)
+                        break
+                    replanning = cubierto
+                    faltantes = self._missing_capabilities(replanning.graph)
+                if faltantes:
+                    result = self._capability_gap_result(task, faltantes)
+                    break
             if self.store is not None:
                 await self.store.save_graph(task.task_id, replanning.graph)
             self._emit(
@@ -496,19 +531,20 @@ class DefaultOrchestrator(Orchestrator):
     async def _cover_missing(
         self, task: Task, faltantes: list[str]
     ) -> PlanningResult | None:
-        """Intenta cubrir un preflight creando los agentes que faltan (opt-in)."""
+        """Intenta cubrir un preflight creando los agentes que faltan (opt-in).
+
+        Devuelve también ``needs_clarification``: si el creador necesita que el
+        usuario aclare algo, esa pregunta no debe convertirse en un gap genérico.
+        """
         if self.expander is None:
             return None
-        plan = await self._try_expand(
+        return await self._try_expand(
             task,
             PlanningResult(
                 kind="capability_gap",
                 gap=CapabilityGap(missing=", ".join(faltantes)),
             ),
         )
-        if plan is not None and plan.kind == "plan" and plan.graph is not None:
-            return plan
-        return None
 
     @staticmethod
     def _gap_options(missing: str, language: str = "es") -> list[str]:
@@ -1064,11 +1100,36 @@ class DefaultOrchestrator(Orchestrator):
                     "beyond it):\n" + str(task.metadata.get("refined_from") or task.goal)
                 )
             outcome = await self.expander.expand(planning.gap.missing, **kwargs)
-        except Exception:
-            return None
+        except Exception as exc:  # noqa: BLE001 — se informa, no se esconde
+            self._emit(
+                task,
+                EventType.PLAN_FAILED,
+                {"kind": "expansion", "reason": f"no se pudo crear el agente: {exc}"},
+            )
+            return PlanningResult(
+                kind="capability_gap",
+                gap=CapabilityGap(
+                    missing=planning.gap.missing,
+                    rationale=f"no se pudo crear un agente: {exc}",
+                ),
+            )
 
         if outcome.kind in ("created", "extended", "reuse", "skill_created"):
             return await self._replan(task)
+        if outcome.kind in ("rejected", "error"):
+            reason = outcome.reason or "la creación no produjo un agente"
+            self._emit(
+                task,
+                EventType.PLAN_FAILED,
+                {"kind": "expansion", "reason": reason},
+            )
+            return PlanningResult(
+                kind="capability_gap",
+                gap=CapabilityGap(
+                    missing=planning.gap.missing,
+                    rationale=reason,
+                ),
+            )
         if outcome.kind == "skill_suggested":
             language = detect_user_language(
                 str(task.metadata.get("refined_from") or task.goal),
@@ -1084,7 +1145,13 @@ class DefaultOrchestrator(Orchestrator):
             return PlanningResult(kind="needs_clarification", question=question)
         if outcome.kind == "needs_clarification":
             return PlanningResult(kind="needs_clarification", question=outcome.question)
-        return None
+        return PlanningResult(
+            kind="capability_gap",
+            gap=CapabilityGap(
+                missing=planning.gap.missing,
+                rationale=f"resultado de creación no reconocido: {outcome.kind}",
+            ),
+        )
 
     async def _answer_in_prose(self, task: Task, result: TaskResult) -> TaskResult:
         """Prosa localizada para salidas que no la traen.

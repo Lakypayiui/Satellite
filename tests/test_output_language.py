@@ -59,6 +59,21 @@ BASE_PROMPT_IDS = (
     "skill_curator",
     "plan_options",
     "web_researcher",
+) + tuple(
+    f"{language}_{role}"
+    for language in (
+        "python",
+        "javascript",
+        "typescript",
+        "java",
+        "csharp",
+        "cpp",
+        "sql",
+        "go",
+        "php",
+        "rust",
+    )
+    for role in ("coder", "auditor")
 )
 
 # Palabras inequívocamente españolas que aparecerían en un prompt escrito en

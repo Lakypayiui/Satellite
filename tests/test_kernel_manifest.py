@@ -6,6 +6,7 @@ from satellite.core.events import EventType
 from satellite.kernel.manifest import (
     RESERVED_AGENT_IDS,
     RESERVED_SKILL_IDS,
+    SPAWNABLE_RESERVED_AGENT_IDS,
     is_reserved,
     sha256_file,
     verify_and_restore,
@@ -78,6 +79,22 @@ def test_desktop_tools_registered_only_when_allowed() -> None:
 
 
 def test_reserved_ids() -> None:
+    language_agents = {
+        f"{language}_{role}"
+        for language in (
+            "python",
+            "javascript",
+            "typescript",
+            "java",
+            "csharp",
+            "cpp",
+            "sql",
+            "go",
+            "php",
+            "rust",
+        )
+        for role in ("coder", "auditor")
+    }
     assert RESERVED_AGENT_IDS == {
         "orchestrator",
         "agent_creator",
@@ -85,15 +102,26 @@ def test_reserved_ids() -> None:
         "pele_diagram_agent",
         "desktop_operator",
         "web_researcher",
-    }
+    } | language_agents
     assert "run_python" in RESERVED_SKILL_IDS
     assert "web_search" in RESERVED_SKILL_IDS
     assert "web_fetch" in RESERVED_SKILL_IDS
     assert "web_download" in RESERVED_SKILL_IDS
+    assert "lsp" in RESERVED_SKILL_IDS
+    assert "code_task" in RESERVED_SKILL_IDS
     assert is_reserved("orchestrator")
     assert is_reserved("pele_diagram_agent")
     assert is_reserved("search_files")
     assert not is_reserved("docs_writer")
+
+
+def test_spawnable_reserved_agents_are_only_language_coders() -> None:
+    assert len(SPAWNABLE_RESERVED_AGENT_IDS) == 10
+    assert SPAWNABLE_RESERVED_AGENT_IDS <= RESERVED_AGENT_IDS
+    assert "python_coder" in SPAWNABLE_RESERVED_AGENT_IDS
+    assert "rust_coder" in SPAWNABLE_RESERVED_AGENT_IDS
+    assert "python_auditor" not in SPAWNABLE_RESERVED_AGENT_IDS
+    assert "orchestrator" not in SPAWNABLE_RESERVED_AGENT_IDS
 
 
 def test_verify_and_restore(tmp_path: Path) -> None:

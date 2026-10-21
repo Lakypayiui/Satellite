@@ -141,12 +141,17 @@ def test_create_uses_the_provider_configured_for_the_agent_role(tmp_path: Path) 
     assert agent.provider is role
 
 
-def test_specialized_agents_get_spawn_agent_but_reserved_agents_do_not(
+def test_specialized_and_language_coders_spawn_but_other_base_agents_do_not(
     tmp_path: Path,
 ) -> None:
     reg = DefaultAgentRegistry()
     prompt_reg = DefaultPromptRegistry()
-    for spec_id in ("special", "orchestrator"):
+    for spec_id in (
+        "special",
+        "orchestrator",
+        "python_coder",
+        "python_auditor",
+    ):
         base = tmp_path / spec_id
         base.mkdir()
         reg.load_dir(
@@ -176,8 +181,12 @@ def test_specialized_agents_get_spawn_agent_but_reserved_agents_do_not(
 
     special = factory.create("special")
     reserved = factory.create("orchestrator")
+    coder = factory.create("python_coder")
+    auditor = factory.create("python_auditor")
     assert "spawn_agent" in {tool.id for tool in special.tools}
     assert "spawn_agent" not in {tool.id for tool in reserved.tools}
+    assert "spawn_agent" in {tool.id for tool in coder.tools}
+    assert "spawn_agent" not in {tool.id for tool in auditor.tools}
 
 
 def test_factory_deduplicates_tools(tmp_path: Path) -> None:

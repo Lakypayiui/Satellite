@@ -156,6 +156,33 @@ _COMMAND_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Investigación en internet: una petición de búsqueda/consulta web es una tarea
+# (usa web_researcher), no una pregunta de charla. Sin esta señal, una pregunta
+# corta como "¿Puedes investigar en internet si se ha intentado algo igual?"
+# terminaba en respuesta directa sin tools, y el modelo decía que no tenía web.
+_WEB_NOUN_RE = re.compile(
+    r"\b(internet|web|online|google|scholar|ieee|xplore|arxiv|pubmed|github)\b",
+    re.IGNORECASE,
+)
+_RESEARCH_VERB_RE = re.compile(
+    r"\b(investig\w*|averig\w*|busc\w*|consult\w*|comprob\w*|"
+    r"research\w*|search\w*|look\s+up|find\s+out|google\w*)\b",
+    re.IGNORECASE,
+)
+
+
+def is_web_research_request(goal: str) -> bool:
+    """True si pide buscar/investigar/consultar algo en internet.
+
+    Exige las dos señales: un verbo de búsqueda y una referencia explícita a la
+    web. Así "busca el archivo en el proyecto" no se confunde con una búsqueda
+    web, y "¿qué es internet?" sigue siendo una pregunta de conocimiento.
+    """
+    text = str(goal or "").strip()
+    if not text:
+        return False
+    return bool(_WEB_NOUN_RE.search(text) and _RESEARCH_VERB_RE.search(text))
+
 
 def is_desktop_action(goal: str) -> bool:
     """True si pide abrir/controlar una app, ventana o navegador concretos.
@@ -281,6 +308,9 @@ def heuristic_is_chat(goal: str) -> bool:
     # 2) Acción sobre una app/ventana/navegador → tarea (tools desktop_*)
     if is_desktop_action(text):
         return False
+    # 2b) Búsqueda/investigación explícita en internet → tarea (web_researcher)
+    if is_web_research_request(text):
+        return False
     # 3) Acción o diagnóstico con contexto de proyecto → tarea
     if has_task_hint(text):
         return False
@@ -308,7 +338,7 @@ def is_chat_goal(task: Task, provider: LLMProvider | None) -> bool:
     heurística lo tiene claro no gasta llamada: los modelos pequeños no
     clasifican bien y aquí la regla ya es sólida.
     """
-    if has_task_hint(task.goal):
+    if has_task_hint(task.goal) or is_web_research_request(task.goal):
         return False
     if heuristic_is_chat(task.goal):
         return True
@@ -319,7 +349,7 @@ def is_chat_goal(task: Task, provider: LLMProvider | None) -> bool:
 
 async def async_is_chat_goal(task: Task, provider: LLMProvider | None) -> bool:
     """Versión async (usada dentro del orchestrator)."""
-    if has_task_hint(task.goal):
+    if has_task_hint(task.goal) or is_web_research_request(task.goal):
         return False
     if heuristic_is_chat(task.goal):
         return True

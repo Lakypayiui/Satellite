@@ -23,6 +23,7 @@ import os
 import signal
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
 IS_WINDOWS = os.name == "nt"
 # Margen (POSIX) entre SIGTERM al grupo y el SIGKILL forzado.
@@ -36,6 +37,7 @@ __all__ = [
     "REAP_TIMEOUT_S",
     "ProcessOutcome",
     "group_kwargs",
+    "platform_argv",
     "terminate_process_tree",
     "terminate_tree_sync",
     "run_process",
@@ -65,6 +67,22 @@ def group_kwargs() -> dict:
         flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         return {"creationflags": flags} if flags else {}
     return {"start_new_session": True}
+
+
+def platform_argv(argv: list[str] | tuple[str, ...]) -> list[str]:
+    """Adapt a command for the host: Windows cannot execute .cmd/.bat directly."""
+    result = [str(part) for part in argv]
+    if IS_WINDOWS and result:
+        suffix = Path(result[0]).suffix.lower()
+        if suffix in (".cmd", ".bat"):
+            return [
+                os.environ.get("ComSpec", "cmd.exe"),
+                "/d",
+                "/s",
+                "/c",
+                subprocess.list2cmdline(result),
+            ]
+    return result
 
 
 def _signal_group(pid: int, sig: int) -> None:
@@ -179,6 +197,7 @@ async def run_process(
     """
     from satellite.orchestration.cancel import race_cancel
 
+    argv = platform_argv(argv)
     proc = await asyncio.create_subprocess_exec(
         *argv,
         cwd=str(cwd),

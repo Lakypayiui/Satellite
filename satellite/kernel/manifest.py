@@ -18,6 +18,26 @@ RESERVED_AGENT_IDS: frozenset[str] = frozenset(
         "pele_diagram_agent",
         "desktop_operator",
         "web_researcher",
+        "python_coder",
+        "python_auditor",
+        "javascript_coder",
+        "javascript_auditor",
+        "typescript_coder",
+        "typescript_auditor",
+        "java_coder",
+        "java_auditor",
+        "csharp_coder",
+        "csharp_auditor",
+        "cpp_coder",
+        "cpp_auditor",
+        "sql_coder",
+        "sql_auditor",
+        "go_coder",
+        "go_auditor",
+        "php_coder",
+        "php_auditor",
+        "rust_coder",
+        "rust_auditor",
     }
 )
 
@@ -45,6 +65,25 @@ RESERVED_SKILL_IDS: frozenset[str] = frozenset(
         "web_search",
         "web_fetch",
         "web_download",
+        "lsp",
+        "code_task",
+    }
+)
+
+# Base agents that may spawn parallel children even though they are reserved.
+# The ten language coders can split large implementations; their auditors cannot.
+SPAWNABLE_RESERVED_AGENT_IDS: frozenset[str] = frozenset(
+    {
+        "python_coder",
+        "javascript_coder",
+        "typescript_coder",
+        "java_coder",
+        "csharp_coder",
+        "cpp_coder",
+        "sql_coder",
+        "go_coder",
+        "php_coder",
+        "rust_coder",
     }
 )
 

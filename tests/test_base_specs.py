@@ -18,6 +18,23 @@ SPECS = PKG / "specs"
 PROMPTS = PKG / "prompts"
 EXAMPLES = PKG / "examples"
 
+LANGUAGE_AGENTS = tuple(
+    f"{language}_{role}"
+    for language in (
+        "python",
+        "javascript",
+        "typescript",
+        "java",
+        "csharp",
+        "cpp",
+        "sql",
+        "go",
+        "php",
+        "rust",
+    )
+    for role in ("coder", "auditor")
+)
+
 SHIPPED_PROMPTS = (
     "orchestrator",
     "agent_creator",
@@ -26,7 +43,7 @@ SHIPPED_PROMPTS = (
     "pele_diagram_agent",
     "desktop_operator",
     "web_researcher",
-)
+) + LANGUAGE_AGENTS
 
 
 def test_base_specs_are_the_shipped_agents() -> None:
@@ -39,6 +56,7 @@ def test_base_specs_are_the_shipped_agents() -> None:
         "pele_diagram_agent",
         "desktop_operator",
         "web_researcher",
+        *LANGUAGE_AGENTS,
     }
 
 

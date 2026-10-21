@@ -10,7 +10,10 @@ from satellite.agents.prompts import DefaultPromptRegistry
 from satellite.agents.runtime import LLMAgent
 from satellite.core.errors import ToolError
 from satellite.core.spec import AgentSpec
-from satellite.kernel.manifest import RESERVED_AGENT_IDS
+from satellite.kernel.manifest import (
+    RESERVED_AGENT_IDS,
+    SPAWNABLE_RESERVED_AGENT_IDS,
+)
 from satellite.providers.base import LLMProvider
 from satellite.security.base import SecurityPolicy
 from satellite.tools.base import Tool, ToolRegistry
@@ -98,8 +101,12 @@ class DefaultAgentFactory(AgentFactory):
                 pass
         # Only specialized agents get spawn_agent. Kernel meta-agents (orchestrator,
         # creator, curator, diagram agent) never do, and children are built directly
-        # without this tool.
-        if spec.id not in RESERVED_AGENT_IDS:
+        # without this tool. The language coders are the exception among base agents:
+        # they may split large implementations into up to four children.
+        if (
+            spec.id not in RESERVED_AGENT_IDS
+            or spec.id in SPAWNABLE_RESERVED_AGENT_IDS
+        ):
             try:
                 self.tools.get("spawn_agent")
                 tool_ids.append("spawn_agent")

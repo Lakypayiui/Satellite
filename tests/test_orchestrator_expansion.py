@@ -118,17 +118,31 @@ def make_task(tmp_path: Path) -> Task:
     return Task(goal="resumir documentos largos", project_root=tmp_path)
 
 
+class RecordingApproval(AutoApprovalPort):
+    """Aprueba, pero deja constancia de que se preguntó al usuario."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def request(self, proposal, ctx):
+        self.calls += 1
+        return await super().request(proposal, ctx)
+
+
 def test_gap_triggers_creation_and_replan(tmp_path: Path) -> None:
     registry = make_registry()
     expander = make_expander(registry, [{"content": json.dumps(PROPOSAL)}])
     planner = GapThenPlanPlanner()
     runner = OkRunner()
-    orch = make_orchestrator(registry, expander, planner, runner, AutoApprovalPort())
+    approval = RecordingApproval()
+    orch = make_orchestrator(registry, expander, planner, runner, approval)
     result = run(orch.execute(make_task(tmp_path)))
     assert result.status is TaskStatus.OK
     assert registry.get("doc_summarizer").id == "doc_summarizer"
     assert planner.calls == 2
     assert runner.runs == 1
+    # ASK: la creación pasó por el puerto de aprobación del usuario.
+    assert approval.calls == 1
 
 
 def test_rejected_approval_keeps_gap(tmp_path: Path) -> None:
@@ -165,6 +179,86 @@ def test_reuse_outcome_replans(tmp_path: Path) -> None:
     result = run(orch.execute(make_task(tmp_path)))
     assert result.status is TaskStatus.OK
     assert planner.calls == 2
+
+
+class FailOnceThenAvailablePlanner(Planner):
+    """Falla, replanifica pidiendo un agente ausente y luego ya existe."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def plan(self, task, catalog, context_hint=()):
+        self.calls += 1
+        agent_id = "orchestrator" if self.calls == 1 else "doc_summarizer"
+        graph = ExecutionGraph(entry_node="s1")
+        graph.add_node(Node(id="s1", spec_id=agent_id, task={"goal": "x"}))
+        return PlanningResult(kind="plan", graph=graph)
+
+
+class FailOnceRunner(GraphRunner):
+    def __init__(self) -> None:
+        self.runs = 0
+
+    async def run(self, graph, task, services) -> TaskResult:
+        self.runs += 1
+        status = TaskStatus.FAILED if self.runs == 1 else TaskStatus.OK
+        return TaskResult(task_id=task.task_id, status=status, summary="ok")
+
+
+def test_missing_agent_in_replan_also_triggers_creation(tmp_path: Path) -> None:
+    registry = make_registry()
+    expander = make_expander(registry, [{"content": json.dumps(PROPOSAL)}])
+    planner = FailOnceThenAvailablePlanner()
+    runner = FailOnceRunner()
+    orch = make_orchestrator(
+        registry, expander, planner, runner, AutoApprovalPort()
+    )
+
+    result = run(orch.execute(make_task(tmp_path)))
+
+    assert result.status is TaskStatus.OK
+    assert planner.calls == 3
+    assert runner.runs == 2
+    assert registry.get("doc_summarizer").id == "doc_summarizer"
+
+
+class FailOnceThenGapPlanner(Planner):
+    """El replan pide una capacidad nueva en vez de un grafo."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def plan(self, task, catalog, context_hint=()):
+        self.calls += 1
+        if self.calls == 1:
+            graph = ExecutionGraph(entry_node="s1")
+            graph.add_node(Node(id="s1", spec_id="orchestrator", task={"goal": "x"}))
+            return PlanningResult(kind="plan", graph=graph)
+        if self.calls == 2:
+            return PlanningResult(
+                kind="capability_gap",
+                gap=CapabilityGap(missing="resumir documentos largos"),
+            )
+        graph = ExecutionGraph(entry_node="s1")
+        graph.add_node(Node(id="s1", spec_id="doc_summarizer", task={"goal": "x"}))
+        return PlanningResult(kind="plan", graph=graph)
+
+
+def test_capability_gap_in_replan_also_triggers_creation(tmp_path: Path) -> None:
+    registry = make_registry()
+    expander = make_expander(registry, [{"content": json.dumps(PROPOSAL)}])
+    planner = FailOnceThenGapPlanner()
+    runner = FailOnceRunner()
+    orch = make_orchestrator(
+        registry, expander, planner, runner, AutoApprovalPort()
+    )
+
+    result = run(orch.execute(make_task(tmp_path)))
+
+    assert result.status is TaskStatus.OK
+    assert planner.calls == 3
+    assert runner.runs == 2
+    assert registry.get("doc_summarizer").id == "doc_summarizer"
 
 
 def test_creator_error_returns_gap(tmp_path: Path) -> None:

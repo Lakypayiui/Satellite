@@ -10,6 +10,7 @@ from satellite.orchestration.chat_detector import (
     heuristic_is_chat,
     is_chat_goal,
     is_desktop_action,
+    is_web_research_request,
 )
 from satellite.providers.fake import FakeLLM
 
@@ -59,6 +60,37 @@ def test_desktop_action_requires_an_explicit_app_or_window() -> None:
     assert is_desktop_action("corre este comando") is False
     assert is_desktop_action("ejecuta este comando en la terminal") is False
     assert is_desktop_action("abre el archivo main.py") is False
+
+
+def test_web_research_requests_are_tasks_not_chat() -> None:
+    """Una búsqueda explícita en internet debe llegar a web_researcher."""
+    for text in (
+        "Puedes investigar en internet si se ha intentado algo igual?",
+        "Busca en internet si alguien ha hecho un GPT pequeño en una Basys 3",
+        "Investigame si se ha intentado algo igual en internet",
+        "Consulta en la web los proyectos parecidos",
+        "Research online whether this has been done before",
+        "Search the web for tiny language models on FPGAs",
+    ):
+        assert is_web_research_request(text) is True, text
+        assert heuristic_is_chat(text) is False, text
+
+    # Conocimiento general o búsqueda local no son investigación web.
+    assert is_web_research_request("¿qué es internet?") is False
+    assert heuristic_is_chat("¿qué es internet?") is True
+    assert is_web_research_request("busca el archivo en el proyecto") is False
+    assert is_web_research_request("corre este comando") is False
+
+
+def test_web_research_short_question_does_not_call_the_llm_classifier(
+    tmp_path: Path,
+) -> None:
+    provider = FakeLLM(default_content="chat")
+    task = make_task(
+        "Puedes investigar en internet si se ha intentado algo igual?", tmp_path
+    )
+    assert is_chat_goal(task, provider) is False
+    assert provider.requests == []
 
 
 def test_heuristic_long_not_chat() -> None:

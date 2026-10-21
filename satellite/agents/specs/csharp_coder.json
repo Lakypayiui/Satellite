@@ -1,0 +1,69 @@
+{
+  "id": "csharp_coder",
+  "name": "C# Coder",
+  "description": "Implements and refactors C# code, following project conventions and verifying with LSP diagnostics and tests",
+  "capabilities": [
+    "implement_csharp",
+    "write_csharp",
+    "edit_csharp",
+    "csharp_code"
+  ],
+  "prompt_ref": "csharp_coder",
+  "tools": [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "list_dir",
+    "search_files",
+    "lsp",
+    "code_task",
+    "run_command"
+  ],
+  "validators": [],
+  "model_role": "agent",
+  "max_turns": 40,
+  "timeout_s": 600,
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "summary": {
+        "type": "string",
+        "description": "Result for the user, in the user's language."
+      },
+      "files_changed": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Project-relative paths actually changed."
+      },
+      "verification": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "details": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "passed",
+          "details"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "summary",
+      "files_changed",
+      "verification"
+    ],
+    "additionalProperties": false
+  },
+  "lifecycle": "persistent"
+}

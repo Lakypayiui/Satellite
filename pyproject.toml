@@ -55,6 +55,8 @@ exclude = ["desktop*", "Icono*", "tests*"]
 "satellite.safe_proxy" = ["*.md", "*.yaml"]
 # Helper Node de Pele: es el único código JS que viaja con el paquete.
 "satellite.tools" = ["*.mjs"]
+# Los agentes base viajan como datos: sin esto un wheel no incluye specs/prompts.
+"satellite.agents" = ["specs/*.json", "prompts/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

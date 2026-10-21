@@ -10,6 +10,7 @@ import asyncio
 from pathlib import Path
 
 from satellite.agents.base import Agent, AgentContext, AgentFactory
+from satellite.agents.expander import ExpansionOutcome
 from satellite.agents.registry import DefaultAgentRegistry
 from satellite.core.graph import ExecutionGraph, Node
 from satellite.core.result import AgentResult, AgentStatus
@@ -176,6 +177,42 @@ def test_registered_spec_rejected_by_factory_is_announced_before_running(
     assert "code_explainer" in result.summary
     kinds = [e.payload.get("kind") for e in sink.events if e.event_type.value == "plan_failed"]
     assert "capability_gap_preflight" in kinds
+
+
+class ClarifyingExpander:
+    """El creador no puede decidir sin preguntar al usuario."""
+
+    async def expand(
+        self,
+        need,
+        *,
+        task_id="",
+        approval_port=None,
+        extra_context="",
+        user_language=None,
+    ):
+        return ExpansionOutcome(
+            kind="needs_clarification",
+            question="¿Qué formato debe tener el informe?",
+        )
+
+
+def test_preflight_propagates_creator_clarification(tmp_path: Path) -> None:
+    runner = CountingRunner()
+    services = RuntimeServices(registry=make_registry())
+    orch = DefaultOrchestrator(
+        MissingCapabilityPlanner(),
+        runner,
+        services,
+        expander=ClarifyingExpander(),
+    )
+
+    result = run(orch.execute(make_task(tmp_path)))
+
+    assert runner.runs == 0
+    assert result.status is TaskStatus.NEEDS_USER_INPUT
+    assert result.output["mode"] == "needs_clarification"
+    assert "formato" in result.output["question"].lower()
 
 
 def test_factory_building_unregistered_spec_is_not_a_gap(tmp_path: Path) -> None:
