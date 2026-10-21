@@ -509,7 +509,7 @@ def extractive_summary(turns, max_chars: int | None = None) -> str:
     budget = SUMMARY_MAX_CHARS if max_chars is None else max(1, int(max_chars))
     lines: list[str] = []
     for turn in turns or ():
-        role = "usuario" if getattr(turn, "role", "") == "user" else "asistente"
+        role = "user" if getattr(turn, "role", "") == "user" else "assistant"
         content = str(getattr(turn, "content", "")).strip().replace("\n", " ")
         if not content:
             continue
@@ -518,7 +518,7 @@ def extractive_summary(turns, max_chars: int | None = None) -> str:
         lines.append(f"- {role}: {content}")
     if not lines:
         return ""
-    header = "Resumen de los turnos anteriores (recorte automático, sin modelo):\n"
+    header = "Summary of previous turns (automatic extract, no model):\n"
     body = "\n".join(lines)
     if len(body) + len(header) <= budget:
         return header + body
@@ -544,7 +544,7 @@ async def summarize_turns(
 
     memorias = str(persistent_summary or "").strip()
     contenido = f"{memorias}\n\n{dropped_text}" if memorias else dropped_text
-    conversation = wrap_data("conversacion", contenido)
+    conversation = wrap_data("conversation", contenido)
     request = LLMRequest(
         messages=(
             Message(

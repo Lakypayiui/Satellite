@@ -41,7 +41,6 @@ AUDITOR_TOOLS = {
     "edit_file",
     "list_dir",
     "search_files",
-    "git_status",
     "lsp",
     "code_task",
 }

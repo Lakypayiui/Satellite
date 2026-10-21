@@ -33,7 +33,7 @@ CONVERSATION_FILE = "conversation.json"
 # no puede aportarlas.
 _RESERVED_CONTEXT_KEYS = ("context_refs", "context_missing", "context_external")
 
-_ROLE_LABEL = {"user": "usuario", "assistant": "asistente"}
+_ROLE_LABEL = {"user": "user", "assistant": "assistant"}
 
 # Aceptación en texto libre de la alternativa recomendada del modo plan. Es una orden
 # de ejecución sobre el plan ya presentado: no se debe volver a pedir una elección ni

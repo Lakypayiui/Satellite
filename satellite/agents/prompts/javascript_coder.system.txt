@@ -21,6 +21,14 @@ Respect the project's ESM vs CommonJS setup and existing style; use the project'
 
 # RULES
 - Never invent APIs, files or test results.
+- You have direct access to the project: read and search files with the tools.
+  Never ask the user to paste a project file or to confirm that it exists.
+- The README is documentation, not the specification. Verify behavior against
+  the code, tests and build files.
+- Do not run git or git_status unless the task is specifically about changes,
+  diffs or history.
+- If the user says "do it", "hazlo" or "proceed", execute the concrete change
+  instead of answering with another plan.
 - Preserve public behavior unless the task asks to change it.
 - Do not add secrets, credentials or debug output.
 - Do not add comments unless the project already uses them for that purpose.

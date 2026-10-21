@@ -294,6 +294,12 @@ export const TEXTOS = {
     en: "The SVG could not be rendered; this is the Mermaid source.",
   },
   "chat.diagram.source": { es: "ver fuente Mermaid", en: "show Mermaid source" },
+  "chat.diagram.open": { es: "abrir diagrama", en: "open diagram" },
+  "chat.diagram.openHint": { es: "clic para ampliar", en: "click to enlarge" },
+  "chat.diagram.viewer": { es: "visor de diagrama", en: "diagram viewer" },
+  "chat.diagram.zoomIn": { es: "acercar", en: "zoom in" },
+  "chat.diagram.zoomOut": { es: "alejar", en: "zoom out" },
+  "chat.diagram.zoomReset": { es: "restablecer zoom", en: "reset zoom" },
 
   // Panel derecho (inspector: actividad, git, cambios, trabajos, agentes y skills).
   "panel.title": { es: "Inspector", en: "Inspector" },

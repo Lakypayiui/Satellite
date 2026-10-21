@@ -151,8 +151,8 @@ def test_extractive_summary_is_deterministic_and_bounded() -> None:
 
     turns = [Turn("user", "pregunta " * 40), Turn("assistant", "respuesta")]
     summary = extractive_summary(turns)
-    assert summary.startswith("Resumen de los turnos anteriores")
-    assert "- usuario:" in summary and "- asistente:" in summary
+    assert summary.startswith("Summary of previous turns")
+    assert "- user:" in summary and "- assistant:" in summary
     assert len(summary) <= 4_000
     assert extractive_summary([]) == ""
 
@@ -172,7 +172,7 @@ def test_summarize_falls_back_without_provider_or_on_failure() -> None:
 
     turns = [Turn("user", "necesito un resumen " * 12)]
     text, method = run(summarize_turns(turns, None))
-    assert method == "determinista" and "usuario" in text
+    assert method == "determinista" and "user" in text
     broken = FakeLLM(script=[{"error": "sin conexión"}])
     text, method = run(summarize_turns(turns, broken))
     assert method == "determinista" and text

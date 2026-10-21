@@ -83,6 +83,19 @@ def test_chat_goal_skips_graph(tmp_path: Path) -> None:
     assert "graph_built" not in types
 
 
+def test_direct_reply_forces_the_user_language(tmp_path: Path) -> None:
+    """El contexto del proyecto puede estar en otro idioma; la respuesta no."""
+    provider = FakeLLM(script=[{"content": "A closure captures its environment."}])
+    orch = DefaultOrchestrator(
+        FakePlanner(), FakeRunner(), make_services(provider)
+    )
+    task = Task(goal="What is a closure?", project_root=tmp_path)
+    result = run(orch.execute(task))
+    assert result.status.value == "ok"
+    system = provider.requests[0].messages[0].content
+    assert "END USER RESPONSE LANGUAGE: English (en)" in system
+
+
 def test_task_goal_does_use_graph(tmp_path: Path) -> None:
     """Tarea de código → va al planner (no corta por chat)."""
     provider = FakeLLM()

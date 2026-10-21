@@ -106,6 +106,22 @@ def test_followup_carries_previous_turns(tmp_path: Path) -> None:
     assert all(turn["content"] != "agrega esto también" for turn in history)
 
 
+def test_sessions_do_not_share_history(tmp_path: Path) -> None:
+    from satellite.orchestration.sessions import SessionStore
+
+    store = SessionStore(tmp_path)
+    a = store.create("A")
+    store.save(a, [{"role": "user", "content": "hola"}], name="A")
+    b = store.create("B")
+    store.save(b, [{"role": "user", "content": "hello"}], name="B")
+    store.set_active(a)
+
+    chat = ChatSession(tmp_path, StubOrchestrator())
+    chat.load()
+    assert "hola" in chat.recap()
+    assert "hello" not in chat.recap()
+
+
 def test_first_message_has_empty_history(tmp_path: Path) -> None:
     orchestrator = StubOrchestrator()
     chat = ChatSession(tmp_path, orchestrator)
@@ -120,7 +136,7 @@ def test_recap_uses_spanish_labels_and_limits(tmp_path: Path) -> None:
     chat.add("user", "tres")
     recap = chat.recap()
     assert recap.count("\n") == 1  # sólo 2 turnos
-    assert "- usuario:" in recap and "- asistente:" in recap
+    assert "- user:" in recap and "- assistant:" in recap
     assert "uno" not in recap
 
 

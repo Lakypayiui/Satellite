@@ -229,7 +229,7 @@ def render_turn_summaries(
         assistant = sanitize(
             entry.get("assistant_summary"), max_chars=ASSISTANT_SUMMARY_MAX_CHARS
         )
-        block = f"- Turno {number}. Usuario: {user}\n  Satellite: {assistant}"
+        block = f"- Turn {number}. User: {user}\n  Satellite: {assistant}"
         if blocks and used + len(block) + 1 > max_chars:
             break
         blocks.append(block)

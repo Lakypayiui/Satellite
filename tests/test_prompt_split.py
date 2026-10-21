@@ -46,6 +46,15 @@ def test_build_system_prompt_is_static() -> None:
     assert "«" not in system
 
 
+def test_build_system_prompt_appends_a_missing_schema() -> None:
+    system = build_system_prompt(
+        "Follow the declared output schema.",
+        output_schema={"type": "object", "properties": {"summary": {"type": "string"}}},
+    )
+    assert "# OUTPUT SCHEMA" in system
+    assert '"summary"' in system
+
+
 def test_build_system_prompt_adds_untrusted_banner_and_delegation() -> None:
     system = build_system_prompt("Sé útil.", can_call=())
     assert "untrusted" in system.lower()

@@ -147,14 +147,7 @@ def _asks_for_project_index(goal: str) -> bool:
 
 def _project_inventory(project_context: str, language: str) -> str:
     """Devuelve el árbol ya actualizado cuando el usuario lo pide expresamente."""
-    inventory = project_context.partition("\n--- ")[0].strip()
-    if language == "en":
-        inventory = re.sub(
-            r"^Índice estructural del proyecto \(árbol hasta dos niveles\):",
-            "Project structure (tree up to two levels):",
-            inventory,
-        )
-    return inventory
+    return project_context.partition("\n--- ")[0].strip()
 
 
 def _can_create(factory, spec_id: str) -> bool:
@@ -710,12 +703,14 @@ class DefaultOrchestrator(Orchestrator):
                         + UNTRUSTED_RULE
                         + "\n\n"
                         + OUTPUT_LANGUAGE_RULE
+                        + "\n\n"
+                        + output_language_hint(language)
                     ),
                 ),
                 Message(role=Role.USER, content=prompt),
             ),
             temperature=0.0,
-            max_tokens=512,
+            max_tokens=1024,
         )
         response = await self.services.provider.complete(request)
         # Una completion vacía del proveedor no es una respuesta: se avisa con un texto
@@ -1027,10 +1022,27 @@ class DefaultOrchestrator(Orchestrator):
                 if part
             )
         question = planning.question if planning is not None else ""
+        from satellite.core.language import detect_user_language
+
+        user_language = detect_user_language(
+            str(task.metadata.get("refined_from") or task.goal),
+            task.metadata.get("history"),
+        )
+        kwargs: dict = {
+            "context": context,
+            "history": history,
+            "feedback": question,
+        }
         try:
-            options = await self.plan_advisor.generate(
-                task.goal, context=context, history=history, feedback=question
-            )
+            import inspect
+
+            params = inspect.signature(self.plan_advisor.generate).parameters
+            if "user_language" in params:
+                kwargs["user_language"] = user_language
+        except (TypeError, ValueError):
+            pass
+        try:
+            options = await self.plan_advisor.generate(task.goal, **kwargs)
         except Exception as exc:  # noqa: BLE001 — se reporta, no se esconde
             reason = f"el asesor de plan falló: {exc}"
             self._emit(task, EventType.PLAN_FAILED, {"kind": "error", "reason": reason})

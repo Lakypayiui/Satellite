@@ -183,6 +183,11 @@ class AgentProposalValidator:
             errors.append(
                 f"{owner}: system_prompt with disallowed placeholders {unknown_system}"
             )
+        if proposal.output_schema and "output_schema" not in system_placeholders:
+            errors.append(
+                f"{owner}: system_prompt with an output_schema must include "
+                "{{output_schema}} (otherwise the model never sees the contract)"
+            )
 
         # user_template: parte dinámica, con {task} obligatorio.
         user_placeholders = find_placeholders(proposal.user_template)

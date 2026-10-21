@@ -154,6 +154,44 @@ def test_download_tool_blocks_private_hosts(tmp_path) -> None:
     assert result.error_code == "web_url_blocked"
 
 
+def test_lite_parser_reads_duckduckgo_lite_markup() -> None:
+    markup = (
+        "<table><tr><td><a rel='nofollow' "
+        "href='//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa' "
+        "class='result-link'>Example A</a></td></tr>"
+        "<tr><td class='result-snippet'>Snippet A</td></tr>"
+        "<tr><td><a href='//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fb' "
+        "class='result-link'>Example B</a></td></tr>"
+        "<tr><td class='result-snippet'>Snippet B</td></tr></table>"
+    )
+    results = web._parse_lite_results(markup, max_results=5)
+    assert [item["title"] for item in results] == ["Example A", "Example B"]
+    assert results[0]["url"] == "https://example.com/a"
+    assert results[0]["snippet"] == "Snippet A"
+
+
+def test_search_falls_back_to_lite_when_html_is_a_challenge(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fake_fetch(url, **kwargs):
+        calls.append(url)
+        if "lite.duckduckgo.com" in url:
+            return {
+                "status": 200,
+                "text": (
+                    "<a href='//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fok' "
+                    "class='result-link'>Fallback</a>"
+                    "<td class='result-snippet'>Works</td>"
+                ),
+            }
+        return {"status": 202, "text": "<html>challenge</html>"}
+
+    monkeypatch.setattr(web, "_fetch", fake_fetch)
+    results = run(web._search("some query", 3))
+    assert results and results[0]["url"] == "https://example.com/ok"
+    assert any("lite.duckduckgo.com" in url for url in calls)
+
+
 def test_fetch_tool_wraps_text_and_drops_scripts(tmp_path, monkeypatch) -> None:
     async def fake_public(url):
         return True, ""

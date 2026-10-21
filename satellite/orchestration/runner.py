@@ -296,9 +296,13 @@ class DefaultGraphRunner(GraphRunner):
                     if not frontier:
                         break  # última hoja completada
                     continue  # una rama puede acabar antes que sus hermanas
+                if result.status is AgentStatus.NEEDS_USER_INPUT:
+                    return self._needs_input(
+                        task, sink, node_id, result, results, attempts, started
+                    )
                 return self._abort(
                     task, sink, node_id,
-                    f"dead-end: node '{node_id}' has no outgoing edge for status {result.status.value}",
+                    _terminal_error(result, node_id),
                     results, attempts, started,
                 )
 
@@ -548,6 +552,10 @@ class DefaultGraphRunner(GraphRunner):
 
                 edges = graph.successors(node_id, result)
                 if not edges:
+                    if result.status is AgentStatus.NEEDS_USER_INPUT:
+                        return self._needs_input(
+                            task, sink, node_id, result, results, attempts, started
+                        )
                     if result.status is not AgentStatus.OK:
                         failed_dead_end = failed_dead_end or (node_id, result)
                     continue
@@ -576,7 +584,7 @@ class DefaultGraphRunner(GraphRunner):
                     task,
                     sink,
                     node_id,
-                    f"dead-end: node '{node_id}' has no outgoing edge for status {result.status.value}",
+                    _terminal_error(result, node_id),
                     results,
                     attempts,
                     started,
@@ -764,6 +772,37 @@ class DefaultGraphRunner(GraphRunner):
         )
         return result
 
+    def _needs_input(
+        self, task, sink, node_id, result, results, attempts, started
+    ):
+        """Un nodo terminal que pide al usuario no es un ``dead-end`` del grafo."""
+        all_findings = []
+        for item in results.values():
+            all_findings.extend(item.findings)
+        output = dict(result.output or {})
+        output.setdefault("mode", "needs_user_input")
+        output.setdefault("node_id", node_id)
+        if result.summary and "question" not in output:
+            output.setdefault("question", result.summary)
+        final = TaskResult(
+            task_id=task.task_id,
+            status=TaskStatus.NEEDS_USER_INPUT,
+            summary=result.summary or "Needs user input",
+            output=output,
+            findings=tuple(all_findings),
+            metrics=ExecutionMetrics(
+                duration_ms=int((time.monotonic() - started) * 1000),
+                retries=sum(attempts.values()),
+            ),
+        )
+        self._emit(
+            sink,
+            task,
+            EventType.TASK_FINISHED,
+            payload={"status": final.status.value},
+        )
+        return final
+
     def _abort(self, task, sink, node_id, error, results, attempts, started):
         """Aborta con TaskResult FAILED y emite NODE_STUCK."""
         self._emit(
@@ -802,6 +841,14 @@ class DefaultGraphRunner(GraphRunner):
                 payload=payload or {},
             )
         )
+
+
+def _terminal_error(result: AgentResult, node_id: str) -> str:
+    """Fallo real de un nodo terminal, no un mensaje interno de ``dead-end``."""
+    detail = str(result.error or "").strip() or str(result.summary or "").strip()
+    return (
+        detail or f"node '{node_id}' ended with status {result.status.value}"
+    )[:2000]
 
 
 def _get_path(obj: Any, path: str | None) -> Any:

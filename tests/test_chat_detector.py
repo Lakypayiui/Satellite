@@ -10,6 +10,7 @@ from satellite.orchestration.chat_detector import (
     heuristic_is_chat,
     is_chat_goal,
     is_desktop_action,
+    is_do_it_request,
     is_web_research_request,
 )
 from satellite.providers.fake import FakeLLM
@@ -60,6 +61,23 @@ def test_desktop_action_requires_an_explicit_app_or_window() -> None:
     assert is_desktop_action("corre este comando") is False
     assert is_desktop_action("ejecuta este comando en la terminal") is False
     assert is_desktop_action("abre el archivo main.py") is False
+
+
+def test_estas_checking_is_not_chat(tmp_path: Path) -> None:
+    """'estás chequeando' es una queja de trabajo, no un saludo."""
+    text = (
+        "Entonces porque no lo haces y solo estas cheque y cheque con el readme, "
+        "el readme de que sirve? Hazlo y olvida el readme"
+    )
+    assert heuristic_is_chat(text) is False
+    assert has_project_context(text) is True
+    assert is_do_it_request(text) is True
+
+    provider = FakeLLM(default_content="chat")
+    assert is_chat_goal(make_task(text, tmp_path), provider) is False
+    assert provider.requests == []
+    assert is_do_it_request("Hazlo") is True
+    assert is_do_it_request("¿Qué es un closure?") is False
 
 
 def test_web_research_requests_are_tasks_not_chat() -> None:

@@ -25,7 +25,7 @@ Remember: **an agent is a REUSABLE ROLE, NOT a task**. If the need is a concrete
 
 # SPLIT OF THE NEW AGENT'S PROMPT
 The agent you propose receives its prompt in two parts:
-- `system_prompt`: **static**. Holds ROLE, RULES, UNTRUSTED DATA and OUTPUT. It may use the `output_schema` and `tools` placeholders; it may NOT use `task`, `context` or `feedback`.
+- `system_prompt`: **static**. Holds ROLE, RULES, UNTRUSTED DATA and OUTPUT. It may use the `output_schema` and `tools` placeholders; it may NOT use `task`, `context` or `feedback`. If the agent declares an `output_schema`, `system_prompt` MUST include `{output_schema}` and describe the exact output keys; otherwise the model never sees the contract.
 - `user_template`: **dynamic**. Holds {task}, {context} and {feedback} inside <data>.
 Separate both parts well: the system must not change between calls.
 

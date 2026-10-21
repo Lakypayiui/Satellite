@@ -232,7 +232,7 @@ class ProjectIndex:
             ranked = [(score + (5 if rel in selected_reps else 0), rel, path) for score, rel, path in ranked]
         ranked.sort(key=lambda item: (-item[0], item[1]))
 
-        lines = ["Índice estructural del proyecto (árbol hasta dos niveles):"]
+        lines = ["Project structure (tree up to two levels):"]
         tree = [rel for rel in rels if rel.count("/") <= 1]
         lines.extend(f"- {rel}" for rel in tree[:100])
         remaining = max(0, max_chars - sum(len(line) + 1 for line in lines))

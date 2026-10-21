@@ -135,6 +135,36 @@ def test_multiple_roots_join_after_both_predecessors(tmp_path: Path) -> None:
     assert factory.agents["sC"].last_task["from_b"] == 2
 
 
+def test_single_failed_node_reports_its_error_not_dead_end(tmp_path: Path) -> None:
+    factory = FakeFactory({"sA": {"status": "failed", "summary": "boom"}})
+    graph = ExecutionGraph(entry_node="n1")
+    graph.add_node(Node(id="n1", spec_id="sA"))
+    result = run(
+        DefaultGraphRunner(factory).run(
+            graph, make_task(tmp_path), RuntimeServices(factory=factory)
+        )
+    )
+    assert result.status.value == "failed"
+    assert "dead-end" not in (result.error or "")
+    assert "boom" in (result.error or "")
+
+
+def test_terminal_needs_user_input_is_propagated(tmp_path: Path) -> None:
+    factory = FakeFactory(
+        {"sA": {"status": "needs_user_input", "summary": "Which board?"}}
+    )
+    graph = ExecutionGraph(entry_node="n1")
+    graph.add_node(Node(id="n1", spec_id="sA"))
+    result = run(
+        DefaultGraphRunner(factory).run(
+            graph, make_task(tmp_path), RuntimeServices(factory=factory)
+        )
+    )
+    assert result.status.value == "needs_user_input"
+    assert result.summary == "Which board?"
+    assert result.output["mode"] == "needs_user_input"
+
+
 def test_terminal_branch_does_not_abort_sibling_branch(tmp_path: Path) -> None:
     factory = FakeFactory({"sA": {}, "sB": {}, "sC": {"output": {"done": True}}})
     graph = ExecutionGraph(entry_node="a")

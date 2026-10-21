@@ -63,6 +63,30 @@ def test_clarification_is_ok() -> None:
     assert report.ok is True
 
 
+def test_output_schema_requires_the_placeholder() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"summary": {"type": "string"}},
+        "required": ["summary"],
+    }
+    report = make_validator().validate(
+        make_proposal(
+            output_schema=schema,
+            system_prompt="# ROLE\nFollow the output schema.",
+        )
+    )
+    assert report.ok is False
+    assert any("output_schema" in error for error in report.errors)
+
+    ok = make_validator().validate(
+        make_proposal(
+            output_schema=schema,
+            system_prompt="# ROLE\nFollow this schema:\n{output_schema}",
+        )
+    )
+    assert ok.ok is True
+
+
 def test_unknown_tool_rejected() -> None:
     report = make_validator().validate(make_proposal(tools=("read_file", "ftp_upload")))
     assert report.ok is False

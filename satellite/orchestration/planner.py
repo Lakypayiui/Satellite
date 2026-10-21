@@ -135,6 +135,18 @@ class LLMPlanner(Planner):
                     "not name one):\n" + project_languages,
                 ) if part
             )
+        from satellite.orchestration.chat_detector import is_do_it_request
+
+        if is_do_it_request(task.goal):
+            history_text = "\n\n".join(
+                part for part in (
+                    history_text,
+                    "Continuation: the user is confirming the concrete action "
+                    "proposed in the recent conversation. Execute it now. Do not "
+                    "answer with another analysis, another plan, or a request for "
+                    "project files; for code changes use a coder agent.",
+                ) if part
+            )
         # ``needs_clarification.question`` is read by the user: tell the model which
         # language to use instead of letting the English capability text decide it.
         user_language = detect_user_language(

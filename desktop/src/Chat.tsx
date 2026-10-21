@@ -4,6 +4,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import {
   Approval,
@@ -166,6 +167,17 @@ function Diagrama({ diagram }: { diagram: DiagramView }) {
   const colors = useDiagramColors();
   const [svg, setSvg] = useState("");
   const [error, setError] = useState("");
+  const [abierto, setAbierto] = useState(false);
+  const [vista, setVista] = useState({ zoom: 1, x: 0, y: 0 });
+  const [arrastrando, setArrastrando] = useState(false);
+  const lienzo = useRef<HTMLDivElement | null>(null);
+  const arrastre = useRef<{
+    id: number;
+    x: number;
+    y: number;
+    px: number;
+    py: number;
+  } | null>(null);
 
   useEffect(() => {
     let vigente = true;
@@ -188,6 +200,89 @@ function Diagrama({ diagram }: { diagram: DiagramView }) {
 
   // Display-only theme copy: the SVG file on disk keeps its white defaults.
   const shownSvg = svg && colors ? applyDiagramTheme(svg, colors) : svg;
+  const src = shownSvg
+    ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(shownSvg)}`
+    : "";
+  const cerrar = () => setAbierto(false);
+  const limitar = (valor: number) => Math.min(4, Math.max(0.5, valor));
+  const zoomEn = (punto: { x: number; y: number } | null, factor: number) => {
+    const rect = lienzo.current?.getBoundingClientRect();
+    const centroX = rect ? rect.width / 2 : 0;
+    const centroY = rect ? rect.height / 2 : 0;
+    const px = punto ? punto.x : centroX;
+    const py = punto ? punto.y : centroY;
+    setVista((actual) => {
+      const zoom = limitar(actual.zoom * factor);
+      const proporcion = zoom / actual.zoom;
+      return {
+        zoom,
+        x: px - centroX - (px - centroX - actual.x) * proporcion,
+        y: py - centroY - (py - centroY - actual.y) * proporcion,
+      };
+    });
+  };
+  const acercar = () => zoomEn(null, 1.25);
+  const alejar = () => zoomEn(null, 0.8);
+  const restablecer = () => setVista({ zoom: 1, x: 0, y: 0 });
+
+  useEffect(() => {
+    if (!abierto) return;
+    const alTeclear = (evento: KeyboardEvent) => {
+      if (evento.key === "Escape") setAbierto(false);
+    };
+    document.addEventListener("keydown", alTeclear);
+    const nodo = lienzo.current;
+    const alRodar = (evento: WheelEvent) => {
+      if (!(evento.ctrlKey || evento.metaKey)) return;
+      evento.preventDefault();
+      const rect = nodo?.getBoundingClientRect();
+      zoomEn(
+        rect
+          ? { x: evento.clientX - rect.left, y: evento.clientY - rect.top }
+          : null,
+        evento.deltaY < 0 ? 1.1 : 0.9,
+      );
+    };
+    nodo?.addEventListener("wheel", alRodar, { passive: false });
+    return () => {
+      document.removeEventListener("keydown", alTeclear);
+      nodo?.removeEventListener("wheel", alRodar);
+    };
+  }, [abierto]);
+
+  function alBajar(evento: React.PointerEvent<HTMLDivElement>) {
+    if (evento.button !== 0) return;
+    evento.currentTarget.setPointerCapture(evento.pointerId);
+    arrastre.current = {
+      id: evento.pointerId,
+      x: vista.x,
+      y: vista.y,
+      px: evento.clientX,
+      py: evento.clientY,
+    };
+    setArrastrando(true);
+  }
+
+  function alMover(evento: React.PointerEvent<HTMLDivElement>) {
+    const actual = arrastre.current;
+    if (!actual || actual.id !== evento.pointerId) return;
+    setVista((valor) => ({
+      ...valor,
+      x: actual.x + (evento.clientX - actual.px),
+      y: actual.y + (evento.clientY - actual.py),
+    }));
+  }
+
+  function alSoltar(evento: React.PointerEvent<HTMLDivElement>) {
+    if (arrastre.current?.id !== evento.pointerId) return;
+    arrastre.current = null;
+    setArrastrando(false);
+    try {
+      evento.currentTarget.releasePointerCapture(evento.pointerId);
+    } catch {
+      // el puntero ya se liberó
+    }
+  }
 
   const source = diagram.mermaid ? (
     <details className="diagrama-fuente">
@@ -218,11 +313,24 @@ function Diagrama({ diagram }: { diagram: DiagramView }) {
       </figcaption>
       {shownSvg ? (
         <div className="diagrama-caja">
-          <img
-            className="diagrama-svg"
-            src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(shownSvg)}`}
-            alt={t("chat.diagram.alt")}
-          />
+          <button
+            type="button"
+            className="diagrama-abrir"
+            onClick={() => {
+              setVista({ zoom: 1, x: 0, y: 0 });
+              setAbierto(true);
+            }}
+            title={t("chat.diagram.open")}
+          >
+            <img
+              className="diagrama-svg"
+              src={src}
+              alt={t("chat.diagram.alt")}
+            />
+            <span className="diagrama-abrir-pista">
+              {t("chat.diagram.openHint")}
+            </span>
+          </button>
         </div>
       ) : error ? (
         <p className="nota">{t("chat.diagram.error", { error })}</p>
@@ -230,6 +338,81 @@ function Diagrama({ diagram }: { diagram: DiagramView }) {
         <p className="nota">{t("chat.diagram.loading")}</p>
       )}
       {source}
+      {abierto &&
+        src &&
+        createPortal(
+          <div
+            className="diagrama-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("chat.diagram.viewer")}
+            onMouseDown={(evento) => {
+              if (evento.target === evento.currentTarget) cerrar();
+            }}
+          >
+            <div className="diagrama-modal-cabecera">
+              <span>
+                {t("chat.diagram.title")}
+                {diagram.diagram_type ? ` · ${diagram.diagram_type}` : ""}
+              </span>
+              <div className="diagrama-zoom">
+                <button
+                  type="button"
+                  onClick={alejar}
+                  disabled={vista.zoom <= 0.5}
+                  title={t("chat.diagram.zoomOut")}
+                  aria-label={t("chat.diagram.zoomOut")}
+                >
+                  −
+                </button>
+                <span aria-live="polite">{Math.round(vista.zoom * 100)}%</span>
+                <button
+                  type="button"
+                  onClick={acercar}
+                  disabled={vista.zoom >= 4}
+                  title={t("chat.diagram.zoomIn")}
+                  aria-label={t("chat.diagram.zoomIn")}
+                >
+                  +
+                </button>
+                <button type="button" onClick={restablecer}>
+                  {t("chat.diagram.zoomReset")}
+                </button>
+                <button
+                  type="button"
+                  onClick={cerrar}
+                  autoFocus
+                  aria-label={t("common.close")}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+            <div
+              className={`diagrama-modal-lienzo${arrastrando ? " arrastrando" : ""}`}
+              ref={lienzo}
+              onPointerDown={alBajar}
+              onPointerMove={alMover}
+              onPointerUp={alSoltar}
+              onPointerCancel={alSoltar}
+            >
+              <div
+                className="diagrama-modal-zoom"
+                style={{
+                  transform: `translate(${vista.x}px, ${vista.y}px) scale(${vista.zoom})`,
+                }}
+              >
+                <img
+                  className="diagrama-modal-img"
+                  src={src}
+                  alt={t("chat.diagram.alt")}
+                  draggable={false}
+                />
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </figure>
   );
 }

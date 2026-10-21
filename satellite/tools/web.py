@@ -29,6 +29,7 @@ from satellite.tools.fs import _read_previous, _record_change, _resolve
 
 USER_AGENT = "Satellite/0.2"
 SEARCH_ENDPOINT = "https://html.duckduckgo.com/html/"
+SEARCH_LITE_ENDPOINT = "https://lite.duckduckgo.com/lite/"
 TIMEOUT_S = 15.0
 MAX_BYTES = 2_000_000
 DEFAULT_TITLE_CHARS = 300
@@ -353,14 +354,53 @@ class _DdgParser(HTMLParser):
             self._current["snippet"] += data
 
 
-def _parse_search_results(markup: str, *, max_results: int) -> list[dict[str, str]]:
-    parser = _DdgParser()
-    try:
-        parser.feed(markup)
-    except Exception:  # noqa: BLE001
-        pass
+class _DdgLiteParser(HTMLParser):
+    """Resultados de la versión ``lite`` de DuckDuckGo (tablas simples)."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.results: list[dict[str, str]] = []
+        self._current: dict[str, str] | None = None
+        self._in_title = False
+        self._in_snippet = False
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        attributes = {key: value or "" for key, value in attrs}
+        classes = set(attributes.get("class", "").split())
+        if tag == "a" and "result-link" in classes:
+            self._current = {
+                "title": "",
+                "url": _unwrap_ddg(attributes.get("href", "")),
+                "snippet": "",
+            }
+            self.results.append(self._current)
+            self._in_title = True
+        elif "result-snippet" in classes:
+            if self._current is None:
+                self._current = {"title": "", "url": "", "snippet": ""}
+                self.results.append(self._current)
+            self._in_snippet = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a":
+            self._in_title = False
+        elif tag in ("td", "div"):
+            self._in_snippet = False
+
+    def handle_data(self, data: str) -> None:
+        if self._current is None:
+            return
+        if self._in_title:
+            self._current["title"] += data
+        elif self._in_snippet:
+            self._current["snippet"] += data
+
+
+def _normalize_search_results(
+    raw: list[dict[str, str]], *, max_results: int
+) -> list[dict[str, str]]:
     results: list[dict[str, str]] = []
-    for item in parser.results:
+    for item in raw:
         url = _validate_url(item.get("url", ""))[0]
         if not url:
             continue
@@ -382,13 +422,55 @@ def _parse_search_results(markup: str, *, max_results: int) -> list[dict[str, st
     return results
 
 
+def _parse_search_results(markup: str, *, max_results: int) -> list[dict[str, str]]:
+    parser = _DdgParser()
+    try:
+        parser.feed(markup)
+    except Exception:  # noqa: BLE001
+        pass
+    return _normalize_search_results(parser.results, max_results=max_results)
+
+
+def _parse_lite_results(markup: str, *, max_results: int) -> list[dict[str, str]]:
+    parser = _DdgLiteParser()
+    try:
+        parser.feed(markup)
+    except Exception:  # noqa: BLE001
+        pass
+    return _normalize_search_results(parser.results, max_results=max_results)
+
+
+def _simplify_query(query: str, *, max_words: int = 8) -> str:
+    """Consulta más corta para motores que responden con un challenge si es larga."""
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9.+-]*", query)
+    return " ".join(words[:max_words]) or query
+
+
 async def _search(query: str, max_results: int) -> list[dict[str, str]]:
-    """Búsqueda best-effort en la versión HTML de DuckDuckGo."""
-    url = f"{SEARCH_ENDPOINT}?q={quote_plus(query)}"
-    page = await _fetch(url)
-    if page["status"] >= 400:
-        return []
-    return _parse_search_results(str(page["text"]), max_results=max_results)
+    """Búsqueda best-effort: HTML de DuckDuckGo y, si falla, su versión lite.
+
+    El endpoint HTML devuelve a veces HTTP 202 con una página anti-bot y cero
+    resultados. ``lite`` suele seguir respondiendo con la misma consulta.
+    """
+    candidates = [query]
+    simplified = _simplify_query(query)
+    if simplified != query:
+        candidates.append(simplified)
+    for candidate in candidates:
+        for endpoint, parser in (
+            (SEARCH_ENDPOINT, _parse_search_results),
+            (SEARCH_LITE_ENDPOINT, _parse_lite_results),
+        ):
+            try:
+                page = await _fetch(f"{endpoint}?q={quote_plus(candidate)}")
+            except (httpx.HTTPError, OSError, ValueError):
+                continue
+            if page["status"] >= 400:
+                continue
+            results = parser(str(page["text"]), max_results=max_results)
+            if results:
+                return results
+    return []
 
 
 class WebSearchTool(Tool):

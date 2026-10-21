@@ -171,6 +171,19 @@ _RESEARCH_VERB_RE = re.compile(
 )
 
 
+_DO_IT_RE = re.compile(
+    r"\b(hazlo|hazlo ya|hazlo ahora|hazlo de una vez|procede|adelante|"
+    r"ejecuta(?:lo)?|implementa(?:lo)?|aplica(?:lo)?|"
+    r"do it|go ahead|proceed|implement it|make it)\b",
+    re.IGNORECASE,
+)
+
+
+def is_do_it_request(goal: str) -> bool:
+    """True si el usuario está confirmando una acción concreta ya propuesta."""
+    return bool(_DO_IT_RE.search(str(goal or "")))
+
+
 def is_web_research_request(goal: str) -> bool:
     """True si pide buscar/investigar/consultar algo en internet.
 
@@ -241,8 +254,8 @@ _CHAT_HINTS_RE = re.compile(
     r"de acuerdo|listo|ayúdame|ayudame|ayudarme|me ayudas|puedes ayudarme|"
     r"consejo|sugerencia|dime algo|cu[eé]ntame algo|"
     r"qu[eé] es|que es|quien|qui[eé]n|cu[aá]l es|cual es|cu[aá]les son|cuales son|"
-    r"qu[eé] hay|resume|resumen|est[aá]s|tal|hola de nuevo|"
-    r"help me|thanks|thank you|hello|hi|what is)\b",
+    r"qu[eé] hay|resume|resumen|c[oó]mo est[aá]s|est[aá]s ah[ií]|qu[eé] tal|"
+    r"hola de nuevo|help me|thanks|thank you|hello|hi|what is)\b",
     re.IGNORECASE,
 )
 
@@ -338,7 +351,11 @@ def is_chat_goal(task: Task, provider: LLMProvider | None) -> bool:
     heurística lo tiene claro no gasta llamada: los modelos pequeños no
     clasifican bien y aquí la regla ya es sólida.
     """
-    if has_task_hint(task.goal) or is_web_research_request(task.goal):
+    if (
+        has_task_hint(task.goal)
+        or is_web_research_request(task.goal)
+        or is_do_it_request(task.goal)
+    ):
         return False
     if heuristic_is_chat(task.goal):
         return True
@@ -349,7 +366,11 @@ def is_chat_goal(task: Task, provider: LLMProvider | None) -> bool:
 
 async def async_is_chat_goal(task: Task, provider: LLMProvider | None) -> bool:
     """Versión async (usada dentro del orchestrator)."""
-    if has_task_hint(task.goal) or is_web_research_request(task.goal):
+    if (
+        has_task_hint(task.goal)
+        or is_web_research_request(task.goal)
+        or is_do_it_request(task.goal)
+    ):
         return False
     if heuristic_is_chat(task.goal):
         return True

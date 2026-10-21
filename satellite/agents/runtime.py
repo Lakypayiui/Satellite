@@ -81,6 +81,10 @@ def build_system_prompt(
     rendered = render_system(
         system_prompt, tools=tools_text, output_schema=schema_text
     )
+    # Un agente generado puede olvidar el placeholder; sin el schema a la vista el
+    # modelo inventa claves y el runtime rechaza una respuesta que era válida.
+    if output_schema and "{output_schema}" not in system_prompt:
+        rendered += f"\n\n# OUTPUT SCHEMA\n{schema_text}"
     if can_call:
         lines = "\n".join(
             f"- {entry.agent_id}: {entry.description}" for entry in can_call
@@ -104,6 +108,24 @@ def build_system_prompt(
             "and do not present the project as if it were what was requested."
         )
         rendered = f"# PATH SCOPE\n{regla}\n\n{rendered}"
+    if tools and "# PROJECT ACCESS" not in rendered:
+        # Regla de framework para todos los agentes con tools: los archivos del
+        # proyecto se leen con tools, no se piden al usuario. El README es
+        # documentación, no la especificación del comportamiento.
+        regla = (
+            "You have direct access to the project through your tools. Never ask the "
+            "user to paste a project file, show its contents, or confirm that it "
+            "exists: use list_dir, search_files and read_file. If a path is not where "
+            "you expected, search for it.\n"
+            "The README is documentation, not the specification. For code tasks, "
+            "verify behavior against the code, tests and build files. Do not run git "
+            "or git status unless the task is specifically about changes, diffs or "
+            "history.\n"
+            "If the user says \"do it\", \"hazlo\", \"proceed\" or similar, execute "
+            "the concrete next action from the recent conversation with the tools "
+            "your role allows instead of asking again."
+        )
+        rendered += f"\n\n# PROJECT ACCESS\n{regla}"
     # Regla común de idioma: los prompts internos van en inglés, pero el texto que el
     # usuario lee sigue el idioma de su mensaje/conversación.
     return with_output_language(rendered)

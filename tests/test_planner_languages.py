@@ -39,6 +39,29 @@ def _prompts() -> DefaultPromptRegistry:
     return prompts
 
 
+def test_do_it_adds_a_continuation_hint(tmp_path: Path) -> None:
+    catalog = _catalog()
+    plan = {
+        "type": "plan",
+        "steps": [
+            {
+                "id": "s1",
+                "agent_id": "python_auditor",
+                "instruction": "inspect the Python code",
+                "depends_on": [],
+            }
+        ],
+        "rationale": "continuation",
+    }
+    fake = FakeLLM(script=[{"content": json.dumps(plan)}])
+    planner = LLMPlanner(fake, catalog, prompts=_prompts())
+    task = Task(goal="Hazlo", project_root=tmp_path)
+    run(planner.plan(task, catalog))
+    dynamic = fake.requests[0].messages[-1].content
+    assert "confirming the concrete action" in dynamic
+    assert "use a coder agent" in dynamic
+
+
 def test_language_hint_is_dynamic_and_not_catalog(tmp_path: Path) -> None:
     catalog = _catalog()
     plan = {
