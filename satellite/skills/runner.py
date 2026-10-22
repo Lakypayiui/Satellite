@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from satellite.core.errors import ToolError
-from satellite.sandbox.base import SandboxLevel, SandboxRunner, SandboxSpec
+from satellite.sandbox.base import SandboxRunner, SandboxSpec
 from satellite.skills.cache import SkillResultCache
 from satellite.skills.models import SkillManifest
 from satellite.skills.registry import SkillRegistry
@@ -81,16 +81,22 @@ class SkillRunner:
         """
         manifest = self.registry.get(skill_id)
         skill_dir = self.registry.root / manifest.id
-        use_cache = self.cache is not None and self.cache.eligible(
+        cache = self.cache
+        if cache is not None and cache.eligible(
             manifest, allow_network=allow_network, skill_dir=skill_dir
-        )
-        cache_key = (
-            self.cache.key_for(manifest, payload, project_root=project_root)
-            if use_cache
-            else ""
-        )
-        if use_cache:
-            hit = self.cache.get(cache_key)
+        ):
+            cache_key = cache.key_for(
+                manifest,
+                payload,
+                project_root=project_root,
+                skill_dir=skill_dir,
+            )
+        else:
+            # ``None`` marca "no usar caché" y permite a mypy estrechar el tipo.
+            cache = None
+            cache_key = ""
+        if cache is not None:
+            hit = cache.get(cache_key)
             if hit is not None:
                 # Un acierto es un uso real: cuenta para las métricas con coste ~0.
                 self.registry.record_use(skill_id, True, 0)
@@ -204,9 +210,9 @@ class SkillRunner:
             )
 
         self.registry.record_use(skill_id, True, duration_ms)
-        if use_cache:
+        if cache is not None:
             # Sólo se memoizan éxitos: un fallo no se guarda nunca.
-            self.cache.put(cache_key, parsed, skill_id=skill_id)
+            cache.put(cache_key, parsed, skill_id=skill_id)
         self._emit(
             "executed", skill_id, task_id, cached=False, duration_ms=duration_ms
         )

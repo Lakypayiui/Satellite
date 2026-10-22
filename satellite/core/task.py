@@ -19,6 +19,9 @@ class Task:
     project_root: Path
     metadata: dict = field(default_factory=dict)
     task_id: str = field(default_factory=lambda: uuid4().hex[:12])
+    # Puerto de aprobación del turno. Es una dependencia de ejecución, no parte de la
+    # tarea persistida: ``to_dict`` no lo incluye y ``from_dict`` lo deja en ``None``.
+    approval: object | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.goal, str) or not self.goal.strip():

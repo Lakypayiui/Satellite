@@ -96,6 +96,15 @@ class DefaultToolRegistry(ToolRegistry):
                 # viajan aquí: el runtime los usa para pedir permiso sin parsear texto.
                 output=getattr(exc, "details", None),
             )
+        except Exception as exc:  # noqa: BLE001 - una tool no debe tumbar el turno
+            # Un fallo no controlado se convierte en resultado para que el LLM lo vea
+            # y pueda corregir; ``CancelledError`` no pasa por aquí (es BaseException).
+            result = ToolResult(
+                call_id=call.id,
+                success=False,
+                error=f"error interno de la tool '{call.name}': {exc}",
+                error_code="tool_error",
+            )
         self._emit_called(call, tool_ctx, result)
         return result
 

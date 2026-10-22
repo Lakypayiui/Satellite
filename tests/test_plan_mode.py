@@ -11,7 +11,6 @@ from satellite.agents.registry import DefaultAgentRegistry
 from satellite.core.errors import SpecValidationError
 from satellite.core.graph import ExecutionGraph, Node
 from satellite.core.plan import PlanOption, PlanOptions
-from satellite.core.result import AgentResult, AgentStatus
 from satellite.core.spec import AgentSpec
 from satellite.core.task import Task, TaskResult, TaskStatus
 from satellite.orchestration.base import GraphRunner, Planner, PlanningResult, RuntimeServices

@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 from satellite.core.errors import ProviderError
-from satellite.core.messages import LLMRequest, LLMResponse, Message, Role, Usage
+from satellite.core.messages import LLMRequest, LLMResponse, Role, Usage
 from satellite.core.tool_models import ToolCall
 from satellite.providers.base import LLMProvider
 from satellite.providers.parsing import coerce_arguments

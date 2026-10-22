@@ -1,6 +1,8 @@
 """Tests de FileStore."""
 
 import asyncio
+import threading
+import time
 from pathlib import Path
 
 from satellite.core.events import EventType, ExecutionEvent
@@ -63,3 +65,94 @@ def test_list_tasks(tmp_path: Path) -> None:
     run(store.save_task(Task(goal="a", project_root=tmp_path)))
     run(store.save_task(Task(goal="b", project_root=tmp_path)))
     assert len(store.list_tasks()) == 2
+
+
+def test_append_events_preserves_order_under_concurrent_calls(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """El worker único serializa las escrituras aunque lleguen en paralelo."""
+    store = FileStore(tmp_path)
+    original = store._append_event_sync
+
+    def slow_first(task_id: str, event: ExecutionEvent) -> None:
+        if event.node_id == "n1":
+            time.sleep(0.1)
+        original(task_id, event)
+
+    monkeypatch.setattr(store, "_append_event_sync", slow_first)
+    events = [
+        ExecutionEvent(event_type=EventType.NODE_STARTED, task_id="t1", node_id=f"n{i}")
+        for i in range(1, 4)
+    ]
+
+    async def scenario() -> None:
+        await asyncio.gather(*(store.append_event("t1", event) for event in events))
+
+    run(scenario())
+    loaded = run(store.load_events("t1"))
+    assert [event.node_id for event in loaded] == ["n1", "n2", "n3"]
+
+
+def test_append_event_does_not_block_the_event_loop(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = FileStore(tmp_path)
+    started = threading.Event()
+    release = threading.Event()
+    events_path = store._events_path("t1")
+    real_open = open
+
+    def slow_open(file, mode="r", *args, **kwargs):
+        if Path(file) == events_path and mode == "a":
+            started.set()
+            assert release.wait(2)
+        return real_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", slow_open)
+    event = ExecutionEvent(event_type=EventType.TASK_STARTED, task_id="t1")
+
+    async def scenario() -> None:
+        task = asyncio.create_task(store.append_event("t1", event))
+        deadline = time.monotonic() + 2
+        while not started.is_set() and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        assert started.is_set()
+        assert not task.done()
+        release.set()
+        await asyncio.wait_for(task, 2)
+
+    run(scenario())
+    assert events_path.exists()
+
+
+def test_load_events_does_not_block_the_event_loop(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = FileStore(tmp_path)
+    event = ExecutionEvent(event_type=EventType.TASK_STARTED, task_id="t1")
+    run(store.append_event("t1", event))
+    started = threading.Event()
+    release = threading.Event()
+    events_path = store._events_path("t1")
+    real_read_text = Path.read_text
+
+    def slow_read_text(path, *args, **kwargs):
+        if path == events_path:
+            started.set()
+            assert release.wait(2)
+        return real_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", slow_read_text)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(store.load_events("t1"))
+        deadline = time.monotonic() + 2
+        while not started.is_set() and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        assert started.is_set()
+        assert not task.done()
+        release.set()
+        loaded = await asyncio.wait_for(task, 2)
+        assert len(loaded) == 1
+
+    run(scenario())

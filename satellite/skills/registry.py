@@ -12,6 +12,7 @@ from satellite.events.base import EventSink
 from satellite.kernel.manifest import is_reserved, sha256_bytes
 from satellite.retrieval.base import Hit
 from satellite.retrieval.index import DEFAULT_MIN_SCORE, SkillIndex
+from satellite.skills.audit import code_digest
 from satellite.skills.models import SkillManifest, SkillStats, SkillStatus
 from satellite.tool_manifest import is_tool_id
 
@@ -126,13 +127,15 @@ class SkillRegistry:
                 f"script de '{manifest.id}' excede el máximo de "
                 f"{self.max_script_bytes} bytes"
             )
-        digest = sha256_bytes(script_bytes)
-        final = SkillManifest.from_dict({**manifest.to_dict(), "hash": digest})
-        skill_dir = self.root / final.id
+        skill_dir = self.root / manifest.id
         if skill_dir.exists():
             self._archive_previous(skill_dir)
         skill_dir.mkdir(parents=True, exist_ok=True)
-        (skill_dir / final.entrypoint).write_text(script, encoding="utf-8")
+        (skill_dir / manifest.entrypoint).write_text(script, encoding="utf-8")
+        # Huella del entrypoint y de los módulos locales que ya existan. El caso
+        # de un solo fichero conserva el sha256 histórico del script.
+        digest = code_digest(skill_dir, manifest.entrypoint) or sha256_bytes(script_bytes)
+        final = SkillManifest.from_dict({**manifest.to_dict(), "hash": digest})
         self._write_manifest(final)
         self._manifests[final.id] = final
         self.index.add_skill(final)

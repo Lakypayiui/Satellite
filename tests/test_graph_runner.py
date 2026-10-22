@@ -8,7 +8,6 @@ from satellite.core.graph import Edge, EdgeCondition, ExecutionGraph, Node
 from satellite.core.result import AgentResult, AgentStatus, Finding, FindingSeverity
 from satellite.core.spec import AgentSpec
 from satellite.core.task import Task
-from satellite.core.context_models import ContextRef, ContextRefKind
 from satellite.orchestration.base import RuntimeServices
 from satellite.orchestration.runner import DefaultGraphRunner
 from satellite.events.base import EventSink
@@ -307,6 +306,7 @@ def test_events_sequence(tmp_path: Path) -> None:
     runner = DefaultGraphRunner(factory, sink=sink)
     task = make_task(tmp_path)
     result = run(runner.run(graph, task, RuntimeServices(factory=factory, sink=sink)))
+    assert result.status.value == "ok"
     types = [e.event_type.value for e in sink.events]
     assert types[0] == "task_started"
     assert types[1] == "graph_built"

@@ -14,7 +14,6 @@ Cubre lo que el runtime REALMENTE aísla y lo que no:
 
 import asyncio
 import json
-import os
 import sys
 from pathlib import Path
 

@@ -1,6 +1,5 @@
 """Comandos ``satellite provider`` (no interactivo + asistente guionizado)."""
 
-import json
 from pathlib import Path
 import pytest
 

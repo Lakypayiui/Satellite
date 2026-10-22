@@ -77,14 +77,17 @@ def run(
     """Run the orchestrator for a goal and print the summary."""
     orchestrator, _bus, _store, _ = build_runtime(project, allow_desktop=True)
     from satellite.approval.base import AutoApprovalPort
-    from satellite.approval.cli import CliApproval
     from satellite.core.task import Task
 
     import asyncio
 
+    # El puerto del turno viaja en la Task; no se muta el servicio compartido.
     services = getattr(orchestrator, "services", None)
-    if services is not None and getattr(services, "approval", None) is None:
-        services.approval = AutoApprovalPort() if yes else CliApproval()
+    approval = (
+        AutoApprovalPort()
+        if yes
+        else getattr(services, "approval", None)
+    )
     # Ctrl+C no se lleva por delante el proceso: pide cancelar y deja que el runtime pare
     # entre nodos, con lo hecho contado. El segundo Ctrl+C sí corta.
     import signal
@@ -93,7 +96,13 @@ def run(
     signal.signal(signal.SIGINT, _cancel_handler(orchestrator))
     try:
         result = asyncio.run(
-            orchestrator.execute(Task(goal=goal, project_root=project.resolve()))
+            orchestrator.execute(
+                Task(
+                    goal=goal,
+                    project_root=project.resolve(),
+                    approval=approval,
+                )
+            )
         )
     finally:
         signal.signal(signal.SIGINT, anterior)
@@ -511,7 +520,7 @@ def doctor(
     import os
 
     from satellite.kernel import migrations
-    from satellite.kernel.manifest import is_reserved, verify_and_restore
+    from satellite.kernel.manifest import is_reserved
     from satellite.kernel.paths import ensure_dirs, resolve_paths
 
     root = project.resolve()

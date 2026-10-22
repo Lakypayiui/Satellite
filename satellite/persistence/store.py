@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -23,6 +24,12 @@ class FileStore(Store):
         self.root = project_root / ".satellite"
         for sub in SUBDIRS:
             (self.root / sub).mkdir(parents=True, exist_ok=True)
+        # Cola y worker por bucle: una sola escritura a la vez evita reordenar
+        # eventos cuando varios productores llaman a append_event en paralelo.
+        self._event_queue: asyncio.Queue[
+            tuple[str, ExecutionEvent, asyncio.Future[None]]
+        ] | None = None
+        self._event_worker: asyncio.Task[None] | None = None
 
     async def save_task(self, task: Task) -> None:
         self._write_json(self._task_path(task.task_id), task.to_dict())
@@ -43,11 +50,50 @@ class FileStore(Store):
         return ExecutionGraph.from_dict(self._read_json(path))
 
     async def append_event(self, task_id: str, event: ExecutionEvent) -> None:
+        loop = asyncio.get_running_loop()
+        if (
+            self._event_queue is None
+            or self._event_worker is None
+            or self._event_worker.done()
+            or self._event_worker.get_loop() is not loop
+        ):
+            self._event_queue = asyncio.Queue()
+            self._event_worker = loop.create_task(self._write_events(self._event_queue))
+        done = loop.create_future()
+        self._event_queue.put_nowait((task_id, event, done))
+        await done
+
+    async def _write_events(
+        self,
+        queue: asyncio.Queue[tuple[str, ExecutionEvent, asyncio.Future[None]]],
+    ) -> None:
+        """Escribe eventos en orden, fuera del event loop."""
+        while True:
+            task_id, event, done = await queue.get()
+            try:
+                await asyncio.to_thread(self._append_event_sync, task_id, event)
+            except asyncio.CancelledError:
+                if not done.done():
+                    done.cancel()
+                raise
+            except Exception as exc:  # noqa: BLE001 — se propaga al llamador
+                if not done.done():
+                    done.set_exception(exc)
+            else:
+                if not done.done():
+                    done.set_result(None)
+            finally:
+                queue.task_done()
+
+    def _append_event_sync(self, task_id: str, event: ExecutionEvent) -> None:
         path = self._events_path(task_id)
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(event.to_dict(), ensure_ascii=False) + "\n")
 
     async def load_events(self, task_id: str) -> list[ExecutionEvent]:
+        return await asyncio.to_thread(self._load_events_sync, task_id)
+
+    def _load_events_sync(self, task_id: str) -> list[ExecutionEvent]:
         path = self._events_path(task_id)
         events: list[ExecutionEvent] = []
         if not path.exists():

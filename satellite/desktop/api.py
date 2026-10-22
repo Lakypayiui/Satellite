@@ -55,6 +55,9 @@ class ApprovalIn(BaseModel):
     decision: str
     feedback: str = ""
     reason: str = ""
+    # Proyecto que pidió la propuesta. La interfaz lo recibe en ``GET /approvals`` y lo
+    # devuelve aquí; sin él, el backend sólo resuelve ids que no sean ambiguos.
+    project_root: str = ""
 
 
 class RestoreIn(BaseModel):
@@ -376,7 +379,11 @@ def build_router(backend: DesktopBackend, auth: Callable) -> APIRouter:
     def resolve_approval(proposal_id: str, payload: ApprovalIn) -> dict:
         """Responde a una propuesta: permitir una vez, durante la sesión, o rechazar."""
         return backend.resolve_approval(
-            proposal_id, payload.decision, feedback=payload.feedback, reason=payload.reason
+            proposal_id,
+            payload.decision,
+            feedback=payload.feedback,
+            reason=payload.reason,
+            project_root=payload.project_root or None,
         )
 
     # --- eventos en vivo ---

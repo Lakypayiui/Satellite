@@ -3,7 +3,8 @@
 import asyncio
 from pathlib import Path
 
-from satellite.core.tool_models import ToolResult
+import pytest
+
 from satellite.kernel.manifest import RESERVED_SKILL_IDS
 from satellite.skills.models import SkillManifest
 from satellite.skills.registry import SkillRegistry
@@ -37,6 +38,50 @@ def test_search_files_tool(tmp_path: Path) -> None:
     assert result.success is True
     paths = {entry["path"] for entry in result.output}
     assert paths == {"a.py", "sub/b.py"}
+
+
+def test_search_files_rejects_patterns_with_traversal(tmp_path: Path) -> None:
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "inside.txt").write_text("x", encoding="utf-8")
+    ctx = ToolContext(project_root=tmp_path)
+
+    result = run(SearchFilesTool().execute({"pattern": "../**/*.txt", "path": "sub"}, ctx))
+
+    assert result.success is False
+    assert result.error_code == "invalid_arguments"
+    assert ".." in (result.error or "")
+
+
+def test_search_files_rejects_absolute_patterns(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("x", encoding="utf-8")
+    ctx = ToolContext(project_root=tmp_path)
+
+    result = run(
+        SearchFilesTool().execute({"pattern": str(tmp_path / "*.py")}, ctx)
+    )
+
+    assert result.success is False
+    assert result.error_code == "invalid_arguments"
+    assert "relativ" in (result.error or "")
+
+
+def test_search_files_does_not_follow_symlinks_outside_the_project(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-fuera"
+    outside.mkdir()
+    (outside / "secreto.txt").write_text("no debe listarse", encoding="utf-8")
+    (tmp_path / "dentro.txt").write_text("x", encoding="utf-8")
+    try:
+        (tmp_path / "enlace.txt").symlink_to(outside / "secreto.txt")
+    except (OSError, NotImplementedError):
+        pytest.skip("el sistema no permite crear symlinks")
+    ctx = ToolContext(project_root=tmp_path)
+
+    result = run(SearchFilesTool().execute({"pattern": "**/*.txt"}, ctx))
+
+    assert result.success is True
+    paths = {entry["path"] for entry in result.output}
+    assert paths == {"dentro.txt"}
+    assert "enlace.txt" not in paths
 
 
 def test_search_skills_without_registry(tmp_path: Path) -> None:

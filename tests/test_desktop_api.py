@@ -312,14 +312,14 @@ def test_jobs_are_listed_with_their_output(tmp_path: Path, entorno) -> None:
 
 def test_a_foreign_job_cannot_be_stopped_and_it_is_said(tmp_path: Path, entorno) -> None:
     client, _backend = entorno
-    ajeno = tmp_path / ".satellite" / "state" / "jobs" / "ajeno1.json"
+    ajeno = tmp_path / ".satellite" / "state" / "jobs" / "deadbeef.json"
     ajeno.parent.mkdir(parents=True, exist_ok=True)
     ajeno.write_text(
-        json.dumps({"job_id": "ajeno1", "command": "algo", "status": "running"}),
+        json.dumps({"job_id": "deadbeef", "command": "algo", "status": "running"}),
         encoding="utf-8",
     )
 
-    respuesta = client.post("/api/jobs/ajeno1/stop")
+    respuesta = client.post("/api/jobs/deadbeef/stop")
 
     assert respuesta.status_code == 409
     assert respuesta.json()["error"]["code"] == "job_foreign"

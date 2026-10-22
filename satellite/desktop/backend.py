@@ -238,21 +238,28 @@ class DesktopBackend:
         return session
 
     def open_project(self, path) -> dict:
-        """Abre o cambia de carpeta: se valida, se prepara lo mínimo y se recuerda."""
+        """Abre o cambia de carpeta: se valida, se prepara lo mínimo y se recuerda.
+
+        El cambio de proyecto es atómico: si preparar la carpeta nueva falla, el backend
+        sigue apuntando a la anterior. Antes se asignaba ``project_root`` primero y un
+        fallo dejaba la app mostrando un proyecto y operando sobre otro.
+        """
         root = Path(str(path)).expanduser()
         if not root.is_dir():
             raise BackendError("project_not_found", f"no es una carpeta: {root}", 404)
-        self.project_root = root.resolve()
-        self._explicit_project = True
+        destino = root.resolve()
         try:
-            self.session().paths()  # crea .satellite/ de forma idempotente
+            # Se prepara la sesión del destino sin tocar todavía el proyecto activo.
+            self.session(destino).paths()  # crea .satellite/ de forma idempotente
         except Exception as exc:  # noqa: BLE001 — se informa, no se finge que está listo
             raise BackendError(
                 "project_unavailable",
                 f"no se pudo preparar el proyecto: {redact_text(str(exc))}",
                 503,
             ) from exc
-        self.remember(self.project_root)
+        self.project_root = destino
+        self._explicit_project = True
+        self.remember(destino)
         return self.status()
 
     def recents(self) -> list[str]:
@@ -487,7 +494,11 @@ class DesktopBackend:
         """Permisos esperando decisión (en ``unrestricted`` nunca hay: no se pregunta)."""
         if self._policy_mode(project_root) == "unrestricted":
             return []
-        return self.approval(project_root).describe()
+        key = str(self.resolve(project_root))
+        # El proyecto viaja con cada propuesta para que la interfaz pueda responder sin
+        # depender de cuál esté abierto en ese momento (y sin poder confundir proyectos).
+        items = self.approval(project_root).describe()
+        return [{**item, "project_root": key} for item in items]
 
     def _provider_configured(self, project_root=None) -> bool:
         """True si hay un proveedor resoluble (el que el runtime usaría)."""
@@ -517,19 +528,56 @@ class DesktopBackend:
         )
 
     def resolve_approval(
-        self, proposal_id: str, decision: str, *, feedback: str = "", reason: str = ""
+        self,
+        proposal_id: str,
+        decision: str,
+        *,
+        feedback: str = "",
+        reason: str = "",
+        project_root=None,
     ) -> dict:
+        """Responde a una propuesta del proyecto al que pertenece.
+
+        La decisión no se aplica al proyecto que esté abierto ahora, sino al que pidió la
+        propuesta. Si no llega ``project_root``, se busca entre los puertos pendientes: con
+        un único candidato se resuelve; si el mismo id está pendiente en varios proyectos,
+        se rechaza con ``409`` en vez de adivinar y aprobar la operación equivocada.
+        """
         try:
             parsed = decision_from(decision, feedback=feedback, reason=reason)
         except ValueError as exc:
             raise BackendError("invalid_decision", str(exc), 422) from exc
-        port = self.approval()
-        if not port.is_pending(proposal_id):
-            raise BackendError(
-                "not_pending", f"no hay una propuesta pendiente con id {proposal_id!r}", 404
-            )
+
+        if project_root:
+            key = str(self.resolve(project_root))
+            port = self._approvals.get(key)
+            if port is None or not port.is_pending(proposal_id):
+                raise BackendError(
+                    "not_pending",
+                    f"no hay una propuesta pendiente con id {proposal_id!r} en {key}",
+                    404,
+                )
+        else:
+            candidatos = [
+                (key, port)
+                for key, port in self._approvals.items()
+                if port.is_pending(proposal_id)
+            ]
+            if len(candidatos) > 1:
+                raise BackendError(
+                    "ambiguous_approval",
+                    f"la propuesta {proposal_id!r} está pendiente en varios proyectos; "
+                    "indica project_root",
+                    409,
+                )
+            if not candidatos:
+                raise BackendError(
+                    "not_pending", f"no hay una propuesta pendiente con id {proposal_id!r}", 404
+                )
+            key, port = candidatos[0]
+
         port.submit(proposal_id, parsed)
-        return {"proposal_id": proposal_id, "decision": parsed.to_dict()}
+        return {"proposal_id": proposal_id, "project_root": key, "decision": parsed.to_dict()}
 
     # --- sesiones de conversación ---
 
@@ -1797,6 +1845,7 @@ class DesktopBackend:
         from satellite.config import catalog as provider_catalog
         from satellite.config.models import default_model
 
+        root = self.resolve(project_root)
         provider_key = ""
         account_id = ""
         if provider:
@@ -1857,7 +1906,6 @@ class DesktopBackend:
         # estrategia de listado (p. ej. xAI /language-models) en vez de asumir /models.
         if not provider_key:
             provider_key = provider_catalog.key_for_base_url(base_url.strip())
-        root = self.resolve(project_root)
         session = self.session(project_root)
         result = session.load_models(
             base_url.strip(), family or "openai", api_key, provider_key, account_id
@@ -2060,7 +2108,12 @@ class DesktopBackend:
                 "name": name,
                 "note": "no se ha restaurado nada: falta confirmar que se descarta el estado actual",
             }
-        resultado = self.session(project_root).restore(name)
+        try:
+            resultado = self.session(project_root).restore(name)
+        except FileNotFoundError as exc:
+            raise BackendError(
+                "snapshot_not_found", f"snapshot no encontrado: {name}", 404
+            ) from exc
         return {"confirmed": True, "name": name, "result": to_jsonable(resultado)}
 
     def reset_project(

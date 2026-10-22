@@ -45,7 +45,12 @@ interface Props {
   policyMode: string;
   onPolicyMode: (modo: string) => void;
   onEnviar: (texto: string, plan: boolean) => void;
-  onPermiso: (proposalId: string, decision: string, feedback?: string) => void;
+  onPermiso: (
+    proposalId: string,
+    projectRoot: string,
+    decision: string,
+    feedback?: string,
+  ) => void;
   onElegirPlan: (optionId: string) => void;
   /** Comando elegido con «/» inline; la app lo lanza con el mismo despachador de la paleta. */
   onComando: (spec: CommandSpecView) => void;
@@ -854,6 +859,7 @@ export function Chat(props: Props) {
                 onClick={() =>
                   props.onPermiso(
                     permiso.proposal_id,
+                    permiso.project_root,
                     opcion === "once" || opcion === "session" ? "approve" : opcion,
                     opcion === "once" || opcion === "session" ? opcion : "",
                   )

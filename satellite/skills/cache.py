@@ -9,10 +9,12 @@ Reglas ([AJ-4]):
 - ``bash`` **nunca** se memoiza: no se puede auditar estáticamente.
 - Sin directorio de skill no se puede auditar ⇒ **no** se memoiza (fail-closed).
 - **Nunca** se memoizan primitivas (el runtime no las ejecuta por aquí).
-- La clave incluye el hash del manifest **y** del script, y el hash de contenido
-  de los ficheros referenciados por el input (si el input es una ruta).
+- La clave incluye la huella real del código (entrypoint + módulos locales) y el
+  hash de contenido de los ficheros referenciados por el input (si el input es
+  una ruta). Si esa huella no coincide con ``manifest.hash``, la skill no se
+  memoiza y la auditoría reporta ``stale_manifest``.
 - **No se cachean fallos**, ni resultados cuyo JSON supere ``max_entry_bytes``.
-- Se invalida al cambiar versión/hash y al entrar en cuarentena.
+- Se invalida al cambiar versión/código y al entrar en cuarentena.
 
 Aislamiento (sin prometer de más): el fichero de la cache vive en el directorio
 de estado del proyecto, que las tools alcanzan a través de la guardia del kernel
@@ -25,11 +27,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from satellite.core.atomic import atomic_write_text
-from satellite.skills.audit import Finding, audit_skill, reason_for
+from satellite.skills.audit import Finding, audit_skill, code_digest, reason_for
 from satellite.skills.models import ALLOWED_LANGUAGES, SkillManifest, SkillStatus
 from satellite.tool_manifest import is_tool_id
 
@@ -48,7 +50,7 @@ _EFFECT_KEYS: tuple[str, ...] = (
     "env",
     "environment",
 )
-_FALSEY = (False, None, 0, "", (), [], {})
+_FALSEY: tuple[object, ...] = (False, None, 0, "", (), [], {})
 
 MAX_CONTENT_BYTES = 5_000_000
 # Tope por entrada: un resultado enorme infla el fichero y no compensa cachearlo.
@@ -149,7 +151,7 @@ class SkillResultCache:
         self.hits = 0
         self.misses = 0
         self.skipped = 0
-        self._audits: dict[tuple[str, str, str], list[Finding]] = {}
+        self._audits: dict[tuple[str, str, str, str, str], list[Finding]] = {}
         self.path = Path(path) if path is not None else None
         self.max_entry_bytes = int(max_entry_bytes)
         self.max_entries = int(max_entries)
@@ -159,14 +161,36 @@ class SkillResultCache:
     # --- política ---
 
     def audit(self, manifest: SkillManifest, skill_dir: Path | str | None) -> list[Finding]:
-        """Hallazgos de la auditoría estática (recordada por skill, hash y entrypoint)."""
+        """Hallazgos de la auditoría estática (recordada por huella real del código)."""
         if skill_dir is None:
             return [Finding("unreadable", "sin directorio de skill para auditar")]
         root = Path(skill_dir)
-        key = (str(root), str(getattr(manifest, "hash", "")), str(manifest.entrypoint))
+        digest = code_digest(root, manifest.entrypoint)
+        expected = str(getattr(manifest, "hash", "") or "")
+        key = (
+            str(root),
+            digest,
+            expected,
+            str(manifest.entrypoint),
+            str(manifest.language),
+        )
         findings = self._audits.get(key)
         if findings is None:
-            findings = audit_skill(root, manifest.entrypoint, language=manifest.language)
+            findings = list(
+                audit_skill(root, manifest.entrypoint, language=manifest.language)
+            )
+            if digest and digest != expected:
+                detail = (
+                    "el hash del manifiesto no coincide con el código en disco "
+                    f"(manifiesto {expected[:12] or 'vacío'}, disco {digest[:12]})"
+                )
+                findings.append(
+                    Finding(
+                        "stale_manifest",
+                        detail,
+                        file=str(manifest.entrypoint),
+                    )
+                )
             self._audits[key] = findings
         return findings
 
@@ -217,8 +241,19 @@ class SkillResultCache:
         payload: object = None,
         *,
         project_root: Path | str | None = None,
+        skill_dir: Path | str | None = None,
     ) -> str:
-        """Clave de memoización: manifest + script + input + contenido referenciado."""
+        """Clave de memoización: manifest + código real + input + contenido referenciado.
+
+        ``skill_dir`` permite hashear el entrypoint y los módulos locales. Sin él
+        se conserva ``manifest.hash`` como compatibilidad para llamadas externas;
+        el runner siempre pasa el directorio real.
+        """
+        script_digest = (
+            code_digest(skill_dir, manifest.entrypoint)
+            if skill_dir is not None
+            else str(manifest.hash or "")
+        )
         material = {
             "manifest": json.dumps(
                 {
@@ -234,7 +269,7 @@ class SkillResultCache:
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
-            "script": manifest.hash or "",
+            "script": script_digest,
             "input": json.dumps(
                 payload if payload is not None else {},
                 sort_keys=True,

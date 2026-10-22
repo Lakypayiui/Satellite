@@ -8,13 +8,13 @@ from typing import Any
 
 from satellite.agents.base import AgentContext, AgentFactory
 from satellite.core.context_models import ContextBundle, ContextRef
-from satellite.core.errors import ContractError, GraphValidationError
+from satellite.core.errors import ContractError
 from satellite.core.events import EventType, ExecutionEvent
 from satellite.core.language import detect_user_language
 from satellite.core.graph import ExecutionGraph
 from satellite.core.result import AgentResult, AgentStatus, ExecutionMetrics, Finding
 from satellite.core.task import Task, TaskResult, TaskStatus
-from satellite.orchestration.base import GraphRunner, RuntimeServices
+from satellite.orchestration.base import GraphRunner, RuntimeServices, approval_for
 from satellite.events.base import EventSink
 from satellite.observability.logger import ExecutionRecord
 
@@ -217,9 +217,9 @@ class DefaultGraphRunner(GraphRunner):
                     str(task.metadata.get("refined_from") or task.goal),
                     task.metadata.get("history"),
                 ),
-                # El puerto de la sesión: sin esto, una tool que pide una ruta de
+                # El puerto del turno: sin esto, una tool que pide una ruta de
                 # fuera del proyecto no tenía a quién preguntar.
-                approval=getattr(services, "approval", None),
+                approval=approval_for(task, services),
                 # Y el token, para que el agente pueda parar entre llamadas.
                 cancel=getattr(services, "cancel", None),
                 task_state=task_state,
@@ -684,7 +684,7 @@ class DefaultGraphRunner(GraphRunner):
                 node_id=node_id,
                 project_root=task.project_root,
                 user_language=user_language,
-                approval=getattr(services, "approval", None),
+                approval=approval_for(task, services),
                 cancel=getattr(services, "cancel", None),
                 task_state=task_state,
             )

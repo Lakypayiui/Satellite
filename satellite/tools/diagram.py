@@ -37,7 +37,6 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from satellite.core.errors import ToolError
 from satellite.core.tool_models import ToolResult
 from satellite.tools.base import Tool, ToolContext
 from satellite.tools.fs import _read_previous, _record_change, _resolve

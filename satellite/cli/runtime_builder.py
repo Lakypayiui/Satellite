@@ -8,7 +8,6 @@ puerto de aprobación.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from satellite.agents.creator import AgentProposalGenerator
@@ -24,7 +23,6 @@ from satellite.approval.policy import ApprovalPolicy
 from satellite.context.engine import DefaultContextEngine
 from satellite.context.preprocessor import LocalPreprocessor
 from satellite.core.tempfiles import cleanup_orphan_temps
-from satellite.cli.console import say
 from satellite.config import providers as provider_config
 from satellite.core.errors import ProviderError
 from satellite.core.events import EventType, ExecutionEvent

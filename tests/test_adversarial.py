@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from satellite.agents.base import Agent, AgentContext, AgentFactory
+from satellite.agents.base import Agent, AgentFactory
 from satellite.agents.curator import SkillCurator
 from satellite.agents.prompts import DefaultPromptRegistry
 from satellite.agents.registry import DefaultAgentRegistry

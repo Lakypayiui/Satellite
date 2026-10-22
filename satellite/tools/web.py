@@ -55,7 +55,7 @@ _SKIP_TAGS = {"script", "style", "noscript", "svg", "template"}
 
 
 def _validate_url(raw: object) -> tuple[str, str]:
-    """``(url_normalizada, error)`` para http/https con host."""
+    """``(url_normalizada, error)`` para http/https con host y puerto válidos."""
     text = str(raw or "").strip()
     if not text:
         return "", "falta la URL"
@@ -63,10 +63,17 @@ def _validate_url(raw: object) -> tuple[str, str]:
         parsed = urlparse(text)
     except ValueError as exc:
         return "", f"URL inválida: {exc}"
+    try:
+        host = parsed.hostname
+        port = parsed.port
+    except ValueError as exc:
+        return "", f"URL inválida (puerto): {exc}"
     if parsed.scheme not in ("http", "https"):
         return "", "solo se admite http:// o https://"
-    if not parsed.hostname:
+    if not host:
         return "", "la URL no tiene host"
+    if port is not None and not (1 <= port <= 65535):
+        return "", "el puerto debe estar entre 1 y 65535"
     return parsed.geturl(), ""
 
 
@@ -79,24 +86,113 @@ def _ip_is_public(raw: str) -> bool:
     return bool(address.is_global)
 
 
-async def _check_public_host(url: str) -> tuple[bool, str]:
-    """Resuelve el host y exige que **todas** sus IPs sean públicas."""
-    parsed = urlparse(url)
-    host = parsed.hostname or ""
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+async def _resolve_public_ips(url: str) -> tuple[list[str], str]:
+    """Resuelve ``url`` una sola vez y devuelve sus IPs, todas públicas.
+
+    El llamador conecta después a una de estas IPs en vez de dejar que httpx
+    vuelva a resolver el nombre; así un DNS rebinding entre la validación y la
+    conexión no puede redirigir la petición a la red interna.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError as exc:
+        return [], f"URL inválida: {exc}"
+    try:
+        host = parsed.hostname or ""
+        parsed_port = parsed.port
+    except ValueError as exc:
+        return [], f"URL inválida (puerto): {exc}"
+    if parsed.scheme not in ("http", "https"):
+        return [], "solo se admite http:// o https://"
+    if not host:
+        return [], "la URL no tiene host"
+    if parsed_port is not None and not (1 <= parsed_port <= 65535):
+        return [], "el puerto debe estar entre 1 y 65535"
+    port = parsed_port or (443 if parsed.scheme == "https" else 80)
     try:
         infos = await asyncio.to_thread(
             socket.getaddrinfo, host, port, type=socket.SOCK_STREAM
         )
-    except (socket.gaierror, OSError) as exc:
-        return False, f"no se pudo resolver {host}: {exc}"
+    except (socket.gaierror, OSError, UnicodeError) as exc:
+        return [], f"no se pudo resolver {host}: {exc}"
     if not infos:
-        return False, f"{host} no resuelve a ninguna IP"
+        return [], f"{host} no resuelve a ninguna IP"
+    ips: list[str] = []
     for info in infos:
         ip = str(info[4][0])
+        if ip not in ips:
+            ips.append(ip)
+    for ip in ips:
         if not _ip_is_public(ip):
-            return False, f"host no público ({ip}); se bloquea por seguridad"
+            return [], f"host no público ({ip}); se bloquea por seguridad"
+    return ips, ""
+
+
+async def _check_public_host(url: str) -> tuple[bool, str]:
+    """Resuelve el host y exige que **todas** sus IPs sean públicas."""
+    ips, reason = await _resolve_public_ips(url)
+    if reason:
+        return False, reason
+    if not ips:
+        return False, "la URL no resuelve a ninguna IP"
     return True, ""
+
+
+def _redirect_target(current_url: str, location: str) -> str:
+    """Valida el destino de un redirect y bloquea el downgrade a HTTP."""
+    try:
+        next_url = urljoin(current_url, location)
+    except ValueError as exc:
+        raise ValueError(f"redirect inválido: {exc}") from None
+    normalized, error = _validate_url(next_url)
+    if error:
+        raise ValueError(error)
+    if (
+        urlparse(current_url).scheme == "https"
+        and urlparse(normalized).scheme != "https"
+    ):
+        raise ValueError("se bloquea un redirect que degrada de HTTPS a HTTP")
+    return normalized
+
+
+async def _pin_public_url(url: str) -> tuple[str, dict[str, str], dict[str, Any], str]:
+    """Devuelve una URL con la IP validada fijada, cabeceras y extensión SNI.
+
+    La URL original se conserva aparte para resolver redirects relativos y para
+    la salida de la tool; la petición real nunca vuelve a resolver el hostname.
+    """
+    normalized, error = _validate_url(url)
+    if error:
+        raise ValueError(error)
+    ips, reason = await _resolve_public_ips(normalized)
+    if reason:
+        raise ValueError(reason)
+    if not ips:
+        raise ValueError("la URL no resuelve a ninguna IP")
+    parsed = urlparse(normalized)
+    host = parsed.hostname or ""
+    port = parsed.port
+    default_port = 443 if parsed.scheme == "https" else 80
+    ip = ips[0]
+    netloc = f"[{ip}]" if ":" in ip else ip
+    if port is not None and port != default_port:
+        netloc = f"{netloc}:{port}"
+    pinned = parsed._replace(netloc=netloc, fragment="").geturl()
+    host_header = f"[{host}]" if ":" in host else host
+    if ":" not in host:
+        try:
+            host_header = host.encode("idna").decode("ascii")
+        except UnicodeError:
+            pass
+    if port is not None and port != default_port:
+        host_header = f"{host_header}:{port}"
+    # Evita reutilizar una conexión TLS/HTTP abierta para otro hostname que
+    # resuelva a la misma IP: cada salto debe negociar su propio certificado.
+    headers = {"Host": host_header, "Connection": "close"}
+    extensions: dict[str, Any] = {}
+    if parsed.scheme == "https":
+        extensions["sni_hostname"] = host
+    return pinned, headers, extensions, normalized
 
 
 def _looks_textual(content_type: str) -> bool:
@@ -128,25 +224,31 @@ async def _fetch(
         "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5",
     }
-    # Redirecciones manuales: cada salto se valida para que un redirect no
-    # convierta una URL pública en una petición a localhost/red privada (SSRF).
+    # Redirecciones manuales: cada salto se resuelve y valida una sola vez. La
+    # petición se hace contra la IP validada, no contra el hostname, para cerrar
+    # la ventana de DNS rebinding entre validación y conexión (SSRF).
     current_url = url
     async with httpx.AsyncClient(
         follow_redirects=False,
         timeout=timeout,
         headers=headers,
+        trust_env=False,
     ) as client:
         for _ in range(6):
-            async with client.stream("GET", current_url) as response:
+            pinned_url, request_headers, extensions, current_url = (
+                await _pin_public_url(current_url)
+            )
+            async with client.stream(
+                "GET",
+                pinned_url,
+                headers=request_headers,
+                extensions=extensions,
+            ) as response:
                 if response.status_code in (301, 302, 303, 307, 308):
                     location = response.headers.get("location", "")
                     if not location:
                         break
-                    next_url = urljoin(current_url, location)
-                    public, reason = await _check_public_host(next_url)
-                    if not public:
-                        raise ValueError(reason)
-                    current_url = next_url
+                    current_url = _redirect_target(current_url, location)
                     continue
                 content_type = response.headers.get("content-type", "")
                 chunks: list[bytes] = []
@@ -162,7 +264,7 @@ async def _fetch(
                 encoding = response.charset_encoding or "utf-8"
                 body = b"".join(chunks)
                 return {
-                    "url": str(response.url),
+                    "url": current_url,
                     "status": response.status_code,
                     "content_type": content_type,
                     "text": body.decode(encoding, errors="replace"),
@@ -255,19 +357,26 @@ async def _download(
     headers = {"User-Agent": USER_AGENT, "Accept": "*/*"}
     current_url = url
     async with httpx.AsyncClient(
-        follow_redirects=False, timeout=timeout, headers=headers
+        follow_redirects=False,
+        timeout=timeout,
+        headers=headers,
+        trust_env=False,
     ) as client:
         for _ in range(6):
-            async with client.stream("GET", current_url) as response:
+            pinned_url, request_headers, extensions, current_url = (
+                await _pin_public_url(current_url)
+            )
+            async with client.stream(
+                "GET",
+                pinned_url,
+                headers=request_headers,
+                extensions=extensions,
+            ) as response:
                 if response.status_code in (301, 302, 303, 307, 308):
                     location = response.headers.get("location", "")
                     if not location:
                         break
-                    next_url = urljoin(current_url, location)
-                    public, reason = await _check_public_host(next_url)
-                    if not public:
-                        raise ValueError(reason)
-                    current_url = next_url
+                    current_url = _redirect_target(current_url, location)
                     continue
                 length = response.headers.get("content-length")
                 if length and length.isdigit() and int(length) > max_bytes:
@@ -284,12 +393,12 @@ async def _download(
                         )
                     chunks.append(chunk)
                 return {
-                    "url": str(response.url),
+                    "url": current_url,
                     "status": response.status_code,
                     "content_type": response.headers.get("content-type", ""),
                     "filename": _download_filename(
                         response.headers.get("content-disposition", ""),
-                        str(response.url),
+                        current_url,
                         response.headers.get("content-type", ""),
                     ),
                     "data": b"".join(chunks),
@@ -602,11 +711,6 @@ class WebFetchTool(Tool):
             )
         max_chars = max(1000, min(50000, raw_chars))
 
-        public, reason = await _check_public_host(url)
-        if not public:
-            return ToolResult(
-                success=False, error=reason, error_code="web_url_blocked"
-            )
         try:
             page = await _fetch(url)
         except ValueError as exc:
@@ -720,11 +824,6 @@ class WebDownloadTool(Tool):
                 error_code="invalid_arguments",
             )
 
-        public, reason = await _check_public_host(url)
-        if not public:
-            return ToolResult(
-                success=False, error=reason, error_code="web_url_blocked"
-            )
         try:
             page = await _download(url, max_bytes=max_bytes)
         except DownloadTooLarge as exc:

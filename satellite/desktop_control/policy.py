@@ -18,6 +18,9 @@ from .destructive import classify_destructive
 DESKTOP_CONTROL_KIND = "desktop_control"
 SCOPE_OBSERVE = "observe"
 SCOPE_CONTROL = "control"
+# Clave de grant para listar todas las ventanas. No es un nombre de app y nunca
+# debe pasar por ``app_decision``.
+ALL_WINDOWS = "*"
 
 # Códigos estables para tests/telemetría.
 DISABLED = "desktop_disabled"
@@ -212,14 +215,18 @@ class DesktopControlPolicy:
     # --- allowlist / denylist ---
 
     def app_decision(self, app: object) -> GateDecision:
-        """Decide si la app (o ``*``) está permitida por la configuración local."""
+        """Decide si una app **concreta** está permitida por la config local.
+
+        ``*`` no es una app: el listado global tiene su propio gate
+        (``check_list_windows``) y aquí nunca se resuelve como allow implícito.
+        """
         if not self.settings.enabled:
             return _deny(DISABLED, "control de escritorio deshabilitado en la config local")
         name = normalize_app(app)
-        if app == "*" or name == "*":
-            return _allow()
         if not name:
             return _deny(INVALID_APP, "app vacía: no se puede aplicar la política")
+        if name == "*":
+            return _deny(INVALID_APP, "«*» no identifica una app concreta")
         if name in self.settings.denied_apps:
             return _deny(APP_DENIED, f"app vetada por la config local: {name}")
         if name not in self.settings.allowed_processes:
@@ -232,6 +239,27 @@ class DesktopControlPolicy:
         return _allow()
 
     # --- observación ---
+
+    def check_list_windows(self, session_id: str) -> GateDecision:
+        """Gate de listar **todas** las ventanas: config + emergencia + grant.
+
+        No hay app concreta que validar contra la allowlist; por eso este caso
+        tiene un gate propio y no se representa como ``app_decision("*")``. La
+        tool sigue excluyendo de la respuesta las apps de la denylist local.
+        """
+        if not self.settings.enabled:
+            return _deny(DISABLED, "control de escritorio deshabilitado en la config local")
+        pre = self._pre()
+        if not pre.allowed:
+            return pre
+        if not self.grants.is_granted(session_id, ALL_WINDOWS, SCOPE_OBSERVE):
+            return GateDecision(
+                False,
+                APPROVAL_REQUIRED,
+                "falta aprobación humana para listar las ventanas de esta sesión",
+                needs_approval=True,
+            )
+        return _allow()
 
     def check_screen(
         self,

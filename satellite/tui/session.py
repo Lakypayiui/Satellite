@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from satellite.agents.curator import CuratorOutcome, SkillCurator
@@ -278,10 +278,9 @@ class Session:
     async def run_goal(self, goal: str, *, approval: ApprovalPort | None = None) -> TaskResult:
         """Ejecuta un objetivo con el orquestador."""
         orchestrator, _bus, _store, _registry = self.runtime()
-        services = getattr(orchestrator, "services", None)
-        if services is not None and approval is not None:
-            services.approval = approval
-        return await orchestrator.execute(Task(goal=goal, project_root=self.project_root))
+        return await orchestrator.execute(
+            Task(goal=goal, project_root=self.project_root, approval=approval)
+        )
 
     # --- conversación ---
 
@@ -431,9 +430,6 @@ class Session:
         expander = getattr(orchestrator, "expander", None)
         if expander is None:
             raise RuntimeError("el runtime no tiene expander (no se pueden crear agentes)")
-        services = getattr(orchestrator, "services", None)
-        if services is not None and approval is not None:
-            services.approval = approval
         return await expander.expand(need, approval_port=approval)
 
     async def curate(

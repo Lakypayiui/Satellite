@@ -189,10 +189,39 @@ class RunCommandTool(Tool):
 
     async def execute(self, arguments: dict, tool_ctx: ToolContext) -> ToolResult:
         cmd_raw = arguments.get("command", "")
-        timeout_s = int(arguments.get("timeout_s", self.timeout_default))
         if not isinstance(cmd_raw, str) or not cmd_raw.strip():
             return ToolResult(success=False, error="se requiere el argumento 'command'")
-        argv = shlex.split(cmd_raw)
+        raw_timeout = arguments.get("timeout_s", self.timeout_default)
+        try:
+            if isinstance(raw_timeout, bool):
+                raise ValueError
+            timeout_s = int(raw_timeout)
+        except (TypeError, ValueError, OverflowError):
+            return ToolResult(
+                success=False,
+                error="'timeout_s' debe ser un entero positivo",
+                error_code="invalid_arguments",
+            )
+        if timeout_s <= 0:
+            return ToolResult(
+                success=False,
+                error="'timeout_s' debe ser un entero positivo",
+                error_code="invalid_arguments",
+            )
+        try:
+            argv = shlex.split(cmd_raw)
+        except ValueError as exc:
+            return ToolResult(
+                success=False,
+                error=f"comando inválido: {exc}",
+                error_code="invalid_arguments",
+            )
+        if not argv or not argv[0].strip():
+            return ToolResult(
+                success=False,
+                error="se requiere el argumento 'command'",
+                error_code="invalid_arguments",
+            )
         requested = list(argv)  # what the user/model asked for (policy identity)
         from satellite.sandbox.levels import background_error, execution_sandbox
         from satellite.tools.base import granted_for_this_call

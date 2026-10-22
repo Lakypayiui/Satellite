@@ -168,10 +168,16 @@ def list_snapshots(root: Path) -> list[Path]:
 
 
 def restore_snapshot(root: Path, name: str) -> None:
-    """Restaura el contenido del snapshot sobre el directorio de datos."""
+    """Restaura el contenido del snapshot sobre el directorio de datos.
+
+    ``name`` se confina a un hijo directo de ``snapshots/``: un nombre con ``..``,
+    una ruta absoluta o un symlink que apunte fuera no puede convertir otra carpeta
+    en fuente de la restauración.
+    """
     root = Path(root)
-    source = root / SNAPSHOT_DIR / name
-    if not source.is_dir():
+    snapshots = (root / SNAPSHOT_DIR).resolve()
+    source = (snapshots / name).resolve()
+    if source.parent != snapshots or not source.is_dir():
         raise FileNotFoundError(f"snapshot no encontrado: {name}")
     for child in root.iterdir():
         if child.name == SNAPSHOT_DIR:

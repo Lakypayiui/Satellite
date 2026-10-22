@@ -1,14 +1,15 @@
 /**
- * Arranca y controla el backend Python. El token del backend sólo vive en este proceso:
- * el renderer habla siempre por IPC y nunca lo ve.
+ * Arranca y controla el backend Python. El token lo genera este proceso y lo comparte
+ * con el backend por stdin; el renderer habla siempre por IPC y nunca lo ve.
  */
 
-import { ChildProcessByStdio, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 
-/** El proceso del backend: sin stdin (no se le escribe), con stdout y stderr en tubería. */
-type Hijo = ChildProcessByStdio<null, Readable, Readable>;
+/** El proceso del backend: stdin para el token, stdout/stderr en tubería. */
+type Hijo = ChildProcessByStdio<Writable, Readable, Readable>;
 
 export interface Handshake {
   port: number;
@@ -65,7 +66,10 @@ export class Backend {
   /** Lanza `python -m satellite.desktop` y espera su línea de handshake. */
   async start(project?: string): Promise<Handshake> {
     if (this.child) return { port: this.port, token: this.token };
-    const args = ["-m", "satellite.desktop"];
+    // El secreto lo genera este proceso y viaja por stdin: no aparece en argv, ni en
+    // stdout, ni en los logs del backend. Python sólo anuncia el puerto.
+    const token = randomBytes(32).toString("hex");
+    const args = ["-m", "satellite.desktop", "--token-stdin"];
     if (project) args.push("--project", project);
     if (this.home) args.push("--home", this.home);
     const child = spawn(this.python, args, {
@@ -80,7 +84,7 @@ export class Backend {
             }
           : {}),
       },
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     }) as Hijo;
     this.child = child;
     this.stderr = [];
@@ -93,37 +97,81 @@ export class Backend {
       this.port = 0;
       this.token = "";
     });
-    const handshake = await this.waitHandshake(child);
-    this.port = handshake.port;
-    this.token = handshake.token;
-    return handshake;
+    // Se registra antes de escribir: si el hijo falla al arrancar, la promesa ya
+    // está escuchando su salida y no se queda esperando el timeout.
+    const handshake = this.waitHandshake(child);
+    child.stdin.on("error", () => {
+      // Si el hijo sale antes de leerlo, waitHandshake reporta el fallo real.
+    });
+    child.stdin.end(`${token}\n`);
+    let port: number;
+    try {
+      port = await handshake;
+    } catch (exc) {
+      this.child = null;
+      this.port = 0;
+      this.token = "";
+      child.kill();
+      throw exc;
+    }
+    this.port = port;
+    this.token = token;
+    child.stdout.resume(); // drena cualquier log posterior del backend
+    return { port, token };
   }
 
-  private waitHandshake(child: Hijo): Promise<Handshake> {
+  private waitHandshake(child: Hijo): Promise<number> {
     return new Promise((resolve, reject) => {
       const lineas = createInterface({ input: child.stdout });
-      const timer = setTimeout(() => {
+      let terminado = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+
+      const terminar = (accion: () => void) => {
+        if (terminado) return;
+        terminado = true;
+        if (timer) clearTimeout(timer);
         lineas.close();
-        reject(new Error(`el backend no respondió en ${HANDSHAKE_TIMEOUT_MS / 1000} s${this.tail()}`));
+        child.off("exit", alSalir);
+        child.off("error", alError);
+        accion();
+      };
+      const alSalir = (code: number | null) => {
+        terminar(() =>
+          reject(
+            new Error(`el backend terminó antes de arrancar (código ${code ?? "?"})${this.tail()}`),
+          ),
+        );
+      };
+      const alError = (exc: Error) => {
+        terminar(() => reject(new Error(`no se pudo arrancar el backend: ${exc.message}`)));
+      };
+
+      timer = setTimeout(() => {
+        terminar(() =>
+          reject(new Error(`el backend no respondió en ${HANDSHAKE_TIMEOUT_MS / 1000} s${this.tail()}`)),
+        );
       }, HANDSHAKE_TIMEOUT_MS);
+
       lineas.on("line", (linea: string) => {
         const texto = linea.trim();
         if (!texto.startsWith("{")) return; // sólo la primera línea JSON es el handshake
         try {
-          const data = JSON.parse(texto) as Partial<Handshake>;
-          if (typeof data.port === "number" && typeof data.token === "string") {
-            clearTimeout(timer);
-            lineas.close();
-            resolve({ port: data.port, token: data.token });
+          const data = JSON.parse(texto) as { port?: unknown };
+          const port = data.port;
+          if (
+            typeof port === "number" &&
+            Number.isInteger(port) &&
+            port > 0 &&
+            port <= 65_535
+          ) {
+            terminar(() => resolve(port));
           }
         } catch {
           // una línea que no es el handshake no se interpreta
         }
       });
-      child.on("exit", (code) => {
-        clearTimeout(timer);
-        reject(new Error(`el backend terminó antes de arrancar (código ${code ?? "?"})${this.tail()}`));
-      });
+      child.once("exit", alSalir);
+      child.once("error", alError);
     });
   }
 

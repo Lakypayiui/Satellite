@@ -1,9 +1,9 @@
 """Compactación de contexto: ventana del modelo, medición, umbral y resumen."""
 
 import asyncio
-import json
 from pathlib import Path
 
+import httpx
 import pytest
 
 from satellite.config import catalog as provider_catalog
@@ -31,6 +31,17 @@ from satellite.tui.session import SessionStatus
 
 def run(coro):
     return asyncio.run(coro)
+
+
+def _patch_models_http(monkeypatch, handler) -> None:
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+
+    def client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr("satellite.config.models.httpx.Client", client)
 
 
 class FakeOrchestrator:
@@ -320,17 +331,10 @@ def test_fetch_models_reads_the_context_metadata(monkeypatch) -> None:
         ]
     }
 
-    class FakeResponse:
-        def read(self) -> bytes:
-            return json.dumps(payload).encode("utf-8")
+    def handler(request):
+        return httpx.Response(200, json=payload, request=request)
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc) -> None:
-            return None
-
-    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: FakeResponse())
+    _patch_models_http(monkeypatch, handler)
     result = fetch_models("https://x/v1")
     assert result.context_for("m1") == 32_768
     assert result.context_for("m2") == 8_192
@@ -343,7 +347,10 @@ def test_fetch_models_reads_the_context_metadata(monkeypatch) -> None:
 def test_discover_window_never_raises(monkeypatch) -> None:
     from satellite.context.compaction import discover_window
 
-    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: (_ for _ in ()).throw(OSError("sin red")))
+    def handler(request):
+        raise httpx.ConnectError("sin red")
+
+    _patch_models_http(monkeypatch, handler)
     assert discover_window(base_url="https://x/v1", model="m") is None
     assert discover_window(base_url="", model="m") is None
 

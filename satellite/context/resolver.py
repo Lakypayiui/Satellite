@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fnmatch
 from pathlib import Path
 
 from satellite.core.context_models import (

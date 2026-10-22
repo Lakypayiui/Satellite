@@ -30,7 +30,6 @@ from satellite.safe_proxy.interceptor import SanitizingProvider, reset_cache  # 
 from satellite.safe_proxy.sanitizer import Blocked, Sanitizer, Vault  # noqa: E402
 from safe_proxy_support import (  # noqa: E402
     CONTROL_TOKEN,
-    SERVICE_CONFIG,
     make_service,
     proxy,  # noqa: F401  (fixture)
 )

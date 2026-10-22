@@ -18,7 +18,6 @@ import json
 import re
 import socket
 import time
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -27,17 +26,20 @@ pytest.importorskip("fastapi")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from satellite.core.messages import LLMRequest, LLMResponse, Message, Role  # noqa: E402
+from satellite.core.messages import LLMRequest, LLMResponse, Message, Role, ToolCall  # noqa: E402
 from satellite.desktop.app import create_app  # noqa: E402
 from satellite.desktop.backend import DesktopBackend  # noqa: E402
 from satellite.providers.base import LLMProvider  # noqa: E402
 from satellite.safe_proxy import config as sp_config  # noqa: E402
 from satellite.safe_proxy.interceptor import (  # noqa: E402
     SafeProxyPolicyError,
+    SafeProxyUnavailableError,
     SanitizingProvider,
     load_internal_core,
     reset_cache,
+    sanitize_request,
 )
+from satellite.safe_proxy.sanitizer import Blocked, Vault  # noqa: E402
 
 TOKEN = "token-local-de-prueba"
 RAIZ = Path(__file__).resolve().parents[1]
@@ -184,6 +186,66 @@ def test_politica_bloquea_y_no_envia_nada(entorno) -> None:
         asyncio.run(SanitizingProvider(proveedor).complete(peticion))
 
     assert proveedor.seen == []  # fail-closed: no se envió nada
+
+
+def test_un_error_al_cargar_la_politica_no_envia_nada() -> None:
+    """Si el modo interno está activo pero el núcleo falla, no se puede hacer bypass."""
+
+    def falla():
+        raise OSError("configuración ilegible")
+
+    proveedor, peticion = _peticion("hola")
+
+    with pytest.raises(SafeProxyUnavailableError):
+        asyncio.run(
+            SanitizingProvider(proveedor, core_loader=falla).complete(peticion)
+        )
+
+    assert proveedor.seen == []  # fail-closed: no se envió nada
+
+
+def test_una_config_corrupta_no_hace_bypass(entorno) -> None:
+    """Una config existente pero ilegible no se sustituye en silencio por los defaults."""
+    client, _backend = entorno
+    client.post("/api/safe-proxy/toggle", json={"enabled": True})
+    ruta = sp_config.default_data_dir() / "config.json"
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_text("{ esto no es json", encoding="utf-8")
+    reset_cache()
+
+    proveedor, peticion = _peticion("hola")
+
+    with pytest.raises(SafeProxyUnavailableError):
+        asyncio.run(SanitizingProvider(proveedor).complete(peticion))
+
+    assert proveedor.seen == []  # fail-closed: no se envió nada
+
+
+def test_unos_argumentos_de_tool_call_que_no_son_objeto_no_se_envian() -> None:
+    """Si el saneado no devuelve un objeto, se bloquea; nunca se usan los argumentos crudos."""
+
+    class _CoreRaro:
+        class sanitizer:
+            @staticmethod
+            def run(texts, vault):
+                return ["[]" for _ in texts]
+
+        def sanitize_texts(self, texts):
+            return list(texts), Vault()
+
+    peticion = LLMRequest(
+        messages=(
+            Message(
+                role=Role.ASSISTANT,
+                tool_calls=(
+                    ToolCall(id="c1", name="leer", arguments={"path": "secreto.txt"}),
+                ),
+            ),
+        )
+    )
+
+    with pytest.raises(Blocked):
+        sanitize_request(peticion, _CoreRaro())
 
 
 def test_la_config_de_ajustes_se_aplica_al_modo_interno(entorno) -> None:

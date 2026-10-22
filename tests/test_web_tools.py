@@ -1,7 +1,11 @@
 """Internet tools: validación de URLs, HTML, búsqueda y fetch (sin red real)."""
 
 import asyncio
+import socket
 from pathlib import Path
+
+import httpx
+import pytest
 
 from satellite.tools.base import ToolContext
 from satellite.tools import web
@@ -85,6 +89,106 @@ def test_fetch_tool_blocks_private_hosts(tmp_path) -> None:
     )
     assert result.success is False
     assert result.error_code == "web_url_blocked"
+
+
+def test_validate_url_rejects_invalid_ports(tmp_path) -> None:
+    for url in (
+        "http://example.com:99999",
+        "http://example.com:abc",
+        "http://example.com:0",
+    ):
+        normalized, error = web._validate_url(url)
+        assert normalized == ""
+        assert "puerto" in error.lower()
+
+    public, reason = run(web._check_public_host("http://example.com:99999"))
+    assert public is False
+    assert "puerto" in reason.lower()
+
+    result = run(
+        WebFetchTool().execute(
+            {"url": "http://example.com:99999"}, _ctx(tmp_path)
+        )
+    )
+    assert result.success is False
+    assert result.error_code == "invalid_arguments"
+
+
+def test_fetch_pins_validated_ip_and_keeps_host_and_sni(monkeypatch) -> None:
+    requests: list[httpx.Request] = []
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        assert host == "example.com"
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("93.184.216.34", port),
+            )
+        ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200, headers={"content-type": "text/plain"}, content=b"ok"
+        )
+
+    real_client = httpx.AsyncClient
+
+    def client_factory(**kwargs):
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real_client(**kwargs)
+
+    monkeypatch.setattr(web.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(web.httpx, "AsyncClient", client_factory)
+
+    page = run(web._fetch("https://example.com/page"))
+
+    assert page["url"] == "https://example.com/page"
+    assert len(requests) == 1
+    request = requests[0]
+    assert str(request.url) == "https://93.184.216.34/page"
+    assert request.headers["host"] == "example.com"
+    assert request.extensions["sni_hostname"] == "example.com"
+
+
+def test_fetch_blocks_https_to_http_redirect(monkeypatch) -> None:
+    requests: list[str] = []
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("93.184.216.34", port),
+            )
+        ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return httpx.Response(
+            302,
+            headers={"location": "http://example.com/next"},
+            content=b"",
+        )
+
+    real_client = httpx.AsyncClient
+
+    def client_factory(**kwargs):
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real_client(**kwargs)
+
+    monkeypatch.setattr(web.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(web.httpx, "AsyncClient", client_factory)
+
+    with pytest.raises(ValueError, match="HTTPS"):
+        run(web._fetch("https://example.com/start"))
+
+    assert requests == ["https://93.184.216.34/start"]
 
 
 def test_download_tool_writes_binary_file(tmp_path, monkeypatch) -> None:

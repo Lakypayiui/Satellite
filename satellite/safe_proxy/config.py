@@ -97,7 +97,7 @@ def normalize_port(raw: object) -> int:
     if isinstance(raw, bool):
         raise SafeProxyConfigError("safe_proxy_invalid_port", "el puerto debe ser un número")
     try:
-        port = int(raw)  # type: ignore[arg-type]
+        port = int(raw)  # type: ignore[call-overload]
     except (TypeError, ValueError) as exc:
         raise SafeProxyConfigError("safe_proxy_invalid_port", "el puerto debe ser un número") from exc
     if not (1 <= port <= 65535):

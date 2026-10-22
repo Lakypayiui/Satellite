@@ -1,4 +1,4 @@
-"""Listado de modelos de un proveedor (stdlib, sin dependencias nuevas).
+"""Listado de modelos de un proveedor (cliente HTTP httpx).
 
 Portado de la lógica de modelos de la consola web (ya retirada), con tres mejoras:
 
@@ -13,10 +13,10 @@ Portado de la lógica de modelos de la consola web (ya retirada), con tres mejor
 from __future__ import annotations
 
 import json
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass, field
+
+import httpx
 
 from satellite.config.catalog import ANTHROPIC, OPENAI
 from satellite.config.model_sources import (
@@ -25,7 +25,7 @@ from satellite.config.model_sources import (
     CAPS_OPENROUTER,
     candidate_endpoints,
     headers_for,
-    models_url,
+    models_url as models_url,
     next_page_after,
     normalize_model_id,
     page_params,
@@ -36,9 +36,18 @@ DEFAULT_TIMEOUT_S = 10.0
 PAGE_LIMIT = 1000
 MAX_PAGES = 20
 AUTH_STATUS = (401, 403)
+_HTTP_SCHEMES = frozenset({"http", "https"})
 
 # Niveles que significan «apagar el razonamiento» cuando el proveedor los anuncia.
 _OFF_LEVELS: tuple[str, ...] = ("none", "off", "disabled")
+
+
+def _scheme(url: str) -> str:
+    """Esquema normalizado de una URL; vacío si no se puede parsear."""
+    try:
+        return urllib.parse.urlsplit(str(url or "")).scheme.lower()
+    except ValueError:
+        return ""
 
 
 @dataclass(frozen=True)
@@ -274,52 +283,68 @@ def _walk_pages(
     status = 0
     error = ""
     current = url
-    for _ in range(max(1, max_pages)):
-        request = urllib.request.Request(current, headers=headers_for(source, api_key, family))
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                body = response.read().decode("utf-8", errors="replace")
-                status = int(getattr(response, "status", 200) or 200)
-        except urllib.error.HTTPError as exc:
-            status = int(exc.code)
-            error = f"HTTP {exc.code} {exc.reason}"
-            # Preserve only safe, structured provider diagnostics. Never surface an
-            # arbitrary response body (which could contain echoed credentials/data).
-            try:
-                payload = json.loads(exc.read(16_384).decode("utf-8", errors="replace"))
-            except (OSError, UnicodeError, json.JSONDecodeError):
-                payload = None
-            if isinstance(payload, dict):
-                detail = payload.get("error", payload)
-                if isinstance(detail, dict):
-                    code = detail.get("code") or detail.get("type")
-                    message = detail.get("message")
-                    parts = []
-                    if isinstance(code, str) and code.strip():
-                        parts.append(code.strip()[:100])
-                    if isinstance(message, str) and message.strip():
-                        safe_message = " ".join(message.split())[:240]
-                        parts.append(safe_message)
-                    if parts:
-                        error += ": " + " — ".join(parts)
-            break
-        except Exception as exc:  # noqa: BLE001 — se reporta tal cual al usuario
-            error = f"{type(exc).__name__}: {exc}"
-            break
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError as exc:
-            error = f"respuesta no-JSON: {exc}"
-            break
-        details.update(_parse_details(payload, source))
-        siguiente = next_page_after(source, payload)
-        if siguiente is None:
-            break
-        token, parametro = siguiente
-        siguiente_url = _with_query(url, page_params(source, parametro, token, PAGE_LIMIT))
-        if siguiente_url == current:  # el proveedor no avanza: se corta para no dar vueltas
-            break
-        current = siguiente_url
+    headers = headers_for(source, api_key, family)
+    try:
+        # Sin redirecciones: un 3xx no puede desviar la petición (p. ej. a file:).
+        with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+            for _ in range(max(1, max_pages)):
+                scheme = _scheme(current)
+                if scheme not in _HTTP_SCHEMES:
+                    error = (
+                        f"URL no permitida: esquema {scheme or 'vacío'}; "
+                        "usa http o https"
+                    )
+                    break
+                try:
+                    response = client.get(current, headers=headers)
+                    status = int(response.status_code)
+                except Exception as exc:  # noqa: BLE001 — se reporta tal cual al usuario
+                    error = f"{type(exc).__name__}: {exc}"
+                    break
+                if status >= 300:
+                    error = f"HTTP {status} {response.reason_phrase}".rstrip()
+                    # Preserve only safe, structured provider diagnostics. Never surface an
+                    # arbitrary response body (which could contain echoed credentials/data).
+                    try:
+                        payload = json.loads(
+                            response.content[:16_384].decode("utf-8", errors="replace")
+                        )
+                    except (UnicodeError, json.JSONDecodeError):
+                        payload = None
+                    if isinstance(payload, dict):
+                        detail = payload.get("error", payload)
+                        if isinstance(detail, dict):
+                            code = detail.get("code") or detail.get("type")
+                            message = detail.get("message")
+                            parts = []
+                            if isinstance(code, str) and code.strip():
+                                parts.append(code.strip()[:100])
+                            if isinstance(message, str) and message.strip():
+                                safe_message = " ".join(message.split())[:240]
+                                parts.append(safe_message)
+                            if parts:
+                                error += ": " + " — ".join(parts)
+                    break
+                try:
+                    payload = json.loads(
+                        response.content.decode("utf-8", errors="replace")
+                    )
+                except json.JSONDecodeError as exc:
+                    error = f"respuesta no-JSON: {exc}"
+                    break
+                details.update(_parse_details(payload, source))
+                siguiente = next_page_after(source, payload)
+                if siguiente is None:
+                    break
+                token, parametro = siguiente
+                siguiente_url = _with_query(
+                    url, page_params(source, parametro, token, PAGE_LIMIT)
+                )
+                if siguiente_url == current:  # el proveedor no avanza: se corta para no dar vueltas
+                    break
+                current = siguiente_url
+    except Exception as exc:  # noqa: BLE001 — fallos al crear/cerrar el cliente HTTP
+        error = f"{type(exc).__name__}: {exc}"
     return details, status, error
 
 

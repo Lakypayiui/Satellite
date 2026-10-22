@@ -5,7 +5,6 @@ from pathlib import Path
 
 from satellite.context.engine import DefaultContextEngine
 from satellite.approval.base import AutoApprovalPort, DenyAllApprovalPort
-from satellite.core.tool_models import ToolResult
 from satellite.tools.base import ToolContext
 from satellite.tools.context_tool import RequestContextTool
 

@@ -7,7 +7,6 @@ que un seguimiento ("agrega esto") se entienda en el contexto de lo anterior.
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -649,10 +648,14 @@ class ChatSession:
         if memoria:
             metadata["session_memory"] = memoria
 
-        task = Task(goal=text, project_root=self.project_root, metadata=metadata)
-        services = getattr(self.orchestrator, "services", None)
-        if services is not None and approval is not None:
-            services.approval = approval
+        # El puerto viaja en la Task del turno: no se muta el servicio compartido del
+        # orquestador, así dos conversaciones concurrentes no se roban la aprobación.
+        task = Task(
+            goal=text,
+            project_root=self.project_root,
+            metadata=metadata,
+            approval=approval,
+        )
 
         try:
             result = await self.orchestrator.execute(task)

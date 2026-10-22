@@ -6,6 +6,7 @@ from satellite.approval.base import ApprovalContext
 from satellite.approval.policy import ApprovalPolicy
 from satellite.core.proposal import ApprovalStatus
 from satellite.desktop_control import (
+    ALL_WINDOWS,
     SCOPE_CONTROL,
     SCOPE_OBSERVE,
     ActionBudget,
@@ -186,7 +187,34 @@ def test_app_decision_disabled_denied_and_allowlisted() -> None:
     assert policy.app_decision("bad").code == "app_denied"
     assert policy.app_decision("otra").code == "app_not_allowed"
     assert policy.app_decision("").code == "invalid_app"
-    assert policy.app_decision("*").allowed is True
+    assert policy.app_decision("*").code == "invalid_app"
+
+
+def test_wildcard_is_a_listing_gate_not_an_app() -> None:
+    # Ni siquiera una allowlist que contenga "*" convierte el comodín en una app.
+    policy = DesktopControlPolicy(_settings(allowed_processes=("*",), denied_apps=()))
+    assert policy.app_decision("*").code == "invalid_app"
+
+    policy.grant("s1", ALL_WINDOWS, SCOPE_OBSERVE)
+    assert policy.check_screen("s1", "*", SCOPE_OBSERVE).code == "invalid_app"
+    assert policy.check_list_windows("s1").allowed is True
+
+
+def test_check_list_windows_has_its_own_gate() -> None:
+    disabled = DesktopControlPolicy(DesktopControlSettings())
+    assert disabled.check_list_windows("s1").code == "desktop_disabled"
+
+    policy = DesktopControlPolicy(_settings())
+    pending = policy.check_list_windows("s1")
+    assert pending.allowed is False
+    assert pending.needs_approval is True
+    assert pending.code == "approval_required"
+
+    policy.grant("s1", ALL_WINDOWS, SCOPE_OBSERVE)
+    assert policy.check_list_windows("s1").allowed is True
+
+    policy.emergency.engage("test")
+    assert policy.check_list_windows("s1").code == "emergency_stop"
 
 
 def test_check_screen_requires_grant() -> None:

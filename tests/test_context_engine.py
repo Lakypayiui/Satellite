@@ -1,8 +1,6 @@
 """Tests del DefaultContextEngine."""
 
 import asyncio
-import os
-import time
 from pathlib import Path
 
 from satellite.context.engine import DefaultContextEngine

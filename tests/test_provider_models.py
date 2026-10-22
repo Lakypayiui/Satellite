@@ -1,37 +1,40 @@
-"""Listado de modelos (sin red: ``urlopen`` simulado)."""
+"""Listado de modelos (sin red: cliente HTTP simulado)."""
 
-import io
 import json
-import urllib.error
 
+import httpx
 import pytest
 
 from satellite.config import model_sources, models
 
 
-class FakeResponse:
-    def __init__(self, payload: str) -> None:
-        self._payload = payload.encode("utf-8")
-
-    def read(self) -> bytes:
-        return self._payload
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc) -> None:
-        return None
-
-
-def patch_urlopen(monkeypatch, *, payload=None, error=None, capture=None):
-    def fake_urlopen(request, timeout=None):
+def patch_http(
+    monkeypatch,
+    *,
+    payload="{}",
+    status=200,
+    error=None,
+    capture=None,
+    headers=None,
+    client_kwargs=None,
+):
+    def handler(request):
         if capture is not None:
             capture.append(request)
         if error is not None:
             raise error
-        return FakeResponse(payload or "{}")
+        return httpx.Response(status, text=payload, headers=headers, request=request)
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+
+    def client(*args, **kwargs):
+        if client_kwargs is not None:
+            client_kwargs.append(kwargs)
+        kwargs["transport"] = transport
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr("satellite.config.models.httpx.Client", client)
 
 
 def test_models_url_openai_variants() -> None:
@@ -47,12 +50,52 @@ def test_models_url_anthropic_does_not_duplicate_v1() -> None:
     assert models.models_url("", "anthropic") == "https://api.anthropic.com/v1/models"
 
 
+@pytest.mark.parametrize(
+    "url",
+    ["file:///etc/passwd", "data:text/plain,secreto", "ftp://example.com/models"],
+)
+def test_fetch_models_rejects_non_http_schemes(monkeypatch, url) -> None:
+    captured: list = []
+    patch_http(monkeypatch, capture=captured)
+
+    result = models.fetch_models(url)
+
+    assert result.ok is False
+    assert "http" in result.error
+    assert captured == []
+
+
+def test_fetch_models_uses_timeout_and_disables_redirects(monkeypatch) -> None:
+    seen: list = []
+    patch_http(monkeypatch, payload='{"data": []}', client_kwargs=seen)
+
+    models.fetch_models("https://x/v1", timeout=2.5)
+
+    assert seen[0]["timeout"] == 2.5
+    assert seen[0]["follow_redirects"] is False
+
+
+def test_fetch_models_does_not_follow_redirects(monkeypatch) -> None:
+    captured: list = []
+    patch_http(
+        monkeypatch,
+        status=302,
+        headers={"Location": "https://evil.example/models"},
+        capture=captured,
+    )
+
+    result = models.fetch_models("https://x/v1")
+
+    assert len(captured) == 1
+    assert result.ok is False
+
+
 COMMANDCODE_MODELS_URL = "https://api.commandcode.ai/provider/v1/models?view=client"
 
 
 def test_commandcode_model_catalog_uses_shared_public_models_endpoint(monkeypatch) -> None:
     captured: list = []
-    patch_urlopen(monkeypatch, payload='{"data": []}', capture=captured)
+    patch_http(monkeypatch, payload='{"data": []}', capture=captured)
     openai_url = models.models_url(
         "https://api.commandcode.ai/provider/v1", "openai", "commandcode"
     )
@@ -69,7 +112,7 @@ def test_commandcode_model_catalog_uses_shared_public_models_endpoint(monkeypatc
         provider="commandcode",
     )
     request = captured[0]
-    assert request.full_url == COMMANDCODE_MODELS_URL
+    assert str(request.url) == COMMANDCODE_MODELS_URL
     headers = {k.lower(): v for k, v in request.headers.items()}
     # El edge rechaza con 403 el User-Agent por defecto de urllib: hay que identificarse.
     assert headers.get("user-agent") == model_sources.COMMANDCODE_USER_AGENT
@@ -78,7 +121,7 @@ def test_commandcode_model_catalog_uses_shared_public_models_endpoint(monkeypatc
 
 def test_commandcode_public_catalog_omits_auth_header_without_a_key(monkeypatch) -> None:
     captured: list = []
-    patch_urlopen(monkeypatch, payload='{"data": []}', capture=captured)
+    patch_http(monkeypatch, payload='{"data": []}', capture=captured)
     models.fetch_models(
         "https://api.commandcode.ai/provider/v1",
         "openai",
@@ -91,7 +134,7 @@ def test_commandcode_public_catalog_omits_auth_header_without_a_key(monkeypatch)
 
 def test_commandcode_anthropic_catalog_also_omits_auth_header(monkeypatch) -> None:
     captured: list = []
-    patch_urlopen(monkeypatch, payload='{"data": []}', capture=captured)
+    patch_http(monkeypatch, payload='{"data": []}', capture=captured)
     models.fetch_models(
         "https://api.commandcode.ai/provider",
         "anthropic",
@@ -99,7 +142,7 @@ def test_commandcode_anthropic_catalog_also_omits_auth_header(monkeypatch) -> No
         provider="commandcode-anthropic",
     )
     request = captured[0]
-    assert request.full_url == COMMANDCODE_MODELS_URL
+    assert str(request.url) == COMMANDCODE_MODELS_URL
     headers = {k.lower(): v for k, v in request.headers.items()}
     assert "authorization" not in headers
     assert "x-api-key" not in headers
@@ -114,7 +157,7 @@ def test_commandcode_client_catalog_parses_both_families(monkeypatch) -> None:
             "data": [{"id": "claude-sonnet-5-5"}, {"id": "gpt-5"}],
         }
     )
-    patch_urlopen(monkeypatch, payload=payload)
+    patch_http(monkeypatch, payload=payload)
     for base_url, family, key in (
         ("https://api.commandcode.ai/provider/v1", "openai", "commandcode"),
         ("https://api.commandcode.ai/provider", "anthropic", "commandcode-anthropic"),
@@ -126,7 +169,7 @@ def test_commandcode_client_catalog_parses_both_families(monkeypatch) -> None:
 
 
 def test_fetch_models_parses_data_field(monkeypatch) -> None:
-    patch_urlopen(monkeypatch, payload=json.dumps({"data": [{"id": "b"}, {"id": "a"}]}))
+    patch_http(monkeypatch, payload=json.dumps({"data": [{"id": "b"}, {"id": "a"}]}))
     result = models.fetch_models("https://x/v1")
     assert result.ok is True
     assert result.models == ("a", "b")
@@ -134,14 +177,14 @@ def test_fetch_models_parses_data_field(monkeypatch) -> None:
 
 
 def test_fetch_models_parses_models_field_and_dedupes(monkeypatch) -> None:
-    patch_urlopen(monkeypatch, payload=json.dumps({"models": [{"id": "m"}, {"id": "m"}]}))
+    patch_http(monkeypatch, payload=json.dumps({"models": [{"id": "m"}, {"id": "m"}]}))
     result = models.fetch_models("https://x/v1")
     assert result.models == ("m",)
 
 
 def test_fetch_models_sends_bearer_for_openai(monkeypatch) -> None:
     captured: list = []
-    patch_urlopen(monkeypatch, payload='{"data": []}', capture=captured)
+    patch_http(monkeypatch, payload='{"data": []}', capture=captured)
     models.fetch_models("https://x/v1", "openai", "sk-abc")
     headers = {k.lower(): v for k, v in captured[0].headers.items()}
     assert headers.get("authorization") == "Bearer sk-abc"
@@ -149,7 +192,7 @@ def test_fetch_models_sends_bearer_for_openai(monkeypatch) -> None:
 
 def test_fetch_models_uses_bearer_not_needed_without_key(monkeypatch) -> None:
     captured: list = []
-    patch_urlopen(monkeypatch, payload='{"data": []}', capture=captured)
+    patch_http(monkeypatch, payload='{"data": []}', capture=captured)
     models.fetch_models("http://localhost:8080/v1")
     headers = {k.lower(): v for k, v in captured[0].headers.items()}
     assert headers.get("authorization") == "Bearer not-needed"
@@ -157,7 +200,7 @@ def test_fetch_models_uses_bearer_not_needed_without_key(monkeypatch) -> None:
 
 def test_fetch_models_anthropic_uses_x_api_key(monkeypatch) -> None:
     captured: list = []
-    patch_urlopen(monkeypatch, payload='{"data": []}', capture=captured)
+    patch_http(monkeypatch, payload='{"data": []}', capture=captured)
     models.fetch_models("https://api.anthropic.com", "anthropic", "sk-ant")
     headers = {k.lower(): v for k, v in captured[0].headers.items()}
     assert headers.get("x-api-key") == "sk-ant"
@@ -165,7 +208,7 @@ def test_fetch_models_anthropic_uses_x_api_key(monkeypatch) -> None:
 
 
 def test_fetch_models_reports_http_error(monkeypatch) -> None:
-    patch_urlopen(monkeypatch, error=urllib.error.HTTPError("u", 401, "Unauthorized", {}, io.BytesIO(b"")))
+    patch_http(monkeypatch, status=401, payload="")
     result = models.fetch_models("https://x/v1", "openai", "bad")
     assert result.ok is False
     assert "401" in result.error
@@ -173,9 +216,8 @@ def test_fetch_models_reports_http_error(monkeypatch) -> None:
 
 
 def test_fetch_models_preserves_structured_http_error_detail(monkeypatch) -> None:
-    body = json.dumps({"error": {"code": "upgrade_required", "message": "Plan does not allow this endpoint"}}).encode()
-    error = urllib.error.HTTPError("u", 403, "Forbidden", {}, io.BytesIO(body))
-    patch_urlopen(monkeypatch, error=error)
+    body = json.dumps({"error": {"code": "upgrade_required", "message": "Plan does not allow this endpoint"}})
+    patch_http(monkeypatch, status=403, payload=body)
     result = models.fetch_models("https://x/v1", "openai", "bad")
     assert result.auth_error is True
     assert "upgrade_required" in result.error
@@ -183,21 +225,21 @@ def test_fetch_models_preserves_structured_http_error_detail(monkeypatch) -> Non
 
 
 def test_fetch_models_reports_connection_error(monkeypatch) -> None:
-    patch_urlopen(monkeypatch, error=OSError("connection refused"))
+    patch_http(monkeypatch, error=httpx.ConnectError("connection refused"))
     result = models.fetch_models("http://localhost:8080/v1")
     assert result.ok is False
     assert "connection refused" in result.error
 
 
 def test_fetch_models_reports_non_json(monkeypatch) -> None:
-    patch_urlopen(monkeypatch, payload="<html>nope</html>")
+    patch_http(monkeypatch, payload="<html>nope</html>")
     result = models.fetch_models("https://x/v1")
     assert result.ok is False
     assert "no-JSON" in result.error
 
 
 def test_fetch_models_ok_but_empty_is_loud(monkeypatch) -> None:
-    patch_urlopen(monkeypatch, payload='{"data": []}')
+    patch_http(monkeypatch, payload='{"data": []}')
     result = models.fetch_models("https://x/v1")
     assert result.ok is True
     assert result.models == ()

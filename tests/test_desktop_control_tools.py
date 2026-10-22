@@ -221,6 +221,24 @@ def test_list_windows_human_approval_grants_and_sanitizes(tmp_path) -> None:
     assert "<data" not in title and "[data]" in title
 
 
+def test_list_windows_filters_denylisted_apps(tmp_path) -> None:
+    """El grant de listado global no puede exponer apps vetadas por el host."""
+    windows = [
+        WindowInfo(id="w-ok", title="Documento", app=DEMO_APP, active=True),
+        WindowInfo(id="w-secret", title="Bóveda", app="1Password", active=False),
+    ]
+    backend = CountingBackend(windows=windows, elements={})
+    tool = DesktopListWindowsTool(
+        backend=backend,
+        policy=_policy(denied_apps=("1password",)),
+    )
+    result = run(tool.execute({}, _ctx(tmp_path, approval=FakeHumanPort())))
+    assert result.success is True
+    assert result.output["count"] == 1
+    assert [window["id"] for window in result.output["windows"]] == ["w-ok"]
+    assert "1Password" not in json.dumps(result.output, ensure_ascii=False)
+
+
 # --- observe ----------------------------------------------------------------
 
 

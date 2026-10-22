@@ -14,7 +14,6 @@ from fastapi.testclient import TestClient  # noqa: E402
 from satellite.desktop.app import create_app  # noqa: E402
 from satellite.desktop.backend import DesktopBackend  # noqa: E402
 from satellite.events.bus import EventBus  # noqa: E402
-from satellite.tui.session import Session  # noqa: E402
 
 TOKEN = "token-extra"
 
@@ -98,6 +97,33 @@ def test_models_needs_a_url(tmp_path: Path) -> None:
 
     assert respuesta.status_code == 422
     assert respuesta.json()["error"]["code"] == "invalid_request"
+
+
+def test_models_for_a_chatgpt_account_provider_does_not_use_root_before_assignment(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """La rama ``chatgpt_account`` resolvía ``root`` después de usarlo."""
+    from satellite.config import providers as pconfig
+
+    backend = DesktopBackend(tmp_path, token=TOKEN, home=tmp_path / "home")
+    saved = pconfig.save_provider(
+        tmp_path,
+        name="chatgpt",
+        model="gpt-5",
+        base_url="https://api.openai.com/v1",
+        auth_type="chatgpt_account",
+    )
+    monkeypatch.setattr(
+        backend,
+        "chatgpt_account_models",
+        lambda: {"ok": True, "models": [{"id": "gpt-5"}]},
+    )
+
+    result = backend.models(provider=saved.id)
+
+    assert result["ok"] is True
+    assert result["models"] == ["gpt-5"]
+    assert isinstance(result["effort_options"], dict)
 
 
 def test_model_refresh_resolves_catalog_environment_variable_server_side(
@@ -218,6 +244,23 @@ def test_restoring_a_snapshot_or_resetting_needs_confirmation(tmp_path: Path) ->
     assert "no se ha restaurado nada" in restaure.json()["note"]
     assert reseteo.status_code == 200
     assert reseteo.json()["confirmed"] is False
+
+
+def test_restore_rejects_a_snapshot_name_that_escapes_the_data_directory(
+    tmp_path: Path,
+) -> None:
+    client = make_client(tmp_path)
+    fuera = tmp_path / "afuera"
+    fuera.mkdir()
+    (fuera / "secreto.txt").write_text("no debe copiarse", encoding="utf-8")
+
+    respuesta = client.post(
+        "/api/restore", json={"name": "../../afuera", "confirm": True}
+    )
+
+    assert respuesta.status_code == 404
+    assert respuesta.json()["error"]["code"] == "snapshot_not_found"
+    assert not (tmp_path / ".satellite" / "secreto.txt").exists()
 
 
 # --- skills y agentes ---

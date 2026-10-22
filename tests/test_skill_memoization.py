@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from satellite.sandbox.base import SandboxLevel, SandboxResult, SandboxRunner, SandboxSpec
+from satellite.skills.audit import code_digest
 from satellite.skills.cache import SkillResultCache, content_digest, unsafe_permissions
 from satellite.skills.models import SkillManifest, SkillStatus
 from satellite.skills.registry import SkillRegistry
@@ -58,6 +59,16 @@ def clean_dir(tmp_path: Path, *, skill_id: str = "count_words") -> Path:
     return root
 
 
+def with_code_hash(manifest: SkillManifest, skill_dir: Path) -> SkillManifest:
+    """Manifest con el hash del código real (entrypoint y módulos locales)."""
+    return SkillManifest.from_dict(
+        {
+            **manifest.to_dict(),
+            "hash": code_digest(skill_dir, manifest.entrypoint),
+        }
+    )
+
+
 def make_runner(tmp_path: Path, *, cache=None, sandbox=None, **kwargs):
     registry = make_registry(tmp_path, **kwargs)
     sandbox = sandbox or FakeSandbox()
@@ -70,22 +81,22 @@ def make_runner(tmp_path: Path, *, cache=None, sandbox=None, **kwargs):
 def test_only_deterministic_skills_are_memoizable(tmp_path: Path) -> None:
     cache = SkillResultCache()
     skill_dir = clean_dir(tmp_path)
-    assert cache.eligible(make_manifest(), skill_dir=skill_dir) is True
-    assert cache.eligible(make_manifest(deterministic=False), skill_dir=skill_dir) is False
-    assert "deterministic" in cache.reason(make_manifest(deterministic=False), skill_dir=skill_dir)
+    manifest = with_code_hash(make_manifest(), skill_dir)
+    assert cache.eligible(manifest, skill_dir=skill_dir) is True
+    non_deterministic = with_code_hash(make_manifest(deterministic=False), skill_dir)
+    assert cache.eligible(non_deterministic, skill_dir=skill_dir) is False
+    assert "deterministic" in cache.reason(non_deterministic, skill_dir=skill_dir)
 
 
 def test_unsafe_permissions_block_memoization(tmp_path: Path) -> None:
     cache = SkillResultCache()
     skill_dir = clean_dir(tmp_path)
-    manifest = make_manifest(permissions={"network": True})
+    manifest = with_code_hash(make_manifest(permissions={"network": True}), skill_dir)
     assert cache.eligible(manifest, skill_dir=skill_dir) is False
     assert "network" in cache.reason(manifest, skill_dir=skill_dir)
     # declararlo en falso es seguro
-    assert (
-        cache.eligible(make_manifest(permissions={"network": False}), skill_dir=skill_dir)
-        is True
-    )
+    safe = with_code_hash(make_manifest(permissions={"network": False}), skill_dir)
+    assert cache.eligible(safe, skill_dir=skill_dir) is True
 
 
 def test_unsafe_permissions_detection() -> None:
@@ -121,33 +132,75 @@ def test_key_is_stable_and_depends_on_manifest_script_and_input(tmp_path: Path) 
     cache = SkillResultCache()
     registry = make_registry(tmp_path)
     manifest = registry.get("count_words")
+    skill_dir = tmp_path / "count_words"
 
-    first = cache.key_for(manifest, {"texto": "hola"}, project_root=tmp_path)
-    assert first == cache.key_for(manifest, {"texto": "hola"}, project_root=tmp_path)
-    assert first != cache.key_for(manifest, {"texto": "otro"}, project_root=tmp_path)
+    first = cache.key_for(
+        manifest, {"texto": "hola"}, project_root=tmp_path, skill_dir=skill_dir
+    )
+    assert first == cache.key_for(
+        manifest, {"texto": "hola"}, project_root=tmp_path, skill_dir=skill_dir
+    )
+    assert first != cache.key_for(
+        manifest, {"texto": "otro"}, project_root=tmp_path, skill_dir=skill_dir
+    )
 
     # cambia el script (hash) -> clave nueva
     re_registered = registry.register(
         SkillManifest(id="count_words", description="cuenta palabras de un texto", deterministic=True),
         "print(2)",
     )
-    assert cache.key_for(re_registered, {"texto": "hola"}, project_root=tmp_path) != first
+    assert (
+        cache.key_for(
+            re_registered, {"texto": "hola"}, project_root=tmp_path, skill_dir=skill_dir
+        )
+        != first
+    )
 
     # cambia la versión -> clave nueva
     bumped = SkillManifest.from_dict({**manifest.to_dict(), "version": "2.0.0"})
-    assert cache.key_for(bumped, {"texto": "hola"}, project_root=tmp_path) != first
+    assert (
+        cache.key_for(
+            bumped, {"texto": "hola"}, project_root=tmp_path, skill_dir=skill_dir
+        )
+        != first
+    )
+
+
+def test_key_changes_when_the_script_is_edited_without_manifest_update(
+    tmp_path: Path,
+) -> None:
+    """La clave sale del código en disco, no del hash declarado en el manifest."""
+    cache = SkillResultCache()
+    registry = make_registry(tmp_path)
+    manifest = registry.get("count_words")
+    skill_dir = tmp_path / "count_words"
+
+    before = cache.key_for(
+        manifest, {"texto": "hola"}, project_root=tmp_path, skill_dir=skill_dir
+    )
+    (skill_dir / "main.py").write_text("print(99)\n", encoding="utf-8")
+    after = cache.key_for(
+        manifest, {"texto": "hola"}, project_root=tmp_path, skill_dir=skill_dir
+    )
+
+    assert before != after
 
 
 def test_key_includes_content_of_referenced_files(tmp_path: Path) -> None:
     cache = SkillResultCache()
     registry = make_registry(tmp_path)
     manifest = registry.get("count_words")
+    skill_dir = tmp_path / "count_words"
     doc = tmp_path / "doc.txt"
     doc.write_text("uno", encoding="utf-8")
 
-    before = cache.key_for(manifest, {"path": "doc.txt"}, project_root=tmp_path)
+    before = cache.key_for(
+        manifest, {"path": "doc.txt"}, project_root=tmp_path, skill_dir=skill_dir
+    )
     doc.write_text("dos", encoding="utf-8")
-    after = cache.key_for(manifest, {"path": "doc.txt"}, project_root=tmp_path)
+    after = cache.key_for(
+        manifest, {"path": "doc.txt"}, project_root=tmp_path, skill_dir=skill_dir
+    )
     assert before != after
     # un fichero que no existe no aporta contenido
     assert content_digest({"path": "no-existe.txt"}, tmp_path) == ""
@@ -218,6 +271,24 @@ def test_deterministic_skill_is_memoized(tmp_path: Path) -> None:
     # un acierto cuenta como uso con coste nulo
     assert registry.get("count_words").stats.uses == 2
     assert registry.get("count_words").stats.total_latency_ms == first.duration_ms
+
+
+def test_editing_the_script_without_manifest_update_forces_reexecution(
+    tmp_path: Path,
+) -> None:
+    cache = SkillResultCache()
+    runner, _registry, sandbox = make_runner(tmp_path, cache=cache)
+
+    first = run(runner.run("count_words", {"texto": "hola"}, project_root=tmp_path))
+    assert first.success and first.cached is False
+
+    (tmp_path / "count_words" / "main.py").write_text(
+        "print(2)\n", encoding="utf-8"
+    )
+    second = run(runner.run("count_words", {"texto": "hola"}, project_root=tmp_path))
+
+    assert second.success and second.cached is False
+    assert sandbox.calls == 2
 
 
 def test_different_input_runs_again(tmp_path: Path) -> None:

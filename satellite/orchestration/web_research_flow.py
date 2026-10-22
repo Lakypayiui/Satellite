@@ -18,6 +18,7 @@ from satellite.core.context_models import (
 from satellite.core.language import detect_user_language
 from satellite.core.result import AgentStatus
 from satellite.core.task import Task, TaskResult, TaskStatus
+from satellite.orchestration.base import approval_for
 
 DEFAULT_AGENT_ID = "web_researcher"
 
@@ -81,7 +82,7 @@ class WebResearchFlow:
             node_id="web",
             project_root=task.project_root or self.project_root,
             user_language=language,
-            approval=getattr(self.services, "approval", None),
+            approval=approval_for(task, self.services),
             cancel=getattr(self.services, "cancel", None),
         )
         try:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from satellite.sandbox.base import SandboxLevel, SandboxSpec
 from satellite.sandbox.docker_sandbox import DockerSandbox
-from satellite.skills.audit import audit_skill, reason_for
+from satellite.skills.audit import audit_skill, code_digest, reason_for
 from satellite.skills.cache import SkillResultCache
 from satellite.skills.models import SkillManifest
 from satellite.skills.registry import SkillRegistry
@@ -164,7 +164,7 @@ def test_bash_skill_is_never_memoized(tmp_path: Path) -> None:
 
 
 def test_audit_is_remembered_per_skill(tmp_path: Path) -> None:
-    """La auditoría se cachea por (directorio, hash, entrypoint): no se repite."""
+    """La auditoría se cachea por la huella real del código: no se repite."""
     root = tmp_path / "skills"
     registry = register_skill(root, "import random\n")
     manifest = registry.get("s1")
@@ -172,6 +172,64 @@ def test_audit_is_remembered_per_skill(tmp_path: Path) -> None:
     first = cache.audit(manifest, root / "s1")
     assert first
     assert cache.audit(manifest, root / "s1") is first
+
+
+def test_edited_entrypoint_without_manifest_update_is_stale(tmp_path: Path) -> None:
+    """Editar el script deja el manifest obsoleto: no se reutiliza la auditoría."""
+    root = tmp_path / "skills"
+    registry = register_skill(root, "print(1)\n")
+    manifest = registry.get("s1")
+    skill_dir = root / "s1"
+    cache = SkillResultCache()
+
+    assert cache.eligible(manifest, skill_dir=skill_dir) is True
+    first = cache.audit(manifest, skill_dir)
+    assert first == []
+
+    (skill_dir / "main.py").write_text("print(2)\n", encoding="utf-8")
+    findings = cache.audit(manifest, skill_dir)
+
+    assert findings is not first
+    assert any(finding.kind == "stale_manifest" for finding in findings)
+    assert cache.eligible(manifest, skill_dir=skill_dir) is False
+    assert "hash del manifiesto" in cache.reason(manifest, skill_dir=skill_dir)
+
+    # Al actualizar el manifest, la misma versión vuelve a ser memoizable.
+    fixed = SkillManifest.from_dict(
+        {
+            **manifest.to_dict(),
+            "hash": code_digest(skill_dir, manifest.entrypoint),
+        }
+    )
+    assert cache.eligible(fixed, skill_dir=skill_dir) is True
+
+
+def test_edited_local_module_without_manifest_update_is_stale(tmp_path: Path) -> None:
+    """Los módulos locales también forman parte de la huella del código."""
+    root = tmp_path / "skills"
+    script = "from helper import valor\nprint(valor)\n"
+    write_skill(root, script, modules={"helper": "valor = 1\n"})
+    registry = SkillRegistry(root)
+    manifest = registry.register(
+        SkillManifest(id="s1", description="skill de prueba", deterministic=True),
+        script,
+    )
+    skill_dir = root / "s1"
+    cache = SkillResultCache()
+
+    assert manifest.hash == code_digest(skill_dir, manifest.entrypoint)
+    assert cache.eligible(manifest, skill_dir=skill_dir) is True
+    before = cache.key_for(manifest, {}, project_root=tmp_path, skill_dir=skill_dir)
+
+    (skill_dir / "helper.py").write_text("valor = 2\n", encoding="utf-8")
+    findings = cache.audit(manifest, skill_dir)
+
+    assert any(finding.kind == "stale_manifest" for finding in findings)
+    assert cache.eligible(manifest, skill_dir=skill_dir) is False
+    assert (
+        cache.key_for(manifest, {}, project_root=tmp_path, skill_dir=skill_dir)
+        != before
+    )
 
 
 # ---------------------------------------------------------------- persistencia

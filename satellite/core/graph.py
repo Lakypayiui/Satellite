@@ -85,7 +85,8 @@ class EdgeCondition:
             if isinstance(expected, AgentStatus):
                 expected = expected.value
             return result.status.value == str(expected)
-        # type == "field"
+        # type == "field": ``__post_init__`` garantiza field/operator no vacíos.
+        assert self.field is not None and self.operator is not None
         return _match_field(result, self.field, self.operator, self.value)
 
 

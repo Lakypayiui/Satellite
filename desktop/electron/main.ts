@@ -17,9 +17,11 @@ import {
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { ApiError, Backend, StreamItem } from "./backend";
 import { ChatGPTAccount } from "./chatgpt";
+import { manejadorNavegacion, manejadorVentanaNueva } from "./security";
 import {
   DEFAULT_CHAT_WATERMARK,
   DEFAULT_CHAT_WATERMARK_OPACITY,
@@ -47,6 +49,9 @@ if (process.platform === "linux") {
   app.commandLine.appendSwitch("class", "Satellite");
 }
 const DEV_URL = process.env.VITE_DEV_SERVER_URL ?? "";
+// La única página que puede vivir en la ventana: el dev server o el index empaquetado.
+const APP_URL =
+  DEV_URL || pathToFileURL(path.join(__dirname, "..", "dist", "index.html")).toString();
 const CERRAR_BACKEND_MS = 2_500;
 // Iconos de la app tomados de la carpeta de iconos del repo (arte original, sin retocar). El
 // arte claro se usa con el sistema en oscuro y el oscuro con el sistema en claro; se reaplica
@@ -309,6 +314,17 @@ function createWindow(): void {
       ],
     },
   });
+  // El preload se ejecuta otra vez en cada navegación del webContents: si la ventana
+  // cargara contenido remoto, ese contenido heredaría el puente IPC. Sólo se queda en
+  // la app; los enlaces seguros salen al navegador del sistema y las ventanas nuevas
+  // se deniegan siempre.
+  ventana.webContents.on(
+    "will-navigate",
+    manejadorNavegacion(APP_URL, (url) => void shell.openExternal(url)),
+  );
+  ventana.webContents.setWindowOpenHandler(
+    manejadorVentanaNueva((url) => void shell.openExternal(url)),
+  );
   const enviarEstado = (): void => {
     if (!ventana) return;
     ventana.webContents.send("satellite:window-state", {
@@ -331,16 +347,14 @@ function createWindow(): void {
     if (errorArranque) ventana?.webContents.send("satellite:backend-down", errorArranque);
     enviarEstado();
   });
-  if (DEV_URL) {
-    void ventana.loadURL(DEV_URL);
-  } else {
-    void ventana.loadFile(path.join(__dirname, "..", "dist", "index.html"));
-  }
+  // Cargar exactamente la misma URL que la política de navegación considera propia.
+  void ventana.loadURL(APP_URL);
 }
 
 ipcMain.handle(
   "satellite:request",
-  async (_evento, ruta: string, options: { method?: string; body?: unknown }) => {
+  async (evento, ruta: string, options: { method?: string; body?: unknown }) => {
+    if (!remitenteValido(evento)) throw new Error("remitente no autorizado");
     try {
       if (typeof ruta !== "string" || !permitida(ruta)) {
         throw new ApiError("forbidden_path", `ruta no permitida: ${String(ruta)}`, 400);
@@ -365,11 +379,14 @@ ipcMain.handle(
   },
 );
 
-ipcMain.handle("satellite:info", () => ({
-  ready: backend?.ready ?? false,
-  repoRoot: REPO_ROOT,
-  dev: Boolean(DEV_URL),
-}));
+ipcMain.handle("satellite:info", (evento) => {
+  if (!remitenteValido(evento)) throw new Error("remitente no autorizado");
+  return {
+    ready: backend?.ready ?? false,
+    repoRoot: REPO_ROOT,
+    dev: Boolean(DEV_URL),
+  };
+});
 
 ipcMain.handle("satellite:chatgpt-status", (evento) => {
   if (!remitenteValido(evento)) throw new Error("remitente no autorizado");
@@ -419,7 +436,8 @@ ipcMain.handle("satellite:claude-login", (evento) => {
   return { launched: true };
 });
 
-ipcMain.handle("satellite:pick-folder", async () => {
+ipcMain.handle("satellite:pick-folder", async (evento) => {
+  if (!remitenteValido(evento)) throw new Error("remitente no autorizado");
   const resultado = await dialog.showOpenDialog({
     title: "Abrir carpeta de proyecto",
     properties: ["openDirectory", "createDirectory"],
@@ -429,7 +447,9 @@ ipcMain.handle("satellite:pick-folder", async () => {
 
 /** Solo la ventana de la app puede usar los canales de ventana y preferencias. */
 function remitenteValido(evento: IpcMainEvent | IpcMainInvokeEvent): boolean {
-  return Boolean(ventana && evento.sender === ventana.webContents);
+  return Boolean(
+    ventana && !ventana.isDestroyed() && evento.sender === ventana.webContents,
+  );
 }
 
 ipcMain.handle("satellite:window-state", (evento) => {
@@ -515,7 +535,8 @@ ipcMain.handle("satellite:preferences-set-language", (evento, idioma: unknown) =
   return preferenciasActuales();
 });
 
-ipcMain.handle("satellite:restart", async () => {
+ipcMain.handle("satellite:restart", async (evento) => {
+  if (!remitenteValido(evento)) throw new Error("remitente no autorizado");
   try {
     await arrancarBackend();
     return { ok: true, data: { ready: true } };
@@ -524,8 +545,11 @@ ipcMain.handle("satellite:restart", async () => {
   }
 });
 
-ipcMain.on("satellite:subscribe", () => suscribir());
-ipcMain.on("satellite:unsubscribe", () => {
+ipcMain.on("satellite:subscribe", (evento) => {
+  if (remitenteValido(evento)) suscribir();
+});
+ipcMain.on("satellite:unsubscribe", (evento) => {
+  if (!remitenteValido(evento)) return;
   cortarFlujo?.();
   cortarFlujo = null;
 });

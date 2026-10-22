@@ -8,7 +8,7 @@ stats (tokens_before/after/saved, compression_ratio, relevance_score).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from satellite.core.context_models import ContextBundle, ContextSection
 from satellite.retrieval.text import estimate_tokens

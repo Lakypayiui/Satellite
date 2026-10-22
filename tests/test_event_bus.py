@@ -20,7 +20,6 @@ def test_bus_subscribe_receives() -> None:
 def test_bus_failing_listener_does_not_break() -> None:
     bus = EventBus()
     good = []
-    bad_errors = []
 
     def bad(event):
         raise RuntimeError("boom")

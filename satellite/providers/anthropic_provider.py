@@ -8,9 +8,8 @@ del mínimo del modelo.
 
 from __future__ import annotations
 
-import json
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from satellite.core.errors import ProviderError
 from satellite.core.messages import LLMRequest, LLMResponse, Message, Role, Usage
@@ -31,6 +30,9 @@ from satellite.providers.caching import (
 from satellite.providers.capabilities import override_entry, resolve_effort, thinking_payload
 from satellite.providers.parsing import coerce_arguments
 from satellite.providers.prefix import estimate_prefix_tokens, prefix_hash, prefix_payload
+
+if TYPE_CHECKING:
+    from satellite.providers.factory import ProviderConfig
 
 # Anthropic **exige** `max_tokens` en toda petición: sin él la API responde 400.
 # Es solo el último recurso; lo que configure el usuario manda.

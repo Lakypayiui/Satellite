@@ -134,6 +134,7 @@ def test_history_is_not_in_the_stable_catalog_block() -> None:
     history = [{"role": "user", "content": "TAREA-ANTERIOR"}]
     catalog = build_catalog_context(specs)
     assert "TAREA-ANTERIOR" not in catalog
+    assert "TAREA-ANTERIOR" in render_history(history)
     # y el catálogo es el mismo con o sin historial -> breakpoint (b) estable
     assert catalog == build_catalog_context(specs, ())
 

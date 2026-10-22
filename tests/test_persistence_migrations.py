@@ -94,6 +94,38 @@ def test_restore_missing_snapshot_raises(tmp_path: Path) -> None:
     raise AssertionError("debía lanzar FileNotFoundError")
 
 
+@pytest.mark.parametrize("name", ["../../afuera", "..", "."])
+def test_restore_snapshot_rejects_names_outside_the_snapshots_directory(
+    tmp_path: Path, name: str
+) -> None:
+    """Un nombre con traversal no puede convertir una carpeta cualquiera en snapshot."""
+    root = tmp_path / ".satellite"
+    migrations.migrate(root)
+    fuera = tmp_path / "afuera"
+    fuera.mkdir()
+    (fuera / "secreto.txt").write_text("no debe copiarse", encoding="utf-8")
+    antes = sorted(path.name for path in root.iterdir())
+
+    with pytest.raises(FileNotFoundError):
+        migrations.restore_snapshot(root, name)
+
+    assert sorted(path.name for path in root.iterdir()) == antes
+    assert not (root / "secreto.txt").exists()
+
+
+def test_restore_snapshot_rejects_an_absolute_path(tmp_path: Path) -> None:
+    root = tmp_path / ".satellite"
+    migrations.migrate(root)
+    fuera = tmp_path / "afuera"
+    fuera.mkdir()
+    (fuera / "secreto.txt").write_text("no debe copiarse", encoding="utf-8")
+
+    with pytest.raises(FileNotFoundError):
+        migrations.restore_snapshot(root, str(fuera))
+
+    assert not (root / "secreto.txt").exists()
+
+
 def test_migrate_agent_specs_adds_lifecycle(tmp_path: Path) -> None:
     """v3→v4: los specs guardados sin `lifecycle` se normalizan (idempotente)."""
     import json

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from satellite.core.errors import ProviderError
 from satellite.core.messages import LLMRequest, LLMResponse, Message, Role, Usage
@@ -17,6 +17,9 @@ from satellite.providers.capabilities import (
     resolve_think,
 )
 from satellite.providers.parsing import coerce_arguments
+
+if TYPE_CHECKING:
+    from satellite.providers.factory import ProviderConfig
 
 # Parámetros de esfuerzo que este adaptador genérico sabe enviar. Los controles propios de un
 # proveedor (``thinking_level`` de Gemini nativo, ``thinking``/``budget_tokens`` de Anthropic)

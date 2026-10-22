@@ -9,7 +9,6 @@ import shutil
 import subprocess
 import sys
 import uuid
-from typing import Any
 
 from satellite.core.errors import ProviderError
 from satellite.core.messages import LLMRequest, LLMResponse, Role, Usage
@@ -18,6 +17,17 @@ from satellite.providers.base import LLMProvider
 from satellite.providers.parsing import coerce_arguments
 
 _MODELS = {"sonnet", "opus", "haiku"}
+
+
+async def _reap_process(process: asyncio.subprocess.Process) -> None:
+    """Mata y espera al subproceso si sigue vivo, sin enmascarar el error original."""
+    if process.returncode is not None:
+        return
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+    await process.wait()
 
 
 class ClaudeCodePlanProvider(LLMProvider):
@@ -77,13 +87,20 @@ class ClaudeCodePlanProvider(LLMProvider):
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
             )
+        except Exception as exc:  # noqa: BLE001 — normalize process startup errors
+            raise ProviderError(f"No se pudo iniciar Claude Code: {exc}") from exc
+        try:
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(payload.encode("utf-8")), timeout=self.timeout_s
             )
         except asyncio.TimeoutError as exc:
             raise ProviderError("Claude Code tardó demasiado en responder.") from exc
-        except Exception as exc:  # noqa: BLE001 — normalize process startup errors
-            raise ProviderError(f"No se pudo iniciar Claude Code: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 — normalize process errors
+            raise ProviderError(f"No se pudo comunicar con Claude Code: {exc}") from exc
+        finally:
+            # También cubre cancelación: wait_for propaga CancelledError y aquí se
+            # impide que el proceso quede huérfano.
+            await _reap_process(process)
         if process.returncode != 0:
             detail = stderr.decode("utf-8", errors="replace").strip()
             lower = detail.lower()

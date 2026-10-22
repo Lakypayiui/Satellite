@@ -64,10 +64,10 @@ python3 -m venv .venv
 .venv/bin/python -m satellite.cli doctor     # check everything
 ```
 
-If you only need the declared dependencies:
+For a reproducible install of the full CI environment:
 
 ```bash
-.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip install --require-hashes -r requirements.lock
 .venv/bin/python -m pip install -e .
 ```
 
@@ -84,10 +84,10 @@ py -3.11 -m venv .venv
 .venv\Scripts\python -m satellite.cli doctor
 ```
 
-Or with the requirements file:
+Or with the locked requirements:
 
 ```powershell
-.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python -m pip install --require-hashes -r requirements.lock
 .venv\Scripts\python -m pip install -e .
 ```
 
@@ -120,6 +120,15 @@ Or with the requirements file:
 
 `requirements.txt` contains all Python dependencies for the runtime, the desktop
 backend and the tests. `pyproject.toml` is the source of versions and extras.
+`requirements.lock` pins the exact versions and hashes used by CI on Linux/Windows
+with Python 3.11+. After changing `requirements.txt`, regenerate it with:
+
+```bash
+uv pip compile --universal --python-version 3.11 --generate-hashes \
+  --no-emit-package pip --output-file requirements.lock requirements.txt
+```
+
+CI rejects a stale lock and runs `pip-audit` against it.
 
 ## Configure
 
@@ -197,8 +206,10 @@ npm install
 npm run dev
 ```
 
-The app launches its own local backend; you can also start the backend manually
-with `python -m satellite.desktop`.
+The app launches its own local backend. The backend prints only its port on stdout;
+the app generates the token and sends it through stdin (`--token-stdin`), so it never
+appears in stdout, process arguments or logs. If you start the backend manually and
+need to call its API, pass your own token with `--token <secret>`.
 
 ## Platform notes
 

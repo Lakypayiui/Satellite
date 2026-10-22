@@ -15,7 +15,7 @@ from satellite.core.tool_models import ToolResult
 from satellite.lsp.client import LspError
 from satellite.lsp.manager import manager_for
 from satellite.lsp.servers import server_for_language
-from satellite.lsp.uris import from_lsp_position, from_lsp_range, uri_to_path
+from satellite.lsp.uris import from_lsp_range, uri_to_path
 from satellite.tools.base import Tool, ToolContext
 from satellite.tools.fs import _resolve
 
@@ -71,6 +71,13 @@ def _inside(path: Path, root: Path) -> bool:
         return False
 
 
+def _severity(value: object) -> str:
+    """Severidad LSP tolerante: valores raros se reportan como información."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return "information"
+    return _SEVERITY.get(value, "information")
+
+
 def _diagnostic(raw: Any) -> dict | None:
     if not isinstance(raw, dict):
         return None
@@ -78,7 +85,7 @@ def _diagnostic(raw: Any) -> dict | None:
     code = raw.get("code")
     return {
         **position,
-        "severity": _SEVERITY.get(raw.get("severity"), "information"),
+        "severity": _severity(raw.get("severity")),
         "code": str(code) if code is not None else "",
         "source": str(raw.get("source") or ""),
         "message": str(raw.get("message") or "")[:2000],
@@ -124,13 +131,20 @@ def _hover_text(contents: Any) -> str:
     return str(contents)[:8000] if contents is not None else ""
 
 
+def _symbol_kind(value: object) -> str:
+    """Tipo de símbolo LSP legible; números desconocidos se conservan como texto."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return str(value or "")
+    return _SYMBOL_KINDS.get(value, str(value))
+
+
 def _symbol(raw: Any, project_root: Path, *, max_items: int) -> dict | None:
     if not isinstance(raw, dict):
         return None
     name = str(raw.get("name") or "")
     if not name:
         return None
-    kind = _SYMBOL_KINDS.get(raw.get("kind"), str(raw.get("kind") or ""))
+    kind = _symbol_kind(raw.get("kind"))
     location = raw.get("location")
     if isinstance(location, dict):
         located = _location(location, project_root) or {}

@@ -17,8 +17,9 @@ Qué NO se aplica en interno (a diferencia del servidor, que sí es una frontera
   el tool calling. Sí se sanean los contenidos de los mensajes y los argumentos de las
   ``tool_calls`` del historial.
 
-Si la política bloquea, se lanza :class:`SafeProxyPolicyError` (un ``ProviderError``): la
-petición **no se envía** y el error se explica, nunca se manda en silencio.
+Si la política bloquea o no se puede cargar cuando el modo interno está activo, se lanza un
+``ProviderError``: la petición **no se envía** y el error se explica, nunca se manda en
+silencio ni se hace bypass.
 """
 
 from __future__ import annotations
@@ -57,6 +58,22 @@ class SafeProxyPolicyError(ProviderError):
         )
 
 
+class SafeProxyUnavailableError(ProviderError):
+    """El modo interno está activo pero no se pudo preparar su política.
+
+    Es un fallo **cerrado**: si no se puede saber qué política aplicar, la petición no
+    sale. Antes este caso se confundía con «modo apagado» y se enviaba sin sanear.
+    """
+
+    code = "safe_proxy_unavailable"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "el Safe Proxy está activo pero no se pudo cargar su política. "
+            "No se envió nada al proveedor."
+        )
+
+
 def _fingerprint(paths: list[Path]) -> tuple[int, ...]:
     out: list[int] = []
     for path in paths:
@@ -75,9 +92,10 @@ def load_internal_core(
     """Núcleo vivo del modo interno, o ``None`` si el modo interno no está activo.
 
     ``None`` (⇒ bypass claro, la petición sigue igual) cuando el modo no es ``internal`` o
-    el interruptor interno está apagado. El resultado se cachea por ``mtime`` de la config y
-    del estado, de modo que cambiar la política en Ajustes se nota en la siguiente llamada
-    sin releer los ficheros en cada una.
+    el interruptor interno está apagado. Si el modo está activo y la config no se puede
+    cargar, la excepción se propaga (y el interceptor la convierte en fallo cerrado). El
+    resultado se cachea por ``mtime`` de la config y del estado, de modo que cambiar la
+    política en Ajustes se nota en la siguiente llamada sin releer los ficheros en cada una.
     """
     global _CACHE
 
@@ -99,18 +117,28 @@ def load_internal_core(
 
 
 def _load_base_config(base: Path) -> dict:
-    """Config base del modo interno (la misma que usa el servidor)."""
+    """Config base del modo interno (la misma que usa el servidor).
+
+    Si el fichero no existe se usan los defaults (primera ejecución). Si existe pero no
+    se puede leer o no es un objeto JSON, se **falla cerrado**: no se sustituye en
+    silencio por una política distinta a la que el usuario configuró.
+    """
     from satellite.safe_proxy.defaults import DEFAULT_CONFIG
 
     path = base / "config.json"
-    if path.exists():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and data:
-                return data
-        except (OSError, ValueError):
-            pass
-    return json.loads(json.dumps(DEFAULT_CONFIG))
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return json.loads(json.dumps(DEFAULT_CONFIG))
+    except OSError as exc:
+        raise ValueError("config.json del Safe Proxy ilegible") from exc
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        raise ValueError("config.json del Safe Proxy inválido") from exc
+    if not isinstance(data, dict) or not data:
+        raise ValueError("config.json del Safe Proxy inválido")
+    return data
 
 
 def _sanitize_arguments(arguments: dict, core: SafeProxyCore, vault: Vault) -> dict:
@@ -126,7 +154,11 @@ def _sanitize_arguments(arguments: dict, core: SafeProxyCore, vault: Vault) -> d
         raise Blocked(
             "no se pudieron sanear los argumentos de una tool_call", "policy"
         ) from exc
-    return restored if isinstance(restored, dict) else arguments
+    if not isinstance(restored, dict):
+        # Nunca se usan los argumentos originales: si el saneado cambió la forma, no
+        # podemos garantizar que el contenido sensible se haya eliminado.
+        raise Blocked("los argumentos de una tool_call no se pudieron sanear", "policy")
+    return restored
 
 
 def sanitize_request(request: LLMRequest, core: SafeProxyCore) -> tuple[LLMRequest, Vault]:
@@ -200,13 +232,23 @@ class SanitizingProvider(LLMProvider):
         return self.inner.cache_strategy()
 
     def core(self) -> SafeProxyCore | None:
-        """Núcleo activo, o ``None`` si toca bypass."""
+        """Núcleo activo, o ``None`` sólo si el modo interno está realmente apagado.
+
+        Cualquier fallo al cargar la política cuando el modo está activo es fail-closed:
+        se lanza ``SafeProxyUnavailableError`` y la petición no se envía. Devolver
+        ``None`` aquí equivaldría a hacer bypass sin sanear.
+        """
         try:
             core = self._load_core()
-        except Exception:  # noqa: BLE001 — una config ilegible no debe tumbar la petición
+        except Exception as exc:  # noqa: BLE001 — se convierte en fallo cerrado
+            raise SafeProxyUnavailableError() from exc
+        if core is None:
             return None
-        if core is None or not core.routing_enabled():
-            return None
+        try:
+            if not core.routing_enabled():
+                return None
+        except Exception as exc:  # noqa: BLE001 — sin estado fiable, no se envía
+            raise SafeProxyUnavailableError() from exc
         return core
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
@@ -231,6 +273,7 @@ def sanitize_provider(provider: LLMProvider, core_loader=None) -> LLMProvider:
 
 __all__ = [
     "SafeProxyPolicyError",
+    "SafeProxyUnavailableError",
     "SanitizingProvider",
     "load_internal_core",
     "reset_cache",

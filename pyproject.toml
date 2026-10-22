@@ -17,7 +17,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0"]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "bandit>=1.7",
+    "types-jsonschema>=4.20",
+    # Genera/verifica requirements.lock y audita las versiones fijadas en CI.
+    "uv>=0.13",
+    "pip-audit>=2.9",
+]
 # La app de escritorio y el Safe Proxy embebido (satellite/safe_proxy) corren sobre
 # FastAPI + uvicorn. httpx (cliente del upstream y del control local) ya es dependencia
 # base; el servicio embebido NO necesita PyYAML (su config es JSON).
@@ -60,3 +69,30 @@ exclude = ["desktop*", "Icono*", "tests*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint.per-file-ignores]
+# pytest inyecta los parámetros por nombre de fixture; el import del fixture
+# compartido es intencional y Ruff lo confunde con una redefinición.
+"tests/test_safe_proxy_api_keys.py" = ["F811"]
+"tests/test_safe_proxy_control.py" = ["F811"]
+"tests/test_safe_proxy_service.py" = ["F811"]
+
+[tool.mypy]
+python_version = "3.11"
+# Gate acotado a los módulos críticos tocados por la auditoría. El resto del
+# árbol aún tiene deuda de tipos; no se finge que esté limpio. ``skip`` evita
+# arrastrar esa deuda por imports y mantiene el gate estable.
+follow_imports = "skip"
+files = [
+    "satellite/approval",
+    "satellite/core",
+    "satellite/desktop_control/config.py",
+    "satellite/desktop_control/policy.py",
+    "satellite/security",
+    "satellite/skills",
+    "satellite/safe_proxy",
+    "satellite/tools",
+]

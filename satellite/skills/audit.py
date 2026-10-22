@@ -14,6 +14,7 @@ memoiza.
 from __future__ import annotations
 
 import ast
+import hashlib
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,7 +66,8 @@ LOCAL_SUFFIX = ".py"
 class Finding:
     """Un motivo por el que la skill no se puede memoizar con confianza."""
 
-    kind: str  # import | dynamic | effect | dependency | unreadable | syntax | language
+    # import | dynamic | effect | dependency | unreadable | syntax | language | stale_manifest
+    kind: str
     detail: str
     line: int = 0
     file: str = ""
@@ -102,6 +104,40 @@ def audit_skill(
     return _audit_file(script, root, depth=0, max_depth=max_depth, seen=set())
 
 
+def code_digest(
+    skill_dir: Path | str,
+    entrypoint: str = "main.py",
+    *,
+    max_depth: int = MAX_DEPTH,
+) -> str:
+    """sha256 del entrypoint y de sus módulos locales (``""`` si no se puede leer).
+
+    El formato de un solo fichero coincide con el que usaba el registro
+    (``sha256(script_bytes)``) para no invalidar manifests existentes. Con
+    módulos locales se hashea una lista ordenada ``ruta\\0sha256``.
+    """
+    root = Path(skill_dir)
+    script = root / str(entrypoint or "")
+    files = _collect_code_files(
+        script, root, depth=0, max_depth=max_depth, seen=set()
+    )
+    if not files:
+        return ""
+    if len(files) == 1 and files[0] == script:
+        try:
+            return _sha256_bytes(script.read_bytes())
+        except OSError:
+            return ""
+    parts: list[str] = []
+    for path in sorted(files, key=lambda item: _relative_name(item, root)):
+        try:
+            content = path.read_bytes()
+        except OSError:
+            return ""
+        parts.append(f"{_relative_name(path, root)}\0{_sha256_bytes(content)}")
+    return _sha256_bytes("\n".join(parts).encode("utf-8"))
+
+
 def reason_for(findings: list[Finding]) -> str:
     """Motivo compacto («auditoría: import random (línea 3)») o ``""``."""
     if not findings:
@@ -112,6 +148,72 @@ def reason_for(findings: list[Finding]) -> str:
 
 
 # --- interno ---------------------------------------------------------------
+
+
+def _sha256_bytes(data: bytes) -> str:
+    """sha256 hexadecimal de un bloque de bytes."""
+    return hashlib.sha256(data).hexdigest()
+
+
+def _relative_name(path: Path, root: Path) -> str:
+    """Ruta relativa POSIX (o el nombre si el fichero quedó fuera de la raíz)."""
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.name
+
+
+def _resolve_local(module: str, current: Path, skill_dir: Path) -> Path | None:
+    """Primer fichero local que corresponde a un import, o ``None``."""
+    candidates = [
+        current.parent / f"{module}{LOCAL_SUFFIX}",
+        current.parent / module / f"__init__{LOCAL_SUFFIX}",
+        skill_dir / f"{module}{LOCAL_SUFFIX}",
+        skill_dir / module / f"__init__{LOCAL_SUFFIX}",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _collect_code_files(
+    path: Path,
+    skill_dir: Path,
+    *,
+    depth: int,
+    max_depth: int,
+    seen: set,
+) -> list[Path]:
+    """Ficheros de código alcanzables desde el entrypoint (mismo recorrido que la auditoría)."""
+    resolved = path.resolve() if path.exists() else path
+    if resolved in seen:
+        return []
+    seen.add(resolved)
+    if depth > max_depth:
+        return []
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return []
+    try:
+        tree = ast.parse(source, filename=str(path))
+    except SyntaxError:
+        return [path] if path.is_file() else []
+    files = [path] if path.is_file() else []
+    for module, _line in _local_imports(tree):
+        local = _resolve_local(module, path, skill_dir)
+        if local is not None:
+            files.extend(
+                _collect_code_files(
+                    local,
+                    skill_dir,
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                    seen=seen,
+                )
+            )
+    return files
 
 
 def _audit_file(
@@ -132,7 +234,7 @@ def _audit_file(
         ]
     try:
         source = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeError):
         return [
             Finding(
                 kind="unreadable",
@@ -173,17 +275,11 @@ def _audit_local(
     file: str,
 ) -> list[Finding]:
     """Resuelve un import local y lo audita, o lo declara no auditable."""
-    candidates = [
-        current.parent / f"{module}{LOCAL_SUFFIX}",
-        current.parent / module / f"__init__{LOCAL_SUFFIX}",
-        skill_dir / f"{module}{LOCAL_SUFFIX}",
-        skill_dir / module / f"__init__{LOCAL_SUFFIX}",
-    ]
-    for candidate in candidates:
-        if candidate.is_file():
-            return _audit_file(
-                candidate, skill_dir, depth=depth + 1, max_depth=max_depth, seen=seen
-            )
+    local = _resolve_local(module, current, skill_dir)
+    if local is not None:
+        return _audit_file(
+            local, skill_dir, depth=depth + 1, max_depth=max_depth, seen=seen
+        )
     return [
         Finding(
             kind="dependency",

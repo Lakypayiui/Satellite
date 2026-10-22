@@ -38,6 +38,7 @@ from satellite.orchestration.base import (
     Planner,
     PlanningResult,
     RuntimeServices,
+    approval_for,
 )
 from satellite.orchestration.catalog_answer import answer_catalog_question
 from satellite.orchestration.chat_detector import (
@@ -459,6 +460,7 @@ class DefaultOrchestrator(Orchestrator):
                 project_root=task.project_root,
                 metadata={**task.metadata, "refined_from": task.goal},
                 task_id=task.task_id,
+                approval=task.approval,
             )
         return task, None
 
@@ -1094,7 +1096,7 @@ class DefaultOrchestrator(Orchestrator):
         try:
             kwargs: dict = {
                 "task_id": task.task_id,
-                "approval_port": self.services.approval,
+                "approval_port": approval_for(task, self.services),
             }
             # Real expanders accept the user's language (the creator's clarification
             # question is user-facing); test doubles and third-party expanders may not.

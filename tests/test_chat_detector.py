@@ -1,6 +1,5 @@
 """Tests del clasificador de consultas (chat-directo vs tarea)."""
 
-import asyncio
 from pathlib import Path
 
 from satellite.core.task import Task

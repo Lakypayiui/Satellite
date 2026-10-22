@@ -26,7 +26,7 @@ from satellite.core.tool_models import ToolResult, ToolCall
 from satellite.core.result import AgentResult, AgentStatus
 from satellite.core.spec import AgentSpec
 from satellite.core.task import Task, TaskResult
-from satellite.core.context_models import ContextBundle, ContextLimits, ContextRef, ContextSnapshot
+from satellite.core.context_models import ContextBundle, ContextLimits, ContextSnapshot
 from satellite.core.graph import ExecutionGraph
 from satellite.core.events import ExecutionEvent, EventType
 from satellite.core.errors import ToolError
@@ -243,6 +243,13 @@ def test_minimal_subclasses_instantiate() -> None:
     FakeEventSink()
     FakeSecurityPolicy()
     FakeStore()
+
+
+def test_minimal_security_policy_denies_paths_and_commands(tmp_path: Path) -> None:
+    """Una política que sólo implementa el ABC hereda comprobaciones deny-by-default."""
+    policy = FakeSecurityPolicy()
+    assert policy.check_path(tmp_path / "a.txt", tmp_path) is False
+    assert policy.check_command(["python", "-c", "print(1)"]) is False
 
 
 def test_event_sink_emit_works() -> None:

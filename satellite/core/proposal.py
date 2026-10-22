@@ -7,7 +7,6 @@ humana y, tras la aprobación, al registro. Son datos: se serializan con
 
 from __future__ import annotations
 
-import copy
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone

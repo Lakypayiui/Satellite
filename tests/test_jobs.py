@@ -6,6 +6,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 from satellite.tools.base import ToolContext
 from satellite.tools.jobs import JobInfo, JobTool, registry_for, start_background
 from satellite.tools.terminal import RunCommandTool
@@ -94,7 +96,7 @@ def test_jobs_are_listed_most_recent_first(tmp_path: Path) -> None:
 
 def test_a_job_from_another_process_cannot_be_controlled(tmp_path: Path) -> None:
     """El registro vive en el proceso que lanza: fuera de él, se dice que no se puede."""
-    job_id = "ajeno1"
+    job_id = "deadbeef"
     path = tmp_path / ".satellite" / "state" / "jobs" / f"{job_id}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -116,11 +118,66 @@ def test_a_job_from_another_process_cannot_be_controlled(tmp_path: Path) -> None
 
 def test_a_corrupt_job_file_is_ignored(tmp_path: Path) -> None:
     registry = registry_for(tmp_path)
-    path = registry.root / "roto.json"
+    path = registry.root / "deadbeef.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{no json", encoding="utf-8")
 
-    assert registry.status("roto") is None
+    assert registry.status("deadbeef") is None
+
+
+def test_job_id_traversal_is_rejected(tmp_path: Path) -> None:
+    registry = registry_for(tmp_path)
+    state = registry.root.parent
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "secret.json").write_text(
+        json.dumps(
+            {
+                "job_id": "deadbeef",
+                "command": "no debe leerse",
+                "status": "done",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (state / "secret.log").write_text("no debe leerse", encoding="utf-8")
+
+    assert registry.status("../secret") is None
+    assert registry.output("../secret") == "(job_id inválido)"
+    with pytest.raises(ValueError):
+        registry.log_path("../secret")
+
+
+def test_a_job_file_symlink_outside_is_ignored(tmp_path: Path) -> None:
+    registry = registry_for(tmp_path)
+    secret = tmp_path / "secret.json"
+    secret.write_text(
+        json.dumps(
+            {"job_id": "deadbeef", "command": "x", "status": "done"}
+        ),
+        encoding="utf-8",
+    )
+    link = registry.root / "deadbeef.json"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        link.symlink_to(secret)
+    except (OSError, NotImplementedError):
+        pytest.skip("el sistema no permite crear symlinks")
+
+    assert registry.status("deadbeef") is None
+
+
+def test_job_content_cannot_override_the_id(tmp_path: Path) -> None:
+    registry = registry_for(tmp_path)
+    path = registry.root / "deadbeef.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {"job_id": "../../evil", "command": "x", "status": "done"}
+        ),
+        encoding="utf-8",
+    )
+
+    assert registry.status("deadbeef") is None
 
 
 # --- la tool ---
@@ -170,12 +227,37 @@ def test_the_job_tool_says_what_is_missing(tmp_path: Path) -> None:
     ctx = ToolContext(project_root=tmp_path)
 
     sin_id = run(tool.execute({"action": "status"}, ctx))
-    inexistente = run(tool.execute({"action": "status", "job_id": "nope"}, ctx))
-    rara = run(tool.execute({"action": "volar", "job_id": "x"}, ctx))
+    inexistente = run(
+        tool.execute({"action": "status", "job_id": "deadbeef"}, ctx)
+    )
+    invalido = run(
+        tool.execute({"action": "status", "job_id": "../../secret"}, ctx)
+    )
+    rara = run(tool.execute({"action": "volar", "job_id": "deadbeef"}, ctx))
 
     assert sin_id.success is False and "job_id" in sin_id.error
     assert inexistente.success is False and "no existe" in inexistente.error
+    assert invalido.success is False
+    assert invalido.error_code == "invalid_arguments"
     assert rara.success is False and "desconocida" in rara.error
+
+
+def test_the_job_tool_rejects_an_invalid_timeout(tmp_path: Path) -> None:
+    info = _start(tmp_path, _dormir(30))
+    tool = JobTool()
+    ctx = ToolContext(project_root=tmp_path)
+
+    resultado = run(
+        tool.execute(
+            {"action": "wait", "job_id": info.id, "timeout_s": "abc"},
+            ctx,
+        )
+    )
+
+    assert resultado.success is False
+    assert resultado.error_code == "invalid_arguments"
+    assert "timeout_s" in resultado.error
+    registry_for(tmp_path).stop(info.id)
 
 
 def test_the_job_tool_stops_a_job(tmp_path: Path) -> None:

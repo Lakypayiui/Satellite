@@ -67,7 +67,7 @@ _RISKY_VALUES: tuple[str, ...] = (
     "delegate",
     "spawn_agent",
 )
-_FALSEY = (False, None, 0, "", (), [], {})
+_FALSEY: tuple[object, ...] = (False, None, 0, "", (), [], {})
 # Nunca se manda por elicitación nada que parezca un secreto (la spec lo prohíbe).
 _SECRET_HINTS: tuple[str, ...] = (
     "key",

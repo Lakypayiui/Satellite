@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from satellite.core.tool_models import ToolCall, ToolResult, ToolSchema
-from satellite.core.errors import ToolError
 
 if TYPE_CHECKING:
     from satellite.events.base import EventSink

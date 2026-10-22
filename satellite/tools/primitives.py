@@ -162,23 +162,71 @@ class SearchFilesTool(Tool):
         pattern = arguments.get("pattern", "")
         if not isinstance(pattern, str) or not pattern.strip():
             return ToolResult(success=False, error="se requiere el argumento 'pattern'")
+        if "\x00" in pattern:
+            return ToolResult(
+                success=False,
+                error="el patrón contiene un carácter nulo",
+                error_code="invalid_arguments",
+            )
+        try:
+            pattern_path = Path(pattern)
+        except (TypeError, ValueError) as exc:
+            return ToolResult(
+                success=False,
+                error=f"patrón inválido: {exc}",
+                error_code="invalid_arguments",
+            )
+        # Los globs absolutos hacen que Path.glob lance NotImplementedError, y ``..``
+        # permite listar fuera del proyecto aunque el glob se resuelva de forma léxica.
+        if pattern_path.is_absolute() or pattern_path.drive or ".." in pattern_path.parts:
+            return ToolResult(
+                success=False,
+                error="el patrón debe ser relativo al proyecto y no contener '..'",
+                error_code="invalid_arguments",
+            )
+
         base = tool_ctx.workdir or tool_ctx.project_root
         raw = arguments.get("path")
         root = (base / raw) if isinstance(raw, str) and raw else base
         policy = tool_ctx.policy
+        try:
+            # Normalizar antes de recorrer evita que ``path`` introduzca ``..`` en los
+            # resultados; la política sigue comprobando la ruta resuelta.
+            root = Path(root).resolve()
+        except OSError as exc:
+            return ToolResult(
+                success=False,
+                error=f"ruta inválida: {exc}",
+                error_code="invalid_arguments",
+            )
         if policy is not None and not policy.check_path(root, tool_ctx.project_root):
             return ToolResult(success=False, error=f"permiso denegado: {root}")
-        if not Path(root).is_dir():
+        if not root.is_dir():
             return ToolResult(success=False, error=f"no es un directorio: {root}")
-        matches = sorted(Path(root).glob(pattern))
+        try:
+            matches = sorted(root.glob(pattern))
+        except (NotImplementedError, OSError, ValueError) as exc:
+            return ToolResult(
+                success=False,
+                error=f"patrón inválido: {exc}",
+                error_code="invalid_arguments",
+            )
+
+        project_root = Path(tool_ctx.project_root).resolve()
         files = []
         for match in matches:
-            if not match.is_file():
-                continue
             try:
-                size = match.stat().st_size
-                rel = match.relative_to(tool_ctx.project_root).as_posix()
-            except (OSError, ValueError):
+                # Se resuelve para que un symlink no escape del proyecto, y se exige que
+                # el destino siga estando dentro de la raíz del proyecto.
+                resolved = match.resolve(strict=True)
+                if not resolved.is_file():
+                    continue
+                resolved.relative_to(project_root)
+                if policy is not None and not policy.check_path(resolved, project_root):
+                    continue
+                rel = match.relative_to(project_root).as_posix()
+                size = resolved.stat().st_size
+            except (OSError, ValueError, RuntimeError):
                 continue
             files.append({"path": rel, "size": size})
         return ToolResult(success=True, output=files)

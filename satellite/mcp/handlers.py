@@ -14,7 +14,6 @@ from pathlib import Path
 from satellite.approval.mcp import McpApproval
 from satellite.cli.runtime_builder import build_runtime
 from satellite.core.task import Task
-from satellite.persistence.store import FileStore
 
 _DEFAULT_ROOT = os.environ.get("SATELLITE_MCP_PROJECT_ROOT")
 

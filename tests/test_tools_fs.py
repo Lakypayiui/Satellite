@@ -113,6 +113,38 @@ def test_terminal_timeout(tmp_path: Path) -> None:
     assert "timeout" in (t.error or "").lower()
 
 
+def test_terminal_rejects_non_numeric_timeout(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    t = run(
+        RunCommandTool().execute(
+            {"command": f'{_PYTHON} -c "print(1)"', "timeout_s": "abc"}, ctx
+        )
+    )
+    assert t.success is False
+    assert t.error_code == "invalid_arguments"
+    assert "timeout_s" in (t.error or "")
+
+
+def test_terminal_rejects_non_positive_timeout(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    t = run(
+        RunCommandTool().execute(
+            {"command": f'{_PYTHON} -c "print(1)"', "timeout_s": 0}, ctx
+        )
+    )
+    assert t.success is False
+    assert t.error_code == "invalid_arguments"
+    assert "timeout_s" in (t.error or "")
+
+
+def test_terminal_rejects_unclosed_quote(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    t = run(RunCommandTool().execute({"command": 'echo "sin cerrar'}, ctx))
+    assert t.success is False
+    assert t.error_code == "invalid_arguments"
+    assert "comando" in (t.error or "")
+
+
 def test_terminal_denied_by_policy(tmp_path: Path) -> None:
     ctx = make_ctx(tmp_path, DefaultSecurityPolicy())
     t = run(RunCommandTool().execute({"command": f'{_PYTHON} -c "print(1)"'}, ctx))
@@ -179,3 +211,30 @@ def test_the_registry_labels_the_denial(tmp_path: Path) -> None:
     assert resultado.success is False
     assert resultado.error_code == "path_outside_project"
     assert resultado.output["path"].endswith("fuera.txt")
+
+
+def test_a_minimal_policy_denies_instead_of_raising_attribute_error(tmp_path: Path) -> None:
+    """Una política de terceros que sólo implementa ``check_tool`` falla cerrada."""
+    import pytest
+
+    from satellite.core.errors import PathOutsideProject
+    from satellite.security.base import SecurityPolicy
+
+    class MinimalPolicy(SecurityPolicy):
+        def check_tool(
+            self,
+            tool_id: str,
+            arguments: dict,
+            allowed_tools: set[str] | None = None,
+        ) -> bool:
+            return True
+
+    ctx = make_ctx(tmp_path, MinimalPolicy())
+    (tmp_path / "a.txt").write_text("hola", encoding="utf-8")
+
+    with pytest.raises(PathOutsideProject):
+        run(ReadFileTool().execute({"path": "a.txt"}, ctx))
+
+    denied = run(RunCommandTool().execute({"command": f'{_PYTHON} -c "print(1)"'}, ctx))
+    assert denied.success is False
+    assert denied.error_code == "command_not_allowed"

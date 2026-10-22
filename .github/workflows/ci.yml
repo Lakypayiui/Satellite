@@ -6,6 +6,86 @@ on:
   pull_request:
 
 jobs:
+  quality:
+    name: quality (ruff · mypy · bandit · lock)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.lock
+
+      - name: Instalar dependencias (lock)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --require-hashes -r requirements.lock
+
+      # Si cambia requirements.txt sin regenerar el lock, CI falla aquí.
+      - name: Verificar lockfile actualizado
+        run: |
+          python -m uv pip compile --universal --python-version 3.11 --generate-hashes \
+            --no-emit-package pip --output-file requirements.lock requirements.txt
+          git diff --exit-code -- requirements.lock
+
+      - name: Auditar dependencias (pip-audit)
+        run: python -m pip_audit --strict -r requirements.lock --progress-spinner off
+
+      # F821 (nombre indefinido) y F811 (redefinición) son los que habrían
+      # detectado regresiones como A-01; E9 cubre errores de sintaxis y
+      # ASYNC230 evita bloquear el event loop con open()/write_text().
+      - name: Ruff (F, E9, ASYNC230)
+        run: python -m ruff check --select F,E9,ASYNC230 satellite tests
+
+      # BLE001 donde un catch amplio ocultaría un fallo de seguridad. Las
+      # fronteras de UI/adaptadores quedan fuera hasta revisar cada excepción.
+      - name: Ruff (BLE001 en rutas críticas)
+        run: >-
+          python -m ruff check --select BLE001
+          satellite/security satellite/skills satellite/approval
+          satellite/tools/web.py satellite/tools/jobs.py
+          satellite/tools/primitives.py satellite/tools/terminal.py
+          satellite/tools/fs.py
+
+      # Gate acotado a los módulos críticos de pyproject.toml: el resto del
+      # árbol todavía tiene deuda de tipos y no se finge que esté limpio.
+      - name: Mypy (módulos críticos)
+        run: python -m mypy
+
+      - name: Bandit (severidad media o superior)
+        run: python -m bandit -ll -q -r satellite
+
+  renderer:
+    name: renderer (typecheck · tests · build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
   tests:
     name: tests (${{ matrix.os }} · py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
@@ -22,6 +102,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+          cache-dependency-path: requirements.lock
 
       # Los iconos del empaquetado (desktop/build/) están ignorados por git y el script los
       # genera con Node puro (sin Electron ni display, así que no hace falta xvfb).
@@ -29,10 +110,10 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Instalar dependencias
+      - name: Instalar dependencias (lock)
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install --require-hashes -r requirements.lock
 
       # El CLI revienta si falta colorama en consolas de Windows: que falle aquí.
       - name: Humo del CLI
@@ -41,6 +122,15 @@ jobs:
       - name: Iconos del empaquetado (headless)
         working-directory: desktop
         run: npm run icons
+
+      # Arranca el backend real y recorre el mismo handshake que Electron: el token
+      # viaja por stdin y stdout sólo lleva el puerto. Una sola combinación basta.
+      - name: Humo del backend de escritorio
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        working-directory: desktop
+        env:
+          SATELLITE_PYTHON: python
+        run: npm run smoke
 
       - name: Suite
         run: python -m pytest tests/ -q

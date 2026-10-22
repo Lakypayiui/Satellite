@@ -1,12 +1,14 @@
-"""`requirements.txt` y `pyproject.toml` no deben separarse.
+"""`requirements.txt`, `requirements.lock` y `pyproject.toml` no deben separarse.
 
-CI instala `requirements.txt` (no `pip install -e .`), así que todo lo que el flujo necesita
-tiene que estar ahí: si falta, los tests que lo piden **se saltan en silencio** en vez de
-fallar (p. ej. `pytest.importorskip("fastapi")`, que hoy afecta a 14 ficheros de test).
+CI instala `requirements.lock` (no `pip install -e .`), así que todo lo que el flujo necesita
+tiene que estar en `requirements.txt`: si falta, los tests que lo piden **se saltan en
+silencio** en vez de fallar (p. ej. `pytest.importorskip("fastapi")`, que hoy afecta a 14
+ficheros de test).
 
 `pyproject.toml` es la fuente única de versiones (dependencias base + extras); esta prueba
 compara ambos archivos para que no vuelvan a divergir: mismos nombres, mismos specifiers y
-mismos marcadores.
+mismos marcadores. Además, `requirements.lock` debe fijar exactamente las dependencias
+directas con hashes y conservar la resolución universal para Linux/Windows y Python 3.11+.
 
 Los extras `desktop-control*` (pywinauto / pyobjc-framework-* / PyGObject) quedan **fuera a
 propósito**: son específicos de plataforma, con import perezoso y con smoke opt-in, y no son
@@ -20,6 +22,7 @@ import tomllib
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[1]
+LOCK = RAIZ / "requirements.lock"
 
 # Grupos de pyproject que el flujo de CI necesita ver reflejados en requirements.txt.
 GRUPOS_NECESARIOS = ("base", "dev", "desktop")
@@ -54,6 +57,37 @@ def _requirements() -> dict[str, str]:
     return _dictar(
         (RAIZ / "requirements.txt").read_text(encoding="utf-8").splitlines()
     )
+
+
+_ENTRADA_LOCK = re.compile(
+    r"^(?P<nombre>[A-Za-z0-9_.-]+)==(?P<version>[^ ;\\]+)(?P<resto>[^\\]*?)\\?$"
+)
+_HASH_LOCK = re.compile(r"--hash=sha256:[0-9a-f]{64}\b")
+
+
+def _lock() -> dict[str, dict[str, object]]:
+    """Paquetes fijados en el lock, con marcador y número de hashes por paquete."""
+    entradas: dict[str, dict[str, object]] = {}
+    actual: dict[str, object] | None = None
+    for linea in LOCK.read_text(encoding="utf-8").splitlines():
+        if not linea.strip() or linea.lstrip().startswith("#"):
+            continue
+        if not linea[0].isspace():
+            coincidencia = _ENTRADA_LOCK.match(linea.strip())
+            assert coincidencia, f"línea inesperada en requirements.lock: {linea!r}"
+            nombre = _normalizar(coincidencia.group("nombre"))
+            assert nombre not in entradas, (
+                f"paquete duplicado en requirements.lock: {nombre}"
+            )
+            actual = {
+                "version": coincidencia.group("version"),
+                "marcador": coincidencia.group("resto").strip(),
+                "hashes": 0,
+            }
+            entradas[nombre] = actual
+        elif actual is not None and _HASH_LOCK.search(linea):
+            actual["hashes"] = int(actual["hashes"]) + 1
+    return entradas
 
 
 def _pyproject() -> dict[str, dict[str, str]]:
@@ -115,3 +149,44 @@ def test_los_extras_de_plataforma_no_entran_en_requirements() -> None:
                 f"{nombre} ({extra}) es opcional y por plataforma: no debe instalarse en el "
                 "job de tests"
             )
+
+
+def test_requirements_lock_cubre_y_fija_las_dependencias_directas() -> None:
+    """El lock que instala CI no puede quedarse corto ni dejar versiones abiertas."""
+    requeridas = _requirements()
+    lock = _lock()
+    faltantes = sorted(set(requeridas) - set(lock))
+    assert not faltantes, (
+        "requirements.lock no fija dependencias declaradas en requirements.txt: "
+        + ", ".join(faltantes)
+    )
+
+    sin_hash = sorted(nombre for nombre, datos in lock.items() if not datos["hashes"])
+    assert not sin_hash, (
+        "requirements.lock debe fijar hashes para todas las distribuciones: "
+        + ", ".join(sin_hash)
+    )
+
+
+def test_requirements_lock_conserva_la_resolucion_universal() -> None:
+    """El lock debe servir en Linux/Windows y Python 3.11+, no sólo en macOS."""
+    cabecera = "\n".join(LOCK.read_text(encoding="utf-8").splitlines()[:2])
+    for opcion in (
+        "--universal",
+        "--python-version 3.11",
+        "--generate-hashes",
+        "--no-emit-package pip",
+    ):
+        assert opcion in cabecera, f"falta {opcion!r} en la cabecera de requirements.lock"
+
+    lock = _lock()
+    # colorama es una dependencia directa sólo para Windows: si desaparece el
+    # marcador, el lock dejaría de ser universal y el CLI fallaría en Windows.
+    colorama = lock.get("colorama")
+    assert colorama is not None, "requirements.lock no incluye colorama"
+    assert "win32" in str(colorama["marcador"]), (
+        "requirements.lock perdió el marcador de Windows para colorama"
+    )
+    # pip es el instalador, no una dependencia de la aplicación: no debe quedar
+    # fijado en el lock ni autoactualizarse durante `pip install`.
+    assert "pip" not in lock, "requirements.lock no debe fijar el instalador pip"

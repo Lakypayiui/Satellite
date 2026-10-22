@@ -1,6 +1,5 @@
 """API del escritorio: persistencia del switch Think y validación de capacidades."""
 
-import json
 from pathlib import Path
 
 import pytest

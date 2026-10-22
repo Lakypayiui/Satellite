@@ -2,7 +2,7 @@
 
 import asyncio
 
-from satellite.core.messages import LLMRequest, Message, Role, Usage
+from satellite.core.messages import LLMRequest, Message, Role
 from satellite.core.tool_models import ToolSchema
 from satellite.providers.factory import ProviderConfig
 from satellite.providers.openai_compat import OpenAICompatProvider

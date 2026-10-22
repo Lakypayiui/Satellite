@@ -6,7 +6,6 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 
 from satellite.core.tool_models import ToolResult
 from satellite.security.policy import DefaultSecurityPolicy

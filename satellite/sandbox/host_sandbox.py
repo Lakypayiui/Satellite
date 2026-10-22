@@ -8,7 +8,6 @@ from satellite.sandbox.base import (
     SandboxResult,
     SandboxRunner,
     SandboxSpec,
-    truncate,
 )
 from satellite.sandbox.subprocess_sandbox import SubprocessSandbox
 

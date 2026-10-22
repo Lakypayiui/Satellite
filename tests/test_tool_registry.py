@@ -84,6 +84,27 @@ def test_execute_tool_error_captured(tmp_path: Path) -> None:
     assert "fallo" in (result.error or "")
 
 
+def test_execute_unexpected_exception_returns_result_instead_of_aborting(
+    tmp_path: Path,
+) -> None:
+    """Un bug de la tool no puede tumbar el turno: el LLM debe ver el error."""
+
+    class BrokenTool(StubTool):
+        async def execute(self, arguments: dict, tool_ctx: ToolContext) -> ToolResult:
+            raise RuntimeError("boom inesperado")
+
+    policy = DefaultSecurityPolicy(allowed_tools={"a"})
+    reg = DefaultToolRegistry(policy=policy)
+    reg.register(BrokenTool("a"))
+
+    result = run(reg.execute(ToolCall(id="c1", name="a", arguments={}), make_ctx(tmp_path, policy)))
+
+    assert result.success is False
+    assert result.error_code == "tool_error"
+    assert "boom inesperado" in (result.error or "")
+    assert "a" in (result.error or "")
+
+
 def test_execute_success(tmp_path: Path) -> None:
     policy = DefaultSecurityPolicy(allowed_tools={"a"})
     reg = DefaultToolRegistry(policy=policy)

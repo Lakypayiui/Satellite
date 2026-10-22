@@ -81,6 +81,7 @@ from .vision import (
 )
 from .policy import (
     ACTION_BUDGET,
+    ALL_WINDOWS,
     APP_DENIED,
     APP_NOT_ALLOWED,
     APPROVAL_REQUIRED,
@@ -92,7 +93,6 @@ from .policy import (
     RATE_LIMITED,
     SCOPE_CONTROL,
     SCOPE_OBSERVE,
-    SENSITIVE_TARGET,
     TIME_BUDGET,
     ActionBudget,
     DesktopControlPolicy,
@@ -148,6 +148,7 @@ __all__ = [
     "validate_action",
     # F4: política, grants, topes, emergencia, configuración local y auditoría.
     "ACTION_BUDGET",
+    "ALL_WINDOWS",
     "APP_DENIED",
     "APP_NOT_ALLOWED",
     "APPROVAL_REQUIRED",

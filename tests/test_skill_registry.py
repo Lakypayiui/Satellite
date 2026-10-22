@@ -1,11 +1,13 @@
 """Tests del registro de skills: registro, dedup, cuarentena y stats (Fase 3)."""
 
+import hashlib
 from pathlib import Path
 
 import pytest
 
 from satellite.core.errors import ToolError
 from satellite.events.bus import EventBus
+from satellite.skills.audit import code_digest
 from satellite.skills.models import SkillManifest, SkillStatus
 from satellite.skills.registry import SkillRegistry
 
@@ -23,6 +25,25 @@ def test_register_creates_files(tmp_path: Path) -> None:
     assert (tmp_path / "count_words" / "manifest.json").exists()
     assert (tmp_path / "count_words" / "main.py").read_text(encoding="utf-8") == SCRIPT
     assert registry.get("count_words").id == "count_words"
+
+
+def test_register_hashes_entrypoint_and_local_modules(tmp_path: Path) -> None:
+    registry = SkillRegistry(tmp_path)
+    skill_dir = tmp_path / "multi"
+    skill_dir.mkdir()
+    (skill_dir / "helper.py").write_text("valor = 1\n", encoding="utf-8")
+    script = "from helper import valor\nprint(valor)\n"
+
+    manifest = registry.register(make_manifest("multi"), script)
+
+    assert manifest.hash == code_digest(skill_dir, manifest.entrypoint)
+    assert manifest.hash != hashlib.sha256(script.encode("utf-8")).hexdigest()
+
+
+def test_register_keeps_the_historical_hash_for_a_single_file(tmp_path: Path) -> None:
+    registry = SkillRegistry(tmp_path)
+    manifest = registry.register(make_manifest("single"), SCRIPT)
+    assert manifest.hash == hashlib.sha256(SCRIPT.encode("utf-8")).hexdigest()
 
 
 def test_register_rejects_reserved_id(tmp_path: Path) -> None:

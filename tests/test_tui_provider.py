@@ -306,7 +306,6 @@ def test_ctrl_p_opens_the_selector(tmp_path, monkeypatch) -> None:
 
 
 def test_provider_list_command_shows_table(tmp_path, monkeypatch) -> None:
-    from satellite.tui import session as session_module
 
     async def scenario():
         app = make_app(tmp_path, monkeypatch)

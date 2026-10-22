@@ -15,7 +15,7 @@ import sys
 import tarfile
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import httpx
 
@@ -155,7 +155,7 @@ def _jdtls_command(project_root: Path | None) -> tuple[str, ...] | None:
     root, wrapper, _ = _jdtls_paths()
     state = lsp_root() / "state"
     root_key = str(Path(project_root or Path.home()).resolve())
-    digest = hashlib.sha1(root_key.encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha256(root_key.encode("utf-8")).hexdigest()[:12]
     data = state / "jdtls" / digest
     config = state / "jdtls-config"
     try:
@@ -561,21 +561,113 @@ async def _install_rustup(server: ServerSpec, timeout: int) -> InstallResult:
     return InstallResult(ok=True, stdout=stdout, stderr=stderr)
 
 
+def _unsafe_jdt_member(
+    member: tarfile.TarInfo, reason: str = ""
+) -> LspInstallError:
+    suffix = f" ({reason})" if reason else ""
+    return LspInstallError(
+        "lsp_install_failed",
+        f"archivo JDT inseguro{suffix}: {member.name}",
+        hint="descarga manualmente Eclipse JDT LS",
+    )
+
+
+def _jdt_member_target(
+    member: tarfile.TarInfo, destination: Path
+) -> Path | None:
+    """Valida un miembro y devuelve su destino, o ``None`` para la raíz."""
+    name = str(member.name)
+    if "\x00" in name:
+        raise _unsafe_jdt_member(member, "NUL")
+    normalized = name.replace("\\", "/")
+    windows_path = PureWindowsPath(normalized)
+    posix_path = PurePosixPath(normalized)
+    if (
+        windows_path.drive
+        or windows_path.is_absolute()
+        or posix_path.is_absolute()
+    ):
+        raise _unsafe_jdt_member(member, "ruta absoluta")
+    parts = [part for part in normalized.split("/") if part not in ("", ".")]
+    if ".." in parts:
+        raise _unsafe_jdt_member(member, "traversal")
+    if member.issym() or member.islnk():
+        raise _unsafe_jdt_member(member, "enlace")
+    if not (member.isdir() or member.isfile()):
+        raise _unsafe_jdt_member(member, "tipo especial")
+    if not parts:
+        if member.isdir():
+            return None
+        raise _unsafe_jdt_member(member, "nombre vacío")
+    target = destination.joinpath(*parts)
+    try:
+        target.relative_to(destination)
+    except ValueError:  # pragma: no cover — partes ya validadas
+        raise _unsafe_jdt_member(member, "fuera del destino") from None
+    return target
+
+
+def _set_member_mode(path: Path, mode: int, *, is_dir: bool) -> None:
+    """Aplica permisos sin setuid/setgid ni escritura de grupo/otros."""
+    safe_mode = mode & 0o755
+    safe_mode |= 0o700 if is_dir else 0o600
+    try:
+        path.chmod(safe_mode)
+    except OSError:
+        pass
+
+
 def _safe_extract(archive: Path, destination: Path) -> None:
-    with tarfile.open(archive, "r:gz") as tar:
-        for member in tar.getmembers():
-            name = member.name.replace("\\", "/")
-            parts = [part for part in name.split("/") if part]
-            if name.startswith("/") or ".." in parts:
-                raise LspInstallError(
-                    "lsp_install_failed",
-                    f"archivo JDT inseguro: {member.name}",
-                    hint="descarga manualmente Eclipse JDT LS",
-                )
-        try:
-            tar.extractall(destination, filter="data")
-        except TypeError:
-            tar.extractall(destination)
+    """Extrae un tar.gz sin enlaces, rutas absolutas ni ``..``.
+
+    No usa ``extractall``: en Python 3.11 el filtro ``data`` no está garantizado
+    y el fallback anterior era inseguro. La extracción manual solo crea
+    directorios y archivos regulares bajo ``destination``.
+    """
+    destination = destination.resolve()
+    try:
+        with tarfile.open(archive, "r:gz") as tar:
+            members: list[tuple[tarfile.TarInfo, Path]] = []
+            for member in tar.getmembers():
+                target = _jdt_member_target(member, destination)
+                if target is not None:
+                    members.append((member, target))
+            destination.mkdir(parents=True, exist_ok=True)
+            for member, target in members:
+                try:
+                    if target.is_symlink():
+                        raise _unsafe_jdt_member(member, "destino symlink")
+                    if member.isdir():
+                        target.parent.resolve().relative_to(destination)
+                        target.mkdir(parents=True, exist_ok=True)
+                        _set_member_mode(target, member.mode, is_dir=True)
+                        continue
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    # Verifica que ningún componente preexistente escape del
+                    # destino mediante un symlink.
+                    target.parent.resolve().relative_to(destination)
+                    source = tar.extractfile(member)
+                    if source is None:
+                        raise _unsafe_jdt_member(member, "sin contenido")
+                    with source, target.open("wb") as handle:
+                        shutil.copyfileobj(source, handle)
+                    _set_member_mode(target, member.mode, is_dir=False)
+                except LspInstallError:
+                    raise
+                except (OSError, ValueError, tarfile.TarError) as exc:
+                    raise LspInstallError(
+                        "lsp_install_failed",
+                        f"no se pudo extraer JDT LS: {exc}",
+                        hint="descarga manualmente Eclipse JDT LS",
+                    ) from exc
+    except LspInstallError:
+        raise
+    except (OSError, tarfile.TarError) as exc:
+        raise LspInstallError(
+            "lsp_install_failed",
+            f"no se pudo abrir o extraer JDT LS: {exc}",
+            hint="descarga manualmente Eclipse JDT LS",
+        ) from exc
 
 
 async def _install_jdtls(server: ServerSpec, timeout: int) -> InstallResult:

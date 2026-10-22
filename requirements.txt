@@ -1,12 +1,16 @@
-# Dependencias Python del proyecto. Este es el archivo que instala CI
-# (`.github/workflows/ci.yml` hace `pip install -r requirements.txt`), así que tiene que
-# incluir **todo** lo que el flujo necesita para ejecutar la suite, no sólo el runtime.
+# Dependencias Python del proyecto. CI instala `requirements.lock` (generado desde este
+# archivo), así que aquí tiene que estar **todo** lo que el flujo necesita para ejecutar
+# la suite, no sólo el runtime.
 #
 # pyproject.toml es la **fuente única** de versiones; este archivo lo refleja:
 #   [project].dependencies  -> "Runtime"
 #   extra "dev"             -> "Pruebas / CI"
 #   extra "desktop"         -> "App de escritorio y Safe Proxy"
 # `tests/test_requirements_consistency.py` compara ambos y falla si se separan.
+#
+# Tras cambiar este archivo, regenera el lock:
+#   uv pip compile --universal --python-version 3.11 --generate-hashes \
+#     --no-emit-package pip --output-file requirements.lock requirements.txt
 #
 # Los extras "desktop-control*" (pywinauto / pyobjc-framework-* / PyGObject) NO van aquí:
 # son opcionales, con import perezoso, marcados por plataforma y con smoke opt-in.
@@ -37,3 +41,11 @@ pydantic>=2.7.0
 
 # --- Pruebas / CI (extra "dev") ---
 pytest>=7.0
+ruff>=0.6
+mypy>=1.10
+bandit>=1.7
+# Stubs de mypy para el esquema de salida de las skills.
+types-jsonschema>=4.20
+# Genera/verifica requirements.lock y audita las versiones fijadas en CI.
+uv>=0.13
+pip-audit>=2.9

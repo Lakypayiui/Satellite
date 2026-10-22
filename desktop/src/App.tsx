@@ -758,9 +758,17 @@ export function App() {
     }
   }
 
-  async function decidirPermiso(proposalId: string, decision: string, feedback = "") {
+  async function decidirPermiso(
+    proposalId: string,
+    projectRoot: string,
+    decision: string,
+    feedback = "",
+  ) {
     try {
-      await api(`/approvals/${proposalId}`, { method: "POST", body: { decision, feedback } });
+      await api(`/approvals/${proposalId}`, {
+        method: "POST",
+        body: { decision, feedback, project_root: projectRoot },
+      });
       await recargarPermisos();
     } catch (exc) {
       setAviso(error(exc));
@@ -1841,7 +1849,9 @@ export function App() {
             policyMode={config?.policy_mode ?? "ask"}
             onPolicyMode={(modo) => void cambiarAjustes({ policy_mode: modo })}
             onEnviar={(texto, planMode) => void enviar(texto, planMode)}
-            onPermiso={(id, decision, feedback) => void decidirPermiso(id, decision, feedback)}
+            onPermiso={(id, projectRoot, decision, feedback) =>
+              void decidirPermiso(id, projectRoot, decision, feedback)
+            }
             onElegirPlan={(id) => void elegirPlan(id)}
             onComando={(spec) => lanzarComando(spec)}
             onCancelar={() => void cancelarTurno()}

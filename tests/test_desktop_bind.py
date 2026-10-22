@@ -7,6 +7,9 @@ exigiendo autenticación).
 
 from __future__ import annotations
 
+import io
+import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -69,6 +72,7 @@ def test_parser_defaults_to_loopback_without_token() -> None:
     args = build_parser().parse_args([])
     assert args.host == ""
     assert args.token == ""
+    assert args.token_stdin is False
 
 
 def test_main_refuses_external_host_without_token(capsys) -> None:
@@ -77,6 +81,65 @@ def test_main_refuses_external_host_without_token(capsys) -> None:
     assert codigo == 4  # no arranca nada
     err = capsys.readouterr().err
     assert "token" in err
+
+
+def test_main_rejects_token_and_token_stdin_together(capsys) -> None:
+    codigo = main(["--token", "x" * 24, "--token-stdin"])
+
+    assert codigo == 4
+    assert "mutuamente excluyentes" in capsys.readouterr().err
+
+
+def test_main_rejects_empty_token_stdin(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+
+    codigo = main(["--token-stdin"])
+
+    assert codigo == 4
+    assert "no recibió un token" in capsys.readouterr().err
+
+
+def test_external_host_validates_the_token_received_by_stdin(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(sys, "stdin", io.StringIO("corto\n"))
+
+    codigo = main(["--host", "0.0.0.0", "--token-stdin"])
+
+    assert codigo == 4
+    assert "al menos" in capsys.readouterr().err
+
+
+def test_main_with_token_stdin_prints_only_the_port(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    uvicorn = pytest.importorskip("uvicorn")
+    token = "t" * 64
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{token}\n"))
+
+    def servidor_sin_arrancar(self, sockets=None) -> None:
+        for sock in sockets or []:
+            sock.close()
+
+    monkeypatch.setattr(uvicorn.Server, "run", servidor_sin_arrancar)
+
+    codigo = main(
+        [
+            "--token-stdin",
+            "--project",
+            str(tmp_path / "proyecto"),
+            "--home",
+            str(tmp_path / "home"),
+        ]
+    )
+
+    capturado = capsys.readouterr()
+    assert codigo == 0
+    assert token not in capturado.out
+    assert token not in capturado.err
+    lineas = capturado.out.splitlines()
+    assert len(lineas) == 1
+    handshake = json.loads(lineas[0])
+    assert set(handshake) == {"port"}
+    assert 0 < handshake["port"] < 65536
 
 
 def test_external_host_with_token_serves_with_authentication(tmp_path: Path) -> None:

@@ -149,6 +149,8 @@ export interface Approval {
   reason: string;
   details: Record<string, unknown>;
   options: string[];
+  /** Proyecto que pidió la propuesta: la decisión viaja de vuelta con este dato. */
+  project_root: string;
 }
 
 export interface TaskItem {

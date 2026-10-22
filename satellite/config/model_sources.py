@@ -21,7 +21,7 @@ No todos los proveedores exponen ``GET <base>/models`` con la misma forma. Aquí
 - ``mistral``     → ``GET {base}/models`` → ``{"data": [...]}``.
 - ``commandcode`` → ``GET {base}/models?view=client`` (el catálogo que sirve al cliente).
   Es el mismo endpoint para las dos entradas (OpenAI y Anthropic): su **edge rechaza con
-  403** a quien no manda un ``User-Agent`` propio (``urllib`` manda ``Python-urllib/x.y``),
+  403** a quien no manda un ``User-Agent`` propio (un cliente HTTP genérico manda el suyo),
   así que hay que identificarse; no usa clave.
 
 El resto del sistema (:mod:`satellite.config.models`) sólo **consume** la estrategia: así
@@ -93,7 +93,7 @@ class ModelSource:
     models_path: str = ""
     # Consulta que el endpoint exige para su vista de cliente ("" = sin query).
     models_query: str = ""
-    # ``User-Agent`` a enviar ("" = el de urllib). Hay catálogos que lo exigen.
+    # ``User-Agent`` a enviar ("" = el del cliente HTTP). Hay catálogos que lo exigen.
     user_agent: str = ""
     # Sufijo que hay que garantizar en la base antes de añadir ``models_path``.
     ensure_suffix: str = ""

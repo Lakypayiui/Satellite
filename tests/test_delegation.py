@@ -3,7 +3,7 @@
 import asyncio
 from pathlib import Path
 
-from satellite.agents.base import Agent, AgentContext, AgentFactory
+from satellite.agents.base import Agent, AgentFactory
 from satellite.agents.registry import DefaultAgentRegistry
 from satellite.approval.base import AutoApprovalPort, DenyAllApprovalPort
 from satellite.core.result import AgentResult, AgentStatus, ExecutionMetrics

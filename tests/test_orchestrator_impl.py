@@ -3,17 +3,14 @@
 import asyncio
 from pathlib import Path
 
-from satellite.agents.base import Agent, AgentContext
 from satellite.agents.registry import DefaultAgentRegistry
-from satellite.core.graph import Edge, ExecutionGraph, Node
-from satellite.core.result import AgentResult, AgentStatus
+from satellite.core.graph import ExecutionGraph, Node
 from satellite.core.spec import AgentSpec
 from satellite.core.task import Task, TaskResult, TaskStatus
 from satellite.events.base import EventSink
 from satellite.orchestration.base import GraphRunner, Planner, PlanningResult, RuntimeServices
 from satellite.orchestration.orchestrator import DefaultOrchestrator
 from satellite.persistence.base import Store
-from satellite.providers.fake import FakeLLM
 
 
 def run(coro):
@@ -150,6 +147,7 @@ def test_orchestrator_saves_to_store(tmp_path: Path) -> None:
     orch = DefaultOrchestrator(planner, runner, make_services(), store=store, sink=sink)
     task = make_task(tmp_path)
     result = run(orch.execute(task))
+    assert result.status.value == "ok"
     assert task.task_id in store.tasks
     assert task.task_id in store.graphs
     assert task.task_id in store.states

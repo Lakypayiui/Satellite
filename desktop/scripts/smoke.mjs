@@ -2,10 +2,12 @@
  * Comprobación de extremo a extremo sin interfaz gráfica.
  *
  * Ejercita exactamente el camino que usa Electron: arrancar `python -m satellite.desktop`,
- * leer el handshake, exigir el token, hablar con la API y apagar el proceso. Si esto pasa,
- * lo que falla (si falla) es la ventana, no la integración.
+ * entregarle el token por stdin, leer sólo el puerto del handshake, exigir el token,
+ * hablar con la API y apagar el proceso. Si esto pasa, lo que falla (si falla) es la
+ * ventana, no la integración.
  */
 
+import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import path from "node:path";
@@ -30,34 +32,64 @@ function comprobar(nombre, ok, detalle = "") {
   if (!ok) fallos += 1;
 }
 
-const hijo = spawn(python, ["-m", "satellite.desktop", "--project", proyecto], {
-  cwd: raiz,
-  env: { ...process.env, PYTHONUNBUFFERED: "1" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
+const token = randomBytes(32).toString("hex");
+const hijo = spawn(
+  python,
+  ["-m", "satellite.desktop", "--project", proyecto, "--token-stdin"],
+  {
+    cwd: raiz,
+    env: { ...process.env, PYTHONUNBUFFERED: "1" },
+    stdio: ["pipe", "pipe", "pipe"],
+  },
+);
 let errorSalida = "";
+let salidaEstandar = "";
+hijo.stdout.on("data", (t) => {
+  salidaEstandar += t.toString();
+});
 hijo.stderr.on("data", (t) => {
   errorSalida += t.toString();
 });
+hijo.stdin.on("error", () => {
+  // Si el backend sale antes de leerlo, el handshake de abajo da el error real.
+});
+hijo.stdin.end(`${token}\n`);
 
-const handshake = await new Promise((resolve, reject) => {
+const port = await new Promise((resolve, reject) => {
   const lineas = createInterface({ input: hijo.stdout });
   const timer = setTimeout(() => reject(new Error("sin handshake en 20 s")), 20_000);
   lineas.on("line", (linea) => {
+    if (linea.includes(token)) {
+      clearTimeout(timer);
+      lineas.close();
+      reject(new Error("el token apareció en stdout"));
+      return;
+    }
     if (!linea.trim().startsWith("{")) return;
     try {
       const data = JSON.parse(linea);
-      if (typeof data.port === "number" && typeof data.token === "string") {
+      if (typeof data.port === "number") {
         clearTimeout(timer);
-        resolve(data);
+        lineas.close();
+        resolve(data.port);
       }
     } catch {
       // no es el handshake
     }
   });
-  hijo.on("exit", (codigo) => reject(new Error(`el backend salió con ${codigo}: ${errorSalida.trim()}`)));
+  hijo.on("error", (exc) => {
+    clearTimeout(timer);
+    lineas.close();
+    reject(new Error(`no se pudo arrancar ${python}: ${exc.message}`));
+  });
+  hijo.on("exit", (codigo) => {
+    clearTimeout(timer);
+    lineas.close();
+    reject(new Error(`el backend salió con ${codigo}: ${errorSalida.trim()}`));
+  });
 });
 
+const handshake = { port, token };
 const base = `http://127.0.0.1:${handshake.port}`;
 const conToken = { Authorization: `Bearer ${handshake.token}` };
 
@@ -89,6 +121,7 @@ try {
   const estado = await json("/api/status", { headers: conToken });
   comprobar("status con token da 200", estado.estado === 200, `código ${estado.estado}`);
   comprobar("dice si el runtime está listo", typeof estado.data.runtime_ready === "boolean");
+  comprobar("el token no aparece en stdout", !salidaEstandar.includes(token));
 
   const sesiones = await json("/api/sessions", { headers: conToken });
   comprobar("lista de sesiones", sesiones.estado === 200 && Array.isArray(sesiones.data.sessions));

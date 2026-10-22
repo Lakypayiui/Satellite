@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import subprocess
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -24,7 +25,13 @@ from satellite.tools.base import Tool, ToolContext
 JOB_DIR = "jobs"
 OUTPUT_TAIL_CHARS = 64_000
 STOP_TIMEOUT_S = 5
+_JOB_ID_RE = re.compile(r"[0-9a-f]{8}")
 _REGISTRIES: dict[str, "JobRegistry"] = {}
+
+
+def _valid_job_id(job_id: object) -> bool:
+    """True para un id generado por ``uuid4().hex[:8]``."""
+    return isinstance(job_id, str) and _JOB_ID_RE.fullmatch(job_id) is not None
 
 
 def _now() -> str:
@@ -115,13 +122,31 @@ class JobRegistry:
         self._write(info)
         return info
 
+    def _job_file(self, job_id: str, suffix: str) -> Path | None:
+        """Ruta resuelta dentro de ``self.root``, o ``None`` si el id no es válido."""
+        if not _valid_job_id(job_id):
+            return None
+        root = self.root.resolve()
+        path = (root / f"{job_id}{suffix}").resolve()
+        try:
+            path.relative_to(root)
+        except ValueError:
+            return None
+        return path
+
     def log_path(self, job_id: str) -> Path:
-        return self.root / f"{job_id}.log"
+        path = self._job_file(job_id, ".log")
+        if path is None:
+            raise ValueError(f"job_id inválido: {job_id!r}")
+        return path
 
     def output(self, job_id: str, *, tail: int = OUTPUT_TAIL_CHARS) -> str:
         """Lo que lleva escrito el trabajo (recortado por el principio si es enorme)."""
+        path = self._job_file(job_id, ".log")
+        if path is None:
+            return "(job_id inválido)"
         try:
-            text = self.log_path(job_id).read_text(encoding="utf-8", errors="replace")
+            text = path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             return f"(no se pudo leer la salida: {exc})"
         if len(text) > tail:
@@ -132,6 +157,8 @@ class JobRegistry:
 
     def status(self, job_id: str) -> JobInfo | None:
         """Ficha actualizada; ``None`` si ese trabajo no existe."""
+        if not _valid_job_id(job_id):
+            return None
         info = self._read(job_id)
         proc = self._procs.get(job_id)
         if proc is None:
@@ -141,6 +168,9 @@ class JobRegistry:
                 # lo lanzó otro proceso: desde aquí no se puede saber si sigue vivo
                 return replace(info, status="desconocido")
             return info
+        if info is None:
+            # Proceso conocido pero ficha ausente o manipulada: no se inventa estado.
+            return None
         if info.status == "stopped":
             return info  # una vez parado sigue parado: no se convierte en «failed»
         code = proc.poll()
@@ -173,6 +203,8 @@ class JobRegistry:
         cancelar, así que el timeout no se respetaba y la espera se quedaba colgada hasta
         que el comando acabara, que es justo lo que no queremos con un comando largo.
         """
+        if not _valid_job_id(job_id):
+            return None, "ajeno"
         info = self.status(job_id)
         if info is None:
             return None, "ajeno"
@@ -190,6 +222,8 @@ class JobRegistry:
 
     def stop(self, job_id: str) -> JobInfo | None:
         """Para el trabajo; ``None`` si lo lanzó otro proceso."""
+        if not _valid_job_id(job_id):
+            return None
         proc = self._procs.get(job_id)
         if proc is None:
             return None
@@ -206,19 +240,26 @@ class JobRegistry:
     # --- ficheros ---
 
     def _read(self, job_id: str) -> JobInfo | None:
+        path = self._job_file(job_id, ".json")
+        if path is None:
+            return None
         try:
-            data = json.loads((self.root / f"{job_id}.json").read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
         if not isinstance(data, dict):
             return None
         info = JobInfo.from_dict(data)
-        return info if info.id else None
+        # El contenido no puede cambiar el id ni apuntar a otra ficha.
+        return info if info.id == job_id else None
 
     def _write(self, info: JobInfo) -> None:
+        path = self._job_file(info.id, ".json")
+        if path is None:
+            return
         try:
             self.root.mkdir(parents=True, exist_ok=True)
-            (self.root / f"{info.id}.json").write_text(
+            path.write_text(
                 json.dumps(info.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
             )
         except OSError:
@@ -255,10 +296,12 @@ class JobTool(Tool):
                 },
                 "job_id": {
                     "type": "string",
+                    "pattern": "^[0-9a-f]{8}$",
                     "description": "Job id (returned by run_command with background).",
                 },
                 "timeout_s": {
                     "type": "integer",
+                    "minimum": 0,
                     "description": "Seconds to wait with action=wait (default 30).",
                 },
             },
@@ -267,13 +310,21 @@ class JobTool(Tool):
 
     async def execute(self, arguments: dict, tool_ctx: ToolContext) -> ToolResult:
         action = str(arguments.get("action") or "").strip().lower()
-        job_id = str(arguments.get("job_id") or "").strip()
         registry = registry_for(tool_ctx.project_root)
         if action == "list":
             infos = registry.list()
             return ToolResult(success=True, output=[info.to_dict() for info in infos])
+        if action not in ("status", "output", "wait", "stop"):
+            return ToolResult(success=False, error=f"acción desconocida: '{action}'")
+        job_id = str(arguments.get("job_id") or "").strip()
         if not job_id:
             return ToolResult(success=False, error="se requiere 'job_id' para esa acción")
+        if not _valid_job_id(job_id):
+            return ToolResult(
+                success=False,
+                error="'job_id' inválido: debe tener 8 caracteres hexadecimales",
+                error_code="invalid_arguments",
+            )
         if action == "status":
             info = registry.status(job_id)
             if info is None:
@@ -293,7 +344,23 @@ class JobTool(Tool):
                 },
             )
         if action == "wait":
-            timeout_s = int(arguments.get("timeout_s", 30))
+            raw_timeout = arguments.get("timeout_s", 30)
+            try:
+                if isinstance(raw_timeout, bool):
+                    raise ValueError
+                timeout_s = int(raw_timeout)
+            except (TypeError, ValueError, OverflowError):
+                return ToolResult(
+                    success=False,
+                    error="'timeout_s' debe ser un entero no negativo",
+                    error_code="invalid_arguments",
+                )
+            if timeout_s < 0:
+                return ToolResult(
+                    success=False,
+                    error="'timeout_s' debe ser un entero no negativo",
+                    error_code="invalid_arguments",
+                )
             info, estado = await registry.wait(job_id, timeout_s)
             if info is None:
                 return ToolResult(success=False, error=f"no existe el trabajo '{job_id}'")

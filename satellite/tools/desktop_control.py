@@ -18,14 +18,16 @@ Todo lo leído de la UI sigue siendo **DATO NO CONFIABLE**.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TypeGuard
 from uuid import uuid4
 
-from satellite.approval.base import ApprovalContext
+from satellite.approval.base import ApprovalContext, ApprovalPort
 from satellite.core.errors import ContractError
 from satellite.core.proposal import ApprovalStatus
 from satellite.core.tool_models import ToolResult
 from satellite.desktop_control import (
     ALLOWED_ACTIONS_SET,
+    ALL_WINDOWS,
     SCOPE_CONTROL,
     SCOPE_OBSERVE,
     Action,
@@ -108,7 +110,7 @@ def _begin_run(policy: DesktopControlPolicy, tool_ctx: ToolContext, session: str
     policy.begin_run(f"{session}:{task_id or 'default'}")
 
 
-def _is_human_port(port: object) -> bool:
+def _is_human_port(port: object) -> TypeGuard[ApprovalPort]:
     """Sólo puertos humanos reales pueden aprobar; nunca los automáticos/MCP."""
     if port is None:
         return False
@@ -243,18 +245,18 @@ class DesktopListWindowsTool(Tool):
         policy = _policy(self._policy)
         session = _session(tool_ctx)
         _begin_run(policy, tool_ctx, session)
-        decision = policy.check_screen(session, "*", SCOPE_OBSERVE)
+        decision = policy.check_list_windows(session)
         if decision.needs_approval:
             approved = await _ask_human(
                 tool_ctx.approval,
                 task_id=tool_ctx.task_id,
                 summary="Permitir listar las ventanas de escritorio en esta sesión",
-                details={"app": "*", "scope": SCOPE_OBSERVE},
+                details={"app": ALL_WINDOWS, "scope": SCOPE_OBSERVE},
                 allow_auto=policy.allow_auto_approval,
             )
             if approved:
-                policy.grant(session, "*", SCOPE_OBSERVE)
-                decision = policy.check_screen(session, "*", SCOPE_OBSERVE)
+                policy.grant(session, ALL_WINDOWS, SCOPE_OBSERVE)
+                decision = policy.check_list_windows(session)
         if not decision.allowed:
             _audit(
                 self._audit,
