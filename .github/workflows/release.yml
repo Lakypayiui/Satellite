@@ -82,14 +82,20 @@ jobs:
           PYTHONUTF8: "1"
           PYTHONIOENCODING: utf-8
         run: |
-          exe=dist-backend/satellite/satellite
+          exe="$GITHUB_WORKSPACE/dist-backend/satellite/satellite"
           [ -f "$exe.exe" ] && exe="$exe.exe"
           cd "$RUNNER_TEMP"
           export SATELLITE_HOME="$RUNNER_TEMP/home"
-          "$GITHUB_WORKSPACE/$exe" --help
-          "$GITHUB_WORKSPACE/$exe" init
-          "$GITHUB_WORKSPACE/$exe" doctor | grep "catálogo"
-          "$GITHUB_WORKSPACE/$exe" tui --help
+          "$exe" --help >/dev/null
+          "$exe" init
+          # Proveedor `fake`: el runtime arranca sin red, así `doctor` carga el catálogo
+          # que viene dentro del binario (specs y prompts). Se busca "agentes" (ASCII):
+          # "catálogo" lleva acento y no casa de forma fiable en la consola de Windows.
+          mkdir -p .satellite/config
+          printf '{"name":"fake","model":"m"}' > .satellite/config/config.json
+          "$exe" doctor | tee doctor.txt
+          grep -q "agentes" doctor.txt
+          "$exe" tui --help >/dev/null
 
       - name: Empaquetar la app
         shell: bash
