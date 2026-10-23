@@ -39,13 +39,13 @@ def test_status_without_provider(tmp_path, monkeypatch) -> None:
     assert status.skills == 0
     assert status.provider == ""
     assert status.policy_mode == "ask"
-    assert "orchestrator" in {spec.id for spec in session.agents()}
+    assert "pilot" in {spec.id for spec in session.agents()}
 
 
 def test_agents_includes_base_catalog(tmp_path, monkeypatch) -> None:
     session = make_session(tmp_path, monkeypatch)
     ids = {spec.id for spec in session.agents()}
-    assert {"orchestrator", "agent_creator", "skill_curator"} <= ids
+    assert {"pilot", "agent_creator", "skill_curator"} <= ids
 
 
 def test_skills_and_search(tmp_path, monkeypatch) -> None:
@@ -120,7 +120,7 @@ def test_run_goal_chat_direct(tmp_path, monkeypatch) -> None:
     session = make_session(tmp_path, monkeypatch, config={"name": "fake", "model": "m"})
     result = run(session.run_goal("¿qué es la fotosíntesis?"))
     assert result.status.value == "ok"
-    assert result.output.get("mode") == "direct_reply"
+    assert result.output.get("mode") == "pilot_reply"
 
 
 def test_create_agent_returns_outcome(tmp_path, monkeypatch) -> None:

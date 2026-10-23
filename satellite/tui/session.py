@@ -256,6 +256,7 @@ class Session:
         )
         try:
             _orch, _bus, _store, registry = self.runtime()
+            checks.append((True, f"orquestación: {getattr(_orch, 'mode', 'legacy')}"))
             checks.append((True, f"catálogo: {len(registry.all())} agentes"))
             if getattr(registry, "errors", None):
                 checks.append((False, f"catálogo: {len(registry.errors)} specs inválidos"))
@@ -311,10 +312,6 @@ class Session:
             plan_mode=plan_mode,
             extra_metadata=extra_metadata,
         )
-
-    async def choose_option(self, option, *, approval: ApprovalPort | None = None) -> ChatReply:
-        """Elige una alternativa del modo plan y continúa."""
-        return await self.chat().choose(option, approval=approval)
 
     def new_conversation(self) -> None:
         """Olvida la conversación actual."""

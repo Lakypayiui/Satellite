@@ -117,7 +117,7 @@ def test_a_missing_approval_port_is_reported_not_silent() -> None:
     manager = DelegationManager(factory=object(), sink=sink, approval=None)
     ctx = manager.root_context("t1")
 
-    assert asyncio.run(manager._approve(ctx, kind="can_call", summary="prueba")) is False
+    assert asyncio.run(manager._approve(ctx, None, kind="can_call", summary="prueba")) is False
     assert len(sink.events) == 1
     assert sink.events[0].event_type is EventType.POLICY_VIOLATION
     assert "no configurada" in sink.events[0].payload["reason"]

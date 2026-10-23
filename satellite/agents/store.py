@@ -13,6 +13,7 @@ from pathlib import Path
 from satellite.core.atomic import atomic_write_text
 from satellite.core.errors import SpecValidationError
 from satellite.core.spec import AgentSpec
+from satellite.kernel.manifest import RETIRED_AGENT_IDS
 
 QUARANTINE_DIR = "_quarantine"
 
@@ -58,6 +59,8 @@ class AgentCatalogStore:
         if not self.root.exists():
             return specs
         for file in sorted(self.root.glob("*.json")):
+            if file.stem in RETIRED_AGENT_IDS:
+                continue  # copia de una versión anterior: se ignora, no se borra
             try:
                 specs.append(AgentSpec.from_dict(json.loads(file.read_text(encoding="utf-8"))))
             except (OSError, json.JSONDecodeError, SpecValidationError, KeyError, TypeError, ValueError):
@@ -70,6 +73,8 @@ class AgentCatalogStore:
         if not self.root.exists():
             return prompts
         for file in sorted(self.root.glob("*.system.txt")):
+            if file.name[: -len(".system.txt")] in RETIRED_AGENT_IDS:
+                continue
             prompt_id = file.name[: -len(".system.txt")]
             user_file = self.root / f"{prompt_id}.user.txt"
             try:

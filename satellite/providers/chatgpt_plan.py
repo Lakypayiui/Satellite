@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import replace
-from typing import Any
+from typing import Any, AsyncIterator
 
 import httpx
 
 from satellite.core.errors import ProviderError
-from satellite.core.messages import LLMRequest, LLMResponse, Role, Usage
+from satellite.core.messages import LLMRequest, LLMResponse, Role, StreamChunk, Usage
 from satellite.core.tool_models import ToolCall
 from satellite.providers.base import LLMProvider
 from satellite.providers.parsing import coerce_arguments
@@ -29,6 +29,16 @@ class ChatGPTPlanProvider(LLMProvider):
         return True
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
+        final: LLMResponse | None = None
+        async for chunk in self.stream(request):
+            if chunk.response is not None:
+                final = chunk.response
+        if final is None:  # pragma: no cover - stream siempre cierra con respuesta
+            raise ProviderError("ChatGPT cerró el flujo sin completar la respuesta.")
+        return final
+
+    async def stream(self, request: LLMRequest) -> AsyncIterator[StreamChunk]:
+        """El endpoint de Responses ya es un stream: se ceden sus deltas de texto."""
         broker = os.getenv("SATELLITE_ACCOUNT_BROKER_URL", "").rstrip("/")
         broker_secret = os.getenv("SATELLITE_ACCOUNT_BROKER_SECRET", "")
         if not broker or not broker_secret:
@@ -52,7 +62,9 @@ class ChatGPTPlanProvider(LLMProvider):
                 ) as response:
                     if response.status_code >= 400:
                         body = (await response.aread()).decode("utf-8", errors="replace")
-                        raise ProviderError(self._error_message(response.status_code, body))
+                        error = ProviderError(self._error_message(response.status_code, body))
+                        error.status_code = response.status_code  # type: ignore[attr-defined]
+                        raise error
                     completed: dict | None = None
                     failure = ""
                     streamed_text = ""
@@ -81,7 +93,10 @@ class ChatGPTPlanProvider(LLMProvider):
                             details = incomplete.get("incomplete_details") or {}
                             failure = f"respuesta incompleta ({details.get('reason') or 'sin motivo'})"
                         elif kind == "response.output_text.delta":
-                            streamed_deltas.append(str(event.get("delta") or ""))
+                            delta = str(event.get("delta") or "")
+                            streamed_deltas.append(delta)
+                            if delta:
+                                yield StreamChunk(text=delta)
                         elif kind == "response.output_text.done":
                             streamed_text = str(event.get("text") or streamed_text)
                         elif kind == "response.refusal.done":
@@ -126,7 +141,8 @@ class ChatGPTPlanProvider(LLMProvider):
                             tool_calls=tuple(streamed_calls),
                             stop_reason="tool_calls",
                         )
-                    return result
+                    yield StreamChunk(response=result)
+                    return
         except ProviderError:
             raise
         except httpx.HTTPStatusError as exc:

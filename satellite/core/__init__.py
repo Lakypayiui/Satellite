@@ -3,18 +3,10 @@
 from satellite.core.errors import (
     ContractError,
     ContextError,
-    GraphValidationError,
     ProviderError,
     SatelliteError,
     SpecValidationError,
     ToolError,
-)
-from satellite.core.graph import (
-    Edge,
-    EdgeCondition,
-    ExecutionGraph,
-    GraphLimits,
-    Node,
 )
 from satellite.core.result import (
     AgentResult,
@@ -47,20 +39,11 @@ from satellite.core.proposal import (
     ProposedSkill,
     SkillProposal,
 )
-from satellite.core.plan import (
-    CapabilityGap,
-    ClarificationRequest,
-    ExecutionPlan,
-    PlanOption,
-    PlanOptions,
-    PlanStep,
-)
 
 __all__ = [
     "SatelliteError",
     "ContractError",
     "SpecValidationError",
-    "GraphValidationError",
     "ToolError",
     "ProviderError",
     "ContextError",
@@ -90,11 +73,6 @@ __all__ = [
     "Task",
     "TaskStatus",
     "TaskResult",
-    "EdgeCondition",
-    "Node",
-    "Edge",
-    "GraphLimits",
-    "ExecutionGraph",
     "ProposedAgent",
     "ProposedSkill",
     "CanCallEntry",
@@ -103,10 +81,4 @@ __all__ = [
     "SkillProposal",
     "ApprovalDecision",
     "ApprovalStatus",
-    "PlanStep",
-    "ExecutionPlan",
-    "CapabilityGap",
-    "ClarificationRequest",
-    "PlanOption",
-    "PlanOptions",
 ]

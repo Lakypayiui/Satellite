@@ -57,6 +57,22 @@ class ToolContext:
     is_child: bool = False
 
 
+def inside_execution_roots(policy, path: Path, tool_ctx) -> bool:
+    """True si ``path`` queda en el proyecto o en el workdir activo.
+
+    El workdir sólo llega al contexto si ``gitops.active_workdir`` lo validó (dentro del
+    proyecto o worktree registrado), así que un worktree hermano, fuera de la raíz, es
+    tan válido como el proyecto. No se añade a ``allowed_paths``: eso también permitiría
+    ejecutar sus binarios, cosa que no se permite ni en el proyecto.
+    """
+    if policy is None:
+        return True
+    if policy.check_path(path, tool_ctx.project_root):
+        return True
+    workdir = getattr(tool_ctx, "workdir", None)
+    return workdir is not None and policy.check_path(path, Path(workdir))
+
+
 def granted_for_this_call(argv: list[str] | tuple[str, ...], tool_ctx) -> bool:
     """True si una aprobación puntual concedió ese binario para esta llamada.
 

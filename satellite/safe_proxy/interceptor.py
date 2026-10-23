@@ -25,11 +25,13 @@ silencio ni se hace bypass.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import replace
 from pathlib import Path
+from typing import AsyncIterator
 
 from satellite.core.errors import ProviderError
-from satellite.core.messages import LLMRequest, LLMResponse, Message
+from satellite.core.messages import LLMRequest, LLMResponse, Message, StreamChunk
 from satellite.providers.base import LLMProvider
 from satellite.safe_proxy import config as sp_config
 from satellite.safe_proxy.core import SafeProxyCore
@@ -262,6 +264,57 @@ class SanitizingProvider(LLMProvider):
             raise SafeProxyPolicyError(exc.reason, exc.category) from exc
         response = await self.inner.complete(limpia)
         return restore_response(response, vault)
+
+    async def stream(self, request: LLMRequest) -> AsyncIterator[StreamChunk]:
+        """Streaming saneado: la petición sale limpia y cada delta vuelve restaurado.
+
+        Un marcador (``<EMAIL_1>``, ``obf_3``) puede llegar partido entre dos deltas, así
+        que la cola que aún podría ser un marcador se retiene hasta el siguiente delta.
+        """
+        core = self.core()
+        if core is None:
+            async for chunk in self.inner.stream(request):
+                yield chunk
+            return
+        try:
+            limpia, vault = sanitize_request(request, core)
+        except Blocked as exc:
+            core.audit(action="internal_blocked", category=exc.category)
+            raise SafeProxyPolicyError(exc.reason, exc.category) from exc
+        restorer = StreamRestorer(vault)
+        async for chunk in self.inner.stream(limpia):
+            if chunk.response is not None:
+                tail = restorer.flush()
+                if tail:
+                    yield StreamChunk(text=tail)
+                yield StreamChunk(response=restore_response(chunk.response, vault))
+                continue
+            text = restorer.feed(chunk.text)
+            if text:
+                yield StreamChunk(text=text)
+
+
+# Cola que todavía podría crecer hasta ser un marcador del vault.
+_PARTIAL_PLACEHOLDER_RE = re.compile(r"(?:<[A-Z_0-9]*|\w+)$")
+
+
+class StreamRestorer:
+    """Restaura marcadores en un texto que llega por trozos."""
+
+    def __init__(self, vault: Vault) -> None:
+        self.vault = vault
+        self._pending = ""
+
+    def feed(self, text: str) -> str:
+        data = self._pending + (text or "")
+        match = _PARTIAL_PLACEHOLDER_RE.search(data)
+        cut = match.start() if match else len(data)
+        self._pending = data[cut:]
+        return self.vault.restore(data[:cut]) if cut else ""
+
+    def flush(self) -> str:
+        data, self._pending = self._pending, ""
+        return self.vault.restore(data) if data else ""
 
 
 def sanitize_provider(provider: LLMProvider, core_loader=None) -> LLMProvider:

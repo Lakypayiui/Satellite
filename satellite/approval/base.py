@@ -74,6 +74,29 @@ class PendingApprovalPort(ApprovalPort):
         self._pending: dict[str, dict] = {}
         self._decisions: dict[str, ApprovalDecision] = {}
         self._events: dict[str, asyncio.Event] = {}
+        # Sink opcional: si está, cada petición y su cierre se publican como eventos
+        # (``approval_requested``/``approval_resolved``) y la UI no tiene que sondear.
+        self.sink = None
+
+    def _notify(self, kind: str, item: dict) -> None:
+        if self.sink is None:
+            return
+        from satellite.core.events import EventType, ExecutionEvent
+
+        try:
+            self.sink.emit(
+                ExecutionEvent(
+                    event_type=EventType(kind),
+                    task_id=str(item.get("task_id") or "system"),
+                    payload={
+                        "proposal_id": item.get("proposal_id", ""),
+                        "kind": item.get("kind", ""),
+                        "summary": item.get("summary", ""),
+                    },
+                )
+            )
+        except Exception:  # noqa: BLE001 — avisar nunca puede romper la aprobación
+            return
 
     async def request(self, proposal: object, ctx: ApprovalContext) -> ApprovalDecision:
         proposal_id = proposal_id_of(proposal, ctx)
@@ -89,6 +112,7 @@ class PendingApprovalPort(ApprovalPort):
             "summary": ctx.summary,
             "details": dict(ctx.details),
         }
+        self._notify("approval_requested", self._pending[proposal_id])
         try:
             if self.timeout_s is None:
                 await event.wait()
@@ -126,5 +150,7 @@ class PendingApprovalPort(ApprovalPort):
         return str(proposal_id) in self._pending
 
     def _forget(self, proposal_id: str) -> None:
-        self._pending.pop(proposal_id, None)
+        item = self._pending.pop(proposal_id, None)
         self._events.pop(proposal_id, None)
+        if item is not None:
+            self._notify("approval_resolved", item)

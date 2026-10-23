@@ -5,7 +5,7 @@ from pathlib import Path
 
 from satellite.cli.runtime_builder import build_runtime
 
-BASE_IDS = {"orchestrator", "agent_creator", "skill_curator"}
+BASE_IDS = {"pilot", "agent_creator", "skill_curator"}
 
 
 def write_config(project: Path, payload: dict | None = None) -> None:
@@ -22,9 +22,9 @@ def test_build_runtime_registers_base_agents(tmp_path: Path, monkeypatch) -> Non
     write_config(tmp_path)
     orchestrator, bus, store, registry = build_runtime(tmp_path)
     assert BASE_IDS <= {spec.id for spec in registry.all()}
-    assert (tmp_path / "home" / "agents" / "orchestrator.json").exists()
-    assert (tmp_path / "home" / "agents" / "orchestrator.system.txt").exists()
-    assert (tmp_path / "home" / "agents" / "orchestrator.user.txt").exists()
+    assert (tmp_path / "home" / "agents" / "pilot.json").exists()
+    assert (tmp_path / "home" / "agents" / "pilot.system.txt").exists()
+    assert (tmp_path / "home" / "agents" / "pilot.user.txt").exists()
 
 
 def test_desktop_operator_requires_human_surface_and_the_settings_flag(
@@ -115,13 +115,35 @@ def test_tampered_base_spec_is_restored(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SATELLITE_HOME", str(tmp_path / "home"))
     write_config(tmp_path)
     build_runtime(tmp_path)
-    target = tmp_path / "home" / "agents" / "orchestrator.json"
-    target.write_text('{"id": "orchestrator", "tampered": true}', encoding="utf-8")
+    target = tmp_path / "home" / "agents" / "pilot.json"
+    target.write_text('{"id": "pilot", "tampered": true}', encoding="utf-8")
     build_runtime(tmp_path)
     data = json.loads(target.read_text(encoding="utf-8"))
     assert data.get("tampered") is not True
-    assert data["id"] == "orchestrator"
+    assert data["id"] == "pilot"
     assert "tampered" not in data
+
+
+def test_a_stale_planner_spec_from_an_old_version_is_ignored(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SATELLITE_HOME", str(tmp_path / "home"))
+    write_config(tmp_path)
+    agents_dir = tmp_path / "home" / "agents"
+    agents_dir.mkdir(parents=True)
+    (agents_dir / "orchestrator.json").write_text(
+        json.dumps(
+            {
+                "id": "orchestrator",
+                "name": "Orchestrator",
+                "capabilities": ["plan_tasks"],
+                "prompt_ref": "orchestrator",
+            }
+        ),
+        encoding="utf-8",
+    )
+    _orchestrator, _bus, _store, registry = build_runtime(tmp_path)
+    assert "orchestrator" not in {spec.id for spec in registry.all()}
 
 
 def test_corrupt_catalog_spec_is_quarantined(tmp_path: Path, monkeypatch) -> None:

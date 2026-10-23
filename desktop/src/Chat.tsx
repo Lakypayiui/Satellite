@@ -12,7 +12,6 @@ import {
   DiagramView,
   ETIQUETA_EVENTO,
   MentionSuggestion,
-  PlanOptionsView,
   QueueItem,
   StreamItem,
   Turn,
@@ -31,6 +30,10 @@ interface Props {
   turnos: Turn[];
   permisos: Approval[];
   eventos: StreamItem[];
+  /** Índice SSE en el que empezó el turno en curso (la línea de estado mira lo posterior). */
+  desde: number;
+  /** Texto que el agente está escribiendo ahora mismo (streaming), o `null`. */
+  vivo: string | null;
   ocupado: boolean;
   cargando: boolean;
   bloqueado: boolean;
@@ -40,7 +43,6 @@ interface Props {
   runtimeListo: boolean;
   /** Marca de agua del logo en el área de mensajes (visible/oculta desde Apariencia). */
   marca: boolean;
-  plan: PlanOptionsView | null;
   /** Modo de permisos activo: ask | auto | unrestricted. */
   policyMode: string;
   onPolicyMode: (modo: string) => void;
@@ -50,8 +52,10 @@ interface Props {
     projectRoot: string,
     decision: string,
     feedback?: string,
+    reason?: string,
   ) => void;
-  onElegirPlan: (optionId: string) => void;
+  /** Responde a la pregunta abierta del agente (envía el texto como mensaje). */
+  onResponder: (texto: string) => void;
   /** Comando elegido con «/» inline; la app lo lanza con el mismo despachador de la paleta. */
   onComando: (spec: CommandSpecView) => void;
   onCancelar: () => void;
@@ -104,6 +108,10 @@ function detalleDe(evento: StreamItem["event"]): string {
 function enCurso(ultimo: StreamItem | null, t: ReturnType<typeof useT>): string {
   if (!ultimo) return t("chat.status.planning");
   const { event } = ultimo;
+  if (event.event_type === "retry" && event.payload?.kind === "provider") {
+    // El proveedor falló y se reintenta: que no parezca un turno colgado.
+    return `${t("chat.status.reconnecting")} (${event.payload.attempt}/${event.payload.max})`;
+  }
   // La etiqueta del evento sale del diccionario i18n; si el backend trae un tipo desconocido,
   // se usa la etiqueta genérica en vez de enseñar el identificador técnico.
   const etiqueta = t(ETIQUETA_EVENTO[event.event_type] ?? "event.unknown");
@@ -440,7 +448,12 @@ export function Chat(props: Props) {
   const [selCmd, setSelCmd] = useState(0);
 
   const pasos = pasosDelTurno(props.eventos);
-  const ultimo = props.eventos.at(-1) ?? null;
+  // Sólo los eventos del turno en curso: el último evento global podía ser del turno
+  // anterior («tarea terminada») justo al empezar el siguiente.
+  const delTurno = props.eventos.filter((item) => item.index > props.desde);
+  const ultimo = delTurno.at(-1) ?? null;
+  // «Pedir cambios» en un permiso: texto que explica qué cambiar, por propuesta.
+  const [cambiosPedidos, setCambiosPedidos] = useState<Record<string, string>>({});
 
   useEffect(() => {
     const el = fondo.current;
@@ -640,8 +653,7 @@ export function Chat(props: Props) {
     !props.cargando &&
     !props.ocupado &&
     props.turnos.length === 0 &&
-    pasos.length === 0 &&
-    !props.plan;
+    pasos.length === 0;
 
   return (
     <>
@@ -717,59 +729,56 @@ export function Chat(props: Props) {
           </div>
         )}
 
-        {props.turnos.map((turno, indice) => (
-          <div
-            key={`${indice}-${turno.task_id}`}
-            ref={indice === props.turnos.length - 1 ? ultimoTurno : undefined}
-            className={turno.role === "user" ? "turno usuario" : "turno agente"}
-          >
-            {turno.role !== "user" && turno.diagram && <Diagrama diagram={turno.diagram} />}
-            {turno.role === "user" ? turno.content : <Markdown texto={turno.content} />}
-          </div>
-        ))}
-
-        {props.plan && (
-          <div className="plan" role="region" aria-label={t("chat.plan.aria")}>
-            <div className="plan-cabecera">{t("chat.plan.header")}</div>
-            {props.plan.question && <p className="nota">{props.plan.question}</p>}
-            {props.plan.options.map((opcion) => {
-              const recomendada = opcion.id === props.plan?.recommendation;
-              return (
-                <div key={opcion.id} className="opcion-plan">
-                  <div className="opcion-plan-cabecera">
-                    <h3>{opcion.title}</h3>
-                    {recomendada && <span className="chip acento">{t("chat.plan.recommended")}</span>}
-                  </div>
-                  <p className="resumen">{opcion.summary}</p>
-                  {opcion.approach.length > 0 && (
-                    <ul className="pasos-plan">
-                      {opcion.approach.map((paso, indice) => (
-                        <li key={indice}>{paso}</li>
-                      ))}
-                    </ul>
-                  )}
-                  {(opcion.effort || opcion.risk || opcion.tradeoffs) && (
-                    <div className="meta-plan">
-                      {opcion.effort && (
-                        <span>{t("chat.plan.effort", { valor: opcion.effort })}</span>
-                      )}
-                      {opcion.risk && <span>{t("chat.plan.risk", { valor: opcion.risk })}</span>}
-                      {opcion.tradeoffs && <span>{opcion.tradeoffs}</span>}
-                    </div>
-                  )}
-                  <div className="acciones">
+        {props.turnos.map((turno, indice) => {
+          const esUltimo = indice === props.turnos.length - 1;
+          const pregunta =
+            turno.role !== "user" && turno.status === "needs_user_input" ? turno.question : null;
+          const clase =
+            turno.role === "user"
+              ? "turno usuario"
+              : turno.status === "needs_user_input"
+                ? "turno agente pregunta"
+                : "turno agente";
+          return (
+            <div
+              key={`${indice}-${turno.task_id}`}
+              ref={esUltimo ? ultimoTurno : undefined}
+              className={clase}
+            >
+              {turno.role !== "user" && turno.diagram && <Diagrama diagram={turno.diagram} />}
+              {turno.role === "user" ? turno.content : <Markdown texto={turno.content} />}
+              {/* Sólo la pregunta abierta (la del último turno) ofrece sus opciones. */}
+              {esUltimo && pregunta && pregunta.choices.length > 0 && (
+                <div className="acciones opciones-pregunta">
+                  {pregunta.choices.map((opcion) => (
                     <button
-                      className="primary"
+                      key={opcion.id}
+                      className={opcion.id === pregunta.recommended ? "primary" : ""}
                       disabled={props.ocupado || props.bloqueado}
-                      onClick={() => props.onElegirPlan(opcion.id)}
+                      title={opcion.detail || undefined}
+                      onClick={() => props.onResponder(opcion.label)}
                     >
-                      {t("chat.plan.choose")}
+                      {opcion.label}
+                      {opcion.id === pregunta.recommended ? " ★" : ""}
                     </button>
-                  </div>
+                  ))}
+                  <button
+                    className="quiet"
+                    disabled={props.ocupado || props.bloqueado}
+                    onClick={() => area.current?.focus()}
+                  >
+                    {t("chat.question.other")}
+                  </button>
                 </div>
-              );
-            })}
-            <p className="nota">{t("chat.plan.note")}</p>
+              )}
+            </div>
+          );
+        })}
+
+        {/* La respuesta mientras el agente la escribe. */}
+        {props.ocupado && props.vivo && (
+          <div className="turno agente vivo" aria-live="polite">
+            <Markdown texto={props.vivo} />
           </div>
         )}
 
@@ -851,24 +860,59 @@ export function Chat(props: Props) {
           {typeof permiso.details?.path === "string" && (
             <div className="detalle">{permiso.details.path}</div>
           )}
-          <div className="acciones">
-            {permiso.options.map((opcion) => (
+          {permiso.proposal_id in cambiosPedidos ? (
+            // «Pedir cambios» dice QUÉ cambiar: sin texto el agente no sabría qué hacer.
+            <div className="acciones">
+              <input
+                autoFocus
+                className="cambios-pedidos"
+                placeholder={t("chat.permission.changesPlaceholder")}
+                value={cambiosPedidos[permiso.proposal_id]}
+                onChange={(evento) =>
+                  setCambiosPedidos((previos) => ({
+                    ...previos,
+                    [permiso.proposal_id]: evento.target.value,
+                  }))
+                }
+              />
               <button
-                key={opcion}
-                className={opcion === "reject" ? "quiet" : "primary"}
+                className="primary"
+                disabled={!cambiosPedidos[permiso.proposal_id]?.trim()}
                 onClick={() =>
                   props.onPermiso(
                     permiso.proposal_id,
                     permiso.project_root,
-                    opcion === "once" || opcion === "session" ? "approve" : opcion,
-                    opcion === "once" || opcion === "session" ? opcion : "",
+                    "needs_changes",
+                    "",
+                    cambiosPedidos[permiso.proposal_id].trim(),
                   )
                 }
               >
-                {opcion in OPCIONES ? t(OPCIONES[opcion]) : opcion}
+                {t("chat.permission.sendChanges")}
               </button>
-            ))}
-          </div>
+            </div>
+          ) : (
+            <div className="acciones">
+              {permiso.options.map((opcion) => (
+                <button
+                  key={opcion}
+                  className={opcion === "reject" ? "quiet" : "primary"}
+                  onClick={() =>
+                    opcion === "needs_changes"
+                      ? setCambiosPedidos((previos) => ({ ...previos, [permiso.proposal_id]: "" }))
+                      : props.onPermiso(
+                          permiso.proposal_id,
+                          permiso.project_root,
+                          opcion === "once" || opcion === "session" ? "approve" : opcion,
+                          opcion === "once" || opcion === "session" ? opcion : "",
+                        )
+                  }
+                >
+                  {opcion in OPCIONES ? t(OPCIONES[opcion]) : opcion}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       ))}
 

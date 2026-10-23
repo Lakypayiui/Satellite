@@ -1,18 +1,17 @@
 """La conversación reciente como contexto del agente.
 
-Sin ella, un seguimiento como «explícamela» llegaba sin antecedente: la respuesta
-directa contestaba una obviedad y los nodos del grafo no sabían a qué se refería.
+Sin ella, un seguimiento como «explícamela» llegaba sin antecedente: el piloto
+contestaba una obviedad porque no sabía a qué se refería.
 """
 
 import asyncio
+import json
 from pathlib import Path
 
-from satellite.agents.registry import DefaultAgentRegistry
+from satellite.cli import runtime_builder
 from satellite.core.context_models import ContextBundle, ContextRefKind
 from satellite.core.task import Task
-from satellite.orchestration.base import GraphRunner, Planner, RuntimeServices
-from satellite.orchestration.orchestrator import DefaultOrchestrator
-from satellite.orchestration.runner import _with_conversation
+from satellite.orchestration.turn_context import with_conversation
 from satellite.providers.fake import FakeLLM
 
 
@@ -20,19 +19,20 @@ def run(coro):
     return asyncio.run(coro)
 
 
-class _PlannerQueNoPlanifica(Planner):
-    async def plan(self, task, catalog, context_hint=()):
-        raise AssertionError("una respuesta directa no debe planificar")
-
-
-class _RunnerQueNoCorre(GraphRunner):
-    async def run(self, graph, task, services):
-        raise AssertionError("una respuesta directa no debe ejecutar el grafo")
-
-
-def _orchestrator(provider) -> DefaultOrchestrator:
-    services = RuntimeServices(registry=DefaultAgentRegistry(), provider=provider)
-    return DefaultOrchestrator(_PlannerQueNoPlanifica(), _RunnerQueNoCorre(), services)
+def _runtime(tmp_path: Path, monkeypatch, provider: FakeLLM):
+    """Runtime real con el piloto y un proveedor de mentira."""
+    monkeypatch.setenv("SATELLITE_HOME", str(tmp_path / "home"))
+    project = tmp_path / "project"
+    project.mkdir()
+    cfg = project / ".satellite" / "config"
+    cfg.mkdir(parents=True)
+    (cfg / "config.json").write_text(
+        json.dumps({"name": "fake", "model": "fake-model"}), encoding="utf-8"
+    )
+    monkeypatch.setattr(runtime_builder, "_load_provider", lambda _root: provider)
+    monkeypatch.setattr(runtime_builder, "_role_provider", lambda _root, _role, default: default)
+    orchestrator, _bus, _store, _registry = runtime_builder.build_runtime(project)
+    return project, orchestrator
 
 
 def _historia(*turnos: tuple[str, str]) -> list[dict]:
@@ -46,16 +46,18 @@ def _enviado(provider: FakeLLM) -> str:
     return "\n".join(message.content for message in provider.requests[-1].messages)
 
 
-# --- respuesta directa ---
+# --- el turno del piloto ---
 
 
-def test_a_follow_up_reaches_the_model_with_the_previous_turns(tmp_path: Path) -> None:
+def test_a_follow_up_reaches_the_model_with_the_previous_turns(
+    tmp_path: Path, monkeypatch
+) -> None:
     """«Explícamela» tiene que llegar con la lista anterior en el prompt."""
     provider = FakeLLM(script=[{"content": "La carpeta contiene tres archivos: ..."}])
-    orch = _orchestrator(provider)
+    project, orch = _runtime(tmp_path, monkeypatch, provider)
     task = Task(
         goal="explícamela",
-        project_root=tmp_path,
+        project_root=project,
         metadata={
             "history": _historia(
                 ("user", "lista la carpeta Server"),
@@ -64,75 +66,49 @@ def test_a_follow_up_reaches_the_model_with_the_previous_turns(tmp_path: Path) -
         },
     )
 
-    result = run(orch._answer_direct(task))
+    result = run(orch.execute(task))
 
-    assert result.output["mode"] == "direct_reply"
+    assert result.output["mode"] == "pilot_reply"
     enviado = _enviado(provider)
-    assert "RECENT CONVERSATION" in enviado
+    assert "Recent conversation" in enviado
     assert "a.txt, b.txt, notas.md" in enviado
     assert "explícamela" in enviado
 
 
-def test_direct_answer_reads_a_named_file_on_demand(tmp_path: Path) -> None:
-    """Nombrar `test.py` no puede quedarse en el listado: se lee su contenido."""
-    from satellite.context.engine import DefaultContextEngine
-    from satellite.core.task import Task
-
-    (tmp_path / "test.py").write_text(
-        "# test.py\n\nprint('contenido unico')\n", encoding="utf-8"
-    )
-    provider = FakeLLM(script=[{"content": "Es un script de prueba."}])
-    services = RuntimeServices(
-        registry=DefaultAgentRegistry(),
-        provider=provider,
-        context=DefaultContextEngine(tmp_path),
-    )
-    orch = DefaultOrchestrator(_PlannerQueNoPlanifica(), _RunnerQueNoCorre(), services)
-
-    run(orch._answer_direct(Task(goal="¿Qué hace test.py?", project_root=tmp_path)))
-
-    enviado = _enviado(provider)
-    assert "FILE CONTENT READ FOR THIS QUESTION" in enviado
-    assert "contenido unico" in enviado
-
-
-def test_without_history_there_is_no_conversation_block(tmp_path: Path) -> None:
+def test_without_history_there_is_no_conversation_block(tmp_path: Path, monkeypatch) -> None:
     """El primer turno no paga tokens de conversación que no existe."""
     provider = FakeLLM(script=[{"content": "hola"}])
-    orch = _orchestrator(provider)
+    project, orch = _runtime(tmp_path, monkeypatch, provider)
 
-    run(orch._answer_direct(Task(goal="hola", project_root=tmp_path)))
+    run(orch.execute(Task(goal="hola", project_root=project)))
 
-    assert "RECENT CONVERSATION" not in _enviado(provider)
+    assert "Recent conversation" not in _enviado(provider)
 
 
-def test_direct_answer_receives_project_index_context(tmp_path: Path) -> None:
+def test_the_pilot_receives_project_index_context(tmp_path: Path, monkeypatch) -> None:
     provider = FakeLLM(script=[{"content": "Es una aplicación de ejemplo."}])
-    orch = _orchestrator(provider)
-    task = Task(
-        goal="¿De qué trata este proyecto?",
-        project_root=tmp_path,
-        metadata={"project_context": "README.md: aplicación de ejemplo"},
-    )
+    project, orch = _runtime(tmp_path, monkeypatch, provider)
+    (project / "README.md").write_text("# Demo\naplicación de ejemplo\n", encoding="utf-8")
 
-    run(orch._answer_direct(task))
+    run(orch.execute(Task(goal="¿De qué trata este proyecto?", project_root=project)))
 
-    assert "PROJECT CONTEXT" in _enviado(provider)
-    assert "aplicación de ejemplo" in _enviado(provider)
+    enviado = _enviado(provider)
+    assert "project index" in enviado
+    assert "aplicación de ejemplo" in enviado
 
 
-# --- nodos del grafo ---
+# --- el contexto del turno ---
 
 
-def test_the_node_context_carries_the_conversation(tmp_path: Path) -> None:
-    """El nodo la recibe como sección dinámica, delante del resto del contexto."""
+def test_the_turn_context_carries_the_conversation(tmp_path: Path) -> None:
+    """El agente la recibe como sección dinámica, delante del resto del contexto."""
     task = Task(
         goal="haz un resumen de eso",
         project_root=tmp_path,
         metadata={"history": _historia(("assistant", "a.txt, b.txt, notas.md"))},
     )
 
-    bundle = _with_conversation(ContextBundle(), task)
+    bundle = with_conversation(ContextBundle(), task)
 
     assert [section.ref.kind for section in bundle.sections] == [ContextRefKind.CONVERSATION]
     assert "a.txt, b.txt, notas.md" in bundle.sections[0].content
@@ -140,43 +116,4 @@ def test_the_node_context_carries_the_conversation(tmp_path: Path) -> None:
 
 def test_no_history_means_no_extra_section(tmp_path: Path) -> None:
     task = Task(goal="hola", project_root=tmp_path)
-    assert _with_conversation(ContextBundle(), task).sections == ()
-
-
-# --- respuesta final en prosa ---
-
-
-def _resultado(output: dict, summary: str = ""):
-    from satellite.core.task import TaskResult, TaskStatus
-
-    return TaskResult(task_id="t", status=TaskStatus.OK, summary=summary, output=output)
-
-
-def test_structured_output_is_written_up_for_the_user(tmp_path: Path) -> None:
-    """Un listado crudo se convierte en una frase, conservando los datos."""
-    provider = FakeLLM(
-        script=[{"content": "La carpeta contiene el modelo gemma y un instalador."}]
-    )
-    orch = _orchestrator(provider)
-    task = Task(goal="dime qué hace la carpeta", project_root=tmp_path)
-    result = _resultado({"estructura": [{"ruta": "a.txt", "tipo": "file"}]})
-
-    nuevo = run(orch._answer_in_prose(task, result))
-
-    assert nuevo.output["content"].startswith("La carpeta contiene")
-    assert nuevo.output["data"] == {"estructura": [{"ruta": "a.txt", "tipo": "file"}]}
-    assert nuevo.summary == nuevo.output["content"]
-    assert len(provider.requests) == 1
-
-
-def test_prose_output_does_not_cost_an_extra_call(tmp_path: Path) -> None:
-    """Si el nodo ya devolvió texto, no se llama al modelo (ni un token)."""
-    provider = FakeLLM(script=[{"content": "no debería usarse"}])
-    orch = _orchestrator(provider)
-    task = Task(goal="dime qué hace", project_root=tmp_path)
-    result = _resultado({"summary": "El proyecto es un servidor pequeño."})
-
-    mismo = run(orch._answer_in_prose(task, result))
-
-    assert mismo is result
-    assert provider.requests == []
+    assert with_conversation(ContextBundle(), task).sections == ()

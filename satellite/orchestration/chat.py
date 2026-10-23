@@ -7,6 +7,7 @@ que un seguimiento ("agrega esto") se entienda en el contexto de lo anterior.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,30 +35,8 @@ _RESERVED_CONTEXT_KEYS = ("context_refs", "context_missing", "context_external")
 
 _ROLE_LABEL = {"user": "user", "assistant": "assistant"}
 
-# Aceptación en texto libre de la alternativa recomendada del modo plan. Es una orden
-# de ejecución sobre el plan ya presentado: no se debe volver a pedir una elección ni
-# contestar desde el catálogo.
-_RECOMMENDED_RE = re.compile(
-    r"\brecomendad[ao]s?\b|\bla que (me )?recomiendas?\b|\bopci[oó]n recomendada\b",
-    re.IGNORECASE,
-)
-
-
-def _accepts_recommendation(text: str) -> bool:
-    """True si el mensaje acepta la alternativa recomendada del plan pendiente."""
-    return bool(_RECOMMENDED_RE.search(str(text or "")))
-
-
-def _option_instruction(option) -> str:
-    """Execution instruction derived from a plan-mode option (internal, English)."""
-    steps = (
-        "; ".join(getattr(option, "approach", ()) or ())
-        or "no detailed steps were provided"
-    )
-    return (
-        f"Chosen option: {getattr(option, 'title', '')}. "
-        f"{getattr(option, 'summary', '')} Steps: {steps}. Proceed with this option."
-    )
+# Tiempo máximo que se espera a los resúmenes pendientes al cerrar (TUI, CLI, evaluación).
+SUMMARY_FLUSH_TIMEOUT_S = 10.0
 
 
 def _lang_text(language: str, es: str, en: str) -> str:
@@ -87,6 +66,9 @@ class Turn:
     # Artifact produced by the turn (currently a rendered Mermaid diagram). Persisted
     # with the conversation so the graphical chat can show it again after a reload.
     diagram: dict | None = None
+    # Pregunta abierta con la que terminó el turno (``ask_user``): pregunta, opciones y
+    # recomendada. Se persiste para que la respuesta siga enlazada tras recargar.
+    question: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -95,17 +77,20 @@ class Turn:
             "task_id": self.task_id,
             "status": self.status,
             "diagram": dict(self.diagram) if isinstance(self.diagram, dict) else None,
+            "question": dict(self.question) if isinstance(self.question, dict) else None,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "Turn":
         raw_diagram = d.get("diagram")
+        raw_question = d.get("question")
         return cls(
             role=str(d.get("role", "")),
             content=str(d.get("content", "")),
             task_id=str(d.get("task_id", "")),
             status=str(d.get("status", "")),
             diagram=dict(raw_diagram) if isinstance(raw_diagram, dict) else None,
+            question=dict(raw_question) if isinstance(raw_question, dict) else None,
         )
 
 
@@ -125,6 +110,9 @@ class ChatReply:
     context: dict = field(default_factory=dict)
     # Artefacto del turno (diagrama renderizado o su fuente Mermaid) para la UI.
     diagram: dict | None = None
+    # Pregunta abierta del turno (pregunta, opciones, recomendada) para que la UI la
+    # pinte como pregunta y ofrezca las opciones.
+    question: dict | None = None
 
 
 def _diagram_payload(output: dict | None) -> dict | None:
@@ -177,9 +165,10 @@ class ChatSession:
         self._settings = settings
         self._discovered: int | None = None
         self.persist = persist
-        # Alternativas del modo plan pendientes de elección (se consumen en el
-        # siguiente mensaje: si acepta la recomendada, se ejecuta sin volver a pedir).
-        self._pending_plan = None  # PlanOptions | None
+        # Resúmenes de turno en curso: se guardan en segundo plano para no retrasar la
+        # respuesta (ni el turno siguiente), en orden y en la sesión de su turno.
+        self._background: set[asyncio.Task] = set()
+        self._last_summary: asyncio.Future | None = None
 
     # --- persistencia de la conversación ---
 
@@ -208,7 +197,6 @@ class ChatSession:
             except (KeyError, TypeError, ValueError):
                 continue
         self.history = loaded
-        self._pending_plan = None  # las alternativas no cruzan de sesión
         return len(loaded)
 
     def save(self) -> None:
@@ -224,7 +212,6 @@ class ChatSession:
     def reset(self) -> None:
         """Empieza una conversación nueva (y borra la guardada de la sesión activa)."""
         self.history.clear()
-        self._pending_plan = None
         if not self.persist:
             return
         path = conversation_path(self.project_root)
@@ -244,7 +231,6 @@ class ChatSession:
         """Crea una sesión vacía, la activa y devuelve su id."""
         session_id = self._store().create(name)
         self.history = []
-        self._pending_plan = None
         return session_id
 
     def use_session(self, target: str) -> str | None:
@@ -295,6 +281,48 @@ class ChatSession:
             load_turn_summaries(self.project_root, self.session_id)
         )
 
+    def _summarize_later(self, user_text: str, assistant_text: str, **kwargs) -> None:
+        """Guarda el resumen del turno sin hacer esperar la respuesta.
+
+        El resumen es otra llamada al modelo: esperarla dejaba la superficie «pensando»
+        uno o varios segundos con la respuesta ya escrita.
+        """
+        if not self.persist:
+            return
+        # La sesión se fija ahora: si el usuario cambia de conversación antes de que
+        # acabe, el resumen se guarda donde corresponde. Y se guarda después del
+        # anterior, para que la memoria conserve el orden de los turnos.
+        session_id = self.session_id
+        previous = self._last_summary
+
+        async def record() -> None:
+            try:
+                await self._record_turn_summary(
+                    user_text,
+                    assistant_text,
+                    session_id=session_id,
+                    after=previous,
+                    **kwargs,
+                )
+            except Exception:  # noqa: BLE001 — perder un resumen no rompe la conversación
+                pass
+
+        task = asyncio.ensure_future(record())
+        self._last_summary = task
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
+    async def flush_background(self, timeout: float = SUMMARY_FLUSH_TIMEOUT_S) -> None:
+        """Espera a los resúmenes pendientes (al cerrar la superficie o en la evaluación).
+
+        Si tardan más que ``timeout`` se sigue sin ellos. Los turnos no lo llaman: el
+        anterior ya va literal en el historial reciente.
+        """
+        pending = [task for task in self._background if not task.done()]
+        if not pending:
+            return
+        await asyncio.wait(pending, timeout=timeout)
+
     async def _record_turn_summary(
         self,
         user_text: str,
@@ -303,8 +331,14 @@ class ChatSession:
         task_id: str = "",
         status: str = "",
         language: str = "",
+        session_id: str | None = None,
+        after: asyncio.Future | None = None,
     ) -> None:
-        """Resume y guarda el par usuario→modelo. Nunca rompe el turno."""
+        """Resume y guarda el par usuario→modelo. Nunca rompe el turno.
+
+        ``after``: el resumen del turno anterior; se espera antes de guardar (no antes de
+        resumir) para que las entradas queden en orden.
+        """
         if not self.persist:
             return
         from satellite.context.turn_summaries import (
@@ -319,9 +353,11 @@ class ChatSession:
             assistant_text=assistant_text,
             language=language,
         )
+        if after is not None and not after.done():
+            await asyncio.wait({after})
         append_turn_summary(
             self.project_root,
-            self.session_id,
+            session_id if session_id is not None else self.session_id,
             make_entry(
                 user_summary=str(summary.get("user_summary") or ""),
                 assistant_summary=str(summary.get("assistant_summary") or ""),
@@ -365,6 +401,7 @@ class ChatSession:
         task_id: str = "",
         status: str = "",
         diagram: dict | None = None,
+        question: dict | None = None,
     ) -> Turn:
         """Añade un turno (sanitizado). El historial es **append-only**: nunca se
 
@@ -381,6 +418,7 @@ class ChatSession:
             task_id=task_id,
             status=status,
             diagram=diagram,
+            question=question,
         )
         self.history.append(turn)
         self.save()
@@ -568,18 +606,9 @@ class ChatSession:
         # turno de usuario más reciente (nunca el del asistente).
         language = detect_user_language(turn_text, history)
 
-        # Las alternativas del modo plan se consumen en este turno. Si el mensaje
-        # acepta la recomendada ("la recomendada pero crea el agente…"), se convierte
-        # en una orden de ejecución concreta: no se vuelve a pedir una elección ni se
-        # contesta desde el catálogo ni con charla genérica.
-        pending = self._pending_plan
-        self._pending_plan = None
         extra = dict(extra_metadata) if extra_metadata else {}
-        recommended = getattr(pending, "recommended", None)
-        if recommended is not None and _accepts_recommendation(text):
-            text = f"{text.rstrip()}\n{_option_instruction(recommended)}".strip()
-            extra["allow_plan_options"] = False
-            extra["execute_choice"] = True
+        # Si el turno anterior terminó con una pregunta, este mensaje es su respuesta.
+        answering = answer_context(self.pending_question(), turn_text)
         self.add("user", turn_text)
         self._autoname(turn_text)
 
@@ -628,6 +657,8 @@ class ChatSession:
         contexto = self._mention_report(menciones, informe_externo)
         if plan_mode:
             metadata["plan_mode"] = True
+        if answering is not None:
+            metadata["answering"] = answering
         if extra:
             metadata.update(extra)
         # Las claves de contexto las fija SÓLO este flujo, y el contenido externo va
@@ -643,7 +674,9 @@ class ChatSession:
         if bloque_externo:
             metadata["context_external"] = ApprovedExternalContext(bloque_externo)
 
-        # Memoria persistente: siempre viaja con el prompt (acotada en el render).
+        # Memoria persistente: siempre viaja con el prompt (acotada en el render). No se
+        # espera al resumen del turno anterior, que se guarda en segundo plano: ese turno
+        # ya viaja literal en el historial reciente.
         memoria = self._session_memory().strip()
         if memoria:
             metadata["session_memory"] = memoria
@@ -666,9 +699,7 @@ class ChatSession:
                 f"I couldn't complete it: {exc}",
             )
             self.add("assistant", text, status="failed")
-            await self._record_turn_summary(
-                turn_text, text, status="failed", language=language
-            )
+            self._summarize_later(turn_text, text, status="failed", language=language)
             return ChatReply(
                 text=text,
                 status="failed",
@@ -677,15 +708,6 @@ class ChatSession:
                 context=contexto,
             )
 
-        # El índice persistente lo adjunta el orquestador en cada turno. Si un turno que
-        # pregunta por el proyecto se queda sin ese contexto, se dice en vez de dejar que la
-        # respuesta parezca basada en archivos que no se leyeron.
-        if (
-            _missing_project_context(task)
-            and _is_explanatory(turn_text)
-            and not _result_reports_missing_context(result)
-        ):
-            notas.append(reply_fallback("no_project_context", language))
 
         reply_text = reply_from_result(result)
         if notas:
@@ -693,22 +715,22 @@ class ChatSession:
             # el usuario tiene que saberlo aunque la respuesta sea correcta.
             reply_text = "\n\n".join([*notas, reply_text])
         diagram = _diagram_payload(result.output)
+        question = _question_payload(result.output)
         self.add(
             "assistant",
             reply_text,
             task_id=result.task_id,
             status=result.status.value,
             diagram=diagram,
+            question=question,
         )
-        await self._record_turn_summary(
+        self._summarize_later(
             turn_text,
             reply_text,
             task_id=result.task_id,
             status=result.status.value,
             language=language,
         )
-        # Si este turno ofreció alternativas, quedan pendientes para el siguiente.
-        self._pending_plan = self._plan_from_result(result)
         return ChatReply(
             text=reply_text,
             task_id=result.task_id,
@@ -719,7 +741,17 @@ class ChatSession:
             metrics=result.metrics.to_dict() if result.metrics else {},
             context=contexto,
             diagram=diagram,
+            question=question,
         )
+
+    def pending_question(self) -> dict | None:
+        """La pregunta abierta: la del último turno, si fue del asistente y preguntó."""
+        if not self.history:
+            return None
+        last = self.history[-1]
+        if last.role != "assistant" or not isinstance(last.question, dict):
+            return None
+        return dict(last.question)
 
     def _mention_report(self, menciones, externo: list[dict]) -> dict:
         """Resumen de las menciones para la UI (mismo parseo que la TUI/escritorio)."""
@@ -854,66 +886,73 @@ class ChatSession:
             return "approved"
         return "denied"
 
-    @staticmethod
-    def _plan_from_result(result) -> object | None:
-        """Las ``PlanOptions`` que trae el resultado, si ofreció alternativas."""
-        output = result.output or {}
-        if output.get("mode") != "plan_options":
-            return None
-        payload = output.get("plan_options")
-        if not isinstance(payload, dict):
-            return None
-        try:
-            from satellite.core.plan import PlanOptions
 
-            return PlanOptions.from_dict(payload)
-        except Exception:  # noqa: BLE001 — datos incompletos: se ignora, no se inventa
-            return None
-
-    async def choose(self, option, *, approval: ApprovalPort | None = None) -> ChatReply:
-        """Elige una alternativa del modo plan y continúa con ella."""
-        # La elección explícita consume las alternativas pendientes.
-        self._pending_plan = None
-        # The conversation stores the user-visible choice, not the internal English
-        # instruction (which would otherwise skew later language detection).
-        record = str(getattr(option, "title", "") or "").strip() or _option_instruction(
-            option
-        )
-        return await self.send(
-            _option_instruction(option),
-            approval=approval,
-            # execute_choice: es una orden de ejecución, no una pregunta, así que el
-            # orquestador no debe atajarla con el catálogo ni con respuesta directa.
-            extra_metadata={"allow_plan_options": False, "execute_choice": True},
-            record_text=record,
-        )
+def _question_payload(output: dict | None) -> dict | None:
+    """Pregunta abierta del resultado (``ask_user``), o ``None``."""
+    if not isinstance(output, dict) or output.get("mode") != "question":
+        return None
+    question = str(output.get("question") or "").strip()
+    if not question:
+        return None
+    choices = [dict(c) for c in output.get("choices") or [] if isinstance(c, dict)]
+    return {
+        "question": question,
+        "choices": choices,
+        "recommended": str(output.get("recommended") or ""),
+    }
 
 
-def _missing_project_context(task: Task) -> bool:
-    """True si el orquestador no pudo adjuntar contexto de proyecto en este turno.
+_ORDINALS = {
+    "primero": 1, "primera": 1, "first": 1,
+    "segundo": 2, "segunda": 2, "second": 2,
+    "tercero": 3, "tercera": 3, "third": 3,
+    "cuarto": 4, "cuarta": 4, "fourth": 4,
+}
 
-    El propio orquestador deja ``project_context_status`` cuando arma el turno; un
-    orquestador que no lo haga (dobles de test, runtimes de terceros) no dispara el aviso.
+
+def _selected_choice(question: dict, text: str) -> dict | None:
+    """La opción que el usuario eligió de forma inequívoca (número, id u ordinal).
+
+    Sólo se resuelve lo que no admite dudas; cualquier otra respuesta viaja tal cual y
+    la interpreta el modelo con la pregunta delante.
     """
-    return str(task.metadata.get("project_context_status") or "") in ("empty", "unavailable")
+    choices = question.get("choices") or []
+    if not choices:
+        return None
+    raw = str(text or "").strip().strip(".!¡¿?").strip()
+    lowered = raw.lower()
+    for prefix in ("el ", "la ", "opción ", "opcion ", "option ", "the "):
+        if lowered.startswith(prefix):
+            lowered = lowered[len(prefix):].strip()
+    index = None
+    if lowered.isdigit():
+        index = int(lowered)
+    elif lowered in _ORDINALS:
+        index = _ORDINALS[lowered]
+    elif lowered in ("la recomendada", "recomendada", "recommended", "the recommended one"):
+        wanted = question.get("recommended") or ""
+        return next((dict(c) for c in choices if c.get("id") == wanted), None)
+    if index is not None:
+        return dict(choices[index - 1]) if 1 <= index <= len(choices) else None
+    for choice in choices:
+        if lowered in (str(choice.get("id", "")).lower(), str(choice.get("label", "")).lower()):
+            return dict(choice)
+    return None
 
 
-def _result_reports_missing_context(result: TaskResult) -> bool:
-    """True si el orquestador ya avisó de la falta de contexto en este turno.
-
-    Un overview sin índice lo responde el propio orquestador con ese aviso (sin llamar
-    al modelo); para no repetirlo, la conversación no lo vuelve a anteponer.
-    """
-    output = result.output or {}
-    return bool(output.get("project_context_missing"))
-
-
-def _is_explanatory(goal: str) -> bool:
-    """True si el goal pregunta por el proyecto (overview/README), no por una acción."""
-    from satellite.context.project_index import explain_goal
-    from satellite.orchestration.chat_detector import is_project_overview
-
-    return explain_goal(goal) or is_project_overview(goal)
+def answer_context(question: dict | None, text: str) -> dict | None:
+    """Lo que el piloto necesita saber de una respuesta: la pregunta y, si la hay, la opción."""
+    if not question:
+        return None
+    context = {
+        "question": question.get("question", ""),
+        "choices": question.get("choices") or [],
+        "recommended": question.get("recommended") or "",
+    }
+    selected = _selected_choice(question, text)
+    if selected is not None:
+        context["selected"] = selected
+    return context
 
 
 _OUTPUT_TEXT_KEYS = ("content", "answer", "text", "summary", "result", "output")

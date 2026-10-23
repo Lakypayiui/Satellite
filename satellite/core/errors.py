@@ -13,10 +13,6 @@ class SpecValidationError(ContractError):
     """Un AgentSpec inválido."""
 
 
-class GraphValidationError(ContractError):
-    """Un ExecutionGraph inválido."""
-
-
 class ToolError(SatelliteError):
     """Error durante la ejecución de una tool."""
 

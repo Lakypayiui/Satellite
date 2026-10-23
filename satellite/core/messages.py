@@ -240,3 +240,21 @@ class LLMResponse:
             response_id=str(d.get("response_id", "")),
             cache_diagnostics=dict(diagnostics) if isinstance(diagnostics, dict) else None,
         )
+
+
+@dataclass(frozen=True)
+class StreamChunk:
+    """Un trozo de una respuesta en streaming.
+
+    Los chunks intermedios llevan ``text`` (un delta de texto visible). El último lleva
+    ``response``: la respuesta completa y normalizada, con el texto entero, las
+    tool_calls, el uso y el ``stop_reason``. Quien consume el stream se queda con esa
+    respuesta final; los deltas sólo sirven para mostrar progreso.
+    """
+
+    text: str = ""
+    response: LLMResponse | None = None
+
+    @property
+    def final(self) -> bool:
+        return self.response is not None

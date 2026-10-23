@@ -36,10 +36,9 @@ LANGUAGE_AGENTS = tuple(
 )
 
 SHIPPED_PROMPTS = (
-    "orchestrator",
+    "pilot",
     "agent_creator",
     "skill_curator",
-    "plan_options",
     "pele_diagram_agent",
     "desktop_operator",
     "web_researcher",
@@ -50,7 +49,7 @@ def test_base_specs_are_the_shipped_agents() -> None:
     reg = DefaultAgentRegistry()
     reg.load_dir(SPECS)
     assert {spec.id for spec in reg.all()} == {
-        "orchestrator",
+        "pilot",
         "agent_creator",
         "skill_curator",
         "pele_diagram_agent",
@@ -88,7 +87,7 @@ def test_desktop_operator_is_a_primitive_agent() -> None:
 def test_base_specs_model_roles() -> None:
     reg = DefaultAgentRegistry()
     reg.load_dir(SPECS)
-    assert reg.get("orchestrator").model_role == "orchestrator"
+    assert reg.get("pilot").model_role == "orchestrator"
     assert reg.get("agent_creator").model_role == "creator"
     assert reg.get("skill_curator").model_role == "curator"
 
@@ -126,12 +125,13 @@ def test_no_retrieved_data_in_system() -> None:
         assert "«" not in system
 
 
-def test_orchestrator_prompt_declares_three_outputs() -> None:
-    prompts = DefaultPromptRegistry()
-    prompts.load_dir(PROMPTS)
-    text = prompts.get("orchestrator")
-    for token in ("capability_gap", "needs_clarification", '"type":"plan"'):
-        assert token in text
+def test_the_retired_planner_stays_reserved_but_is_not_shipped() -> None:
+    from satellite.kernel.manifest import RETIRED_AGENT_IDS
+
+    assert "orchestrator" in RETIRED_AGENT_IDS
+    assert "orchestrator" in RESERVED_AGENT_IDS
+    assert not (SPECS / "orchestrator.json").exists()
+    assert not (PROMPTS / "orchestrator.system.txt").exists()
 
 
 def test_demo_specs_are_not_loaded_from_specs_dir() -> None:

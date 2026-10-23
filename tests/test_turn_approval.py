@@ -5,12 +5,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from satellite.agents.base import Agent, AgentContext, AgentFactory
-from satellite.core.graph import ExecutionGraph, Node
 from satellite.core.result import AgentResult, AgentStatus
+from satellite.core.spec import AgentSpec
 from satellite.core.task import Task, TaskResult, TaskStatus
 from satellite.orchestration.base import RuntimeServices
 from satellite.orchestration.chat import ChatSession
-from satellite.orchestration.runner import DefaultGraphRunner
+from satellite.orchestration.pilot import PilotOrchestrator
 
 
 def run(coro):
@@ -52,17 +52,24 @@ def test_concurrent_chat_turns_keep_their_own_approval(tmp_path: Path) -> None:
 
 
 class _Agente:
+    """Piloto falso: guarda la aprobación que le llega en su contexto."""
+
     def __init__(self, approvals: list[object | None]) -> None:
         self.approvals = approvals
+        self.spec = AgentSpec(
+            id="pilot", name="pilot", capabilities=("converse",), prompt_ref="pilot"
+        )
+        self.tools: list = []
 
     async def execute(self, task: dict, ctx: AgentContext) -> AgentResult:
         self.approvals.append(ctx.approval)
         await asyncio.sleep(0.01)
         return AgentResult(
             node_id=ctx.node_id,
-            spec_id="worker",
+            spec_id="pilot",
             status=AgentStatus.OK,
             summary="ok",
+            output={"content": "ok"},
         )
 
 
@@ -74,31 +81,33 @@ class _Fabrica(AgentFactory):
         return _Agente(self.approvals)
 
 
-def _grafo() -> ExecutionGraph:
-    graph = ExecutionGraph(entry_node="n1")
-    graph.add_node(Node(id="n1", spec_id="worker"))
-    return graph
-
-
-def test_concurrent_graph_runs_resolve_the_task_approval(tmp_path: Path) -> None:
+def test_concurrent_pilot_turns_resolve_the_task_approval(tmp_path: Path) -> None:
     primero = object()
     segundo = object()
     approvals: list[object | None] = []
     services = RuntimeServices(factory=_Fabrica(approvals))
-    runner = DefaultGraphRunner(services.factory)
+    orchestrator = PilotOrchestrator(services)
     tarea_a = Task(goal="uno", project_root=tmp_path, approval=primero)
     tarea_b = Task(goal="dos", project_root=tmp_path, approval=segundo)
 
     async def escenario() -> None:
-        await asyncio.gather(
-            runner.run(_grafo(), tarea_a, services),
-            runner.run(_grafo(), tarea_b, services),
-        )
+        await asyncio.gather(orchestrator.execute(tarea_a), orchestrator.execute(tarea_b))
 
     run(escenario())
 
     assert {id(item) for item in approvals} == {id(primero), id(segundo)}
     assert services.approval is None
+
+
+def test_pilot_falls_back_to_the_service_approval(tmp_path: Path) -> None:
+    """Sin aprobación propia en la Task, el piloto usa el puerto del servicio."""
+    default = object()
+    approvals: list[object | None] = []
+    services = RuntimeServices(factory=_Fabrica(approvals), approval=default)
+
+    run(PilotOrchestrator(services).execute(Task(goal="uno", project_root=tmp_path)))
+
+    assert approvals == [default]
 
 
 def test_the_approval_is_runtime_only_and_is_not_persisted(tmp_path: Path) -> None:

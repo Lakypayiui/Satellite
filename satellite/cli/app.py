@@ -114,26 +114,24 @@ def plan(
     goal: str = typer.Argument(..., help="Tarea ambigua o a planificar."),
     project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
 ) -> None:
-    """Modo plan: propone alternativas (desarrolladas por el LLM) para elegir."""
+    """Modo plan: el piloto investiga sin cambiar nada y propone enfoques para elegir."""
     import asyncio
 
     from satellite.orchestration.chat import ChatSession
 
     orchestrator, _bus, _store, _registry = build_runtime(project, allow_desktop=True)
     chat = ChatSession(project.resolve(), orchestrator)
-    reply = asyncio.run(chat.send(goal, plan_mode=True))
+
+    async def plan_once():
+        reply = await chat.send(goal, plan_mode=True)
+        await chat.flush_background()
+        return reply
+
+    reply = asyncio.run(plan_once())
+    # Los enfoques llegan como pregunta con opciones (``ask_user``), ya en el texto.
     say(reply.text)
-    payload = (reply.output or {}).get("plan_options")
-    if not payload:
-        return
-    recommendation = payload.get("recommendation", "")
-    for index, option in enumerate(payload.get("options", []), 1):
-        mark = "  ★ recomendada" if option.get("id") == recommendation else ""
-        say(f"  {index}. {option.get('title')}{mark}")
-        say(f"     {option.get('summary')}")
-        for step in option.get("approach", []):
-            say(f"       · {step}")
-    say("  o describe tu propio enfoque en un mensaje nuevo.")
+    if reply.question:
+        say("  responde con el número o el nombre de un enfoque, o describe el tuyo.")
 
 
 @app.command()
@@ -265,13 +263,17 @@ def inspect(
     task_id: str = typer.Argument(..., help="Task id."),
     project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
 ) -> None:
-    """Show the serialized graph for a task."""
+    """Show what a task did: the pilot's tools and its delegations."""
     import asyncio
     import json
 
     store = FileStore(project.resolve())
-    graph = asyncio.run(store.load_graph(task_id))
-    say(json.dumps(graph.to_dict(), ensure_ascii=False, indent=2))
+    state = asyncio.run(store.load_state(task_id)) or {}
+    trace = state.get("trace")
+    if trace is None:
+        say(f"sin traza para {task_id} (la tarea no existe o es de una versión anterior)")
+        return
+    say(json.dumps({"status": state.get("status"), **trace}, ensure_ascii=False, indent=2))
 
 
 @app.command()
@@ -539,6 +541,11 @@ def doctor(
         registry = None
     if registry is not None:
         specs = registry.all()
+        if any(spec.id == "pilot" for spec in specs):
+            say("✓ orquestación: piloto (el modelo de llm.orchestrator debe soportar tools)")
+        else:
+            say("✗ orquestación: falta el agente 'pilot' en el catálogo")
+            ok = False
         say(f"✓ catálogo: {len(specs)} agentes")
         for spec in specs:
             say(f"    {spec.id}: {spec.capabilities}")
@@ -1259,16 +1266,7 @@ def queue_run(
             say(f"  {reply.status}: {reply.text}")
             if reply.error:
                 say(f"  error: {reply.error}")
-            plan_options = (reply.output or {}).get("plan_options")
-            if isinstance(plan_options, dict):
-                recommendation = plan_options.get("recommendation", "")
-                for index, option in enumerate(plan_options.get("options", []), 1):
-                    if not isinstance(option, dict):
-                        continue
-                    mark = " ★ recomendada" if option.get("id") == recommendation else ""
-                    say(f"    {index}. {option.get('title')}{mark}")
-                    if option.get("summary"):
-                        say(f"       {option.get('summary')}")
+        await chat.flush_background()
 
     asyncio.run(drenar())
     say("cola vacía")

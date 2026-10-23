@@ -123,7 +123,7 @@ CATALOG: tuple[CommandSpec, ...] = (
         surfaces=("tui", "cli", "desktop"), needs_runtime=True,
     ),
     CommandSpec(
-        "plan", "Conversación", "Modo plan: el LLM propone alternativas para elegir",
+        "plan", "Conversación", "Modo plan: investiga sin cambiar nada y propone enfoques",
         usage="/plan <tarea>",
         args=(ArgSpec("tarea", "Tarea ambigua a planificar"),),
         surfaces=("tui", "cli", "desktop"), needs_runtime=True,
@@ -212,7 +212,7 @@ CATALOG: tuple[CommandSpec, ...] = (
         surfaces=("tui", "cli", "desktop"),
     ),
     CommandSpec(
-        "inspect", "Tareas y trabajos", "Grafo serializado de una tarea",
+        "inspect", "Tareas y trabajos", "Qué hizo una tarea: tools y delegaciones",
         usage="/inspect <task_id>",
         args=(ArgSpec("task_id", "Id de la tarea"),),
         surfaces=("tui", "cli", "desktop"),

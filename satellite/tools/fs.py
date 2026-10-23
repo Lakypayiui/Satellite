@@ -8,7 +8,7 @@ from pathlib import Path
 
 from satellite.core.errors import ToolError
 from satellite.core.tool_models import ToolResult
-from satellite.tools.base import Tool, ToolContext
+from satellite.tools.base import Tool, ToolContext, inside_execution_roots
 
 READ_LIMIT_CHARS = 50_000
 
@@ -22,14 +22,19 @@ class ReadFileTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Reads the contents of a text file (UTF-8, up to ~50 KB)."
+        return (
+            "Reads the contents of a text file (UTF-8, up to ~50 KB). Pass start_line and "
+            "end_line (1-based, inclusive) to read only a range of a large file."
+        )
 
     @property
     def parameters_schema(self) -> dict:
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "File path, relative to the project."}
+                "path": {"type": "string", "description": "File path, relative to the project."},
+                "start_line": {"type": "integer", "description": "First line to read (1-based)."},
+                "end_line": {"type": "integer", "description": "Last line to read (inclusive)."},
             },
             "required": ["path"],
         }
@@ -40,12 +45,38 @@ class ReadFileTool(Tool):
             content = path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             return ToolResult(success=False, error=f"no se pudo leer '{path}': {exc}")
+        start, end = _line_range(arguments)
+        if start or end:
+            lines = content.splitlines()
+            total = len(lines)
+            first = max(1, start or 1)
+            last = min(total, end or total)
+            if first > total:
+                return ToolResult(
+                    success=False, error=f"el archivo tiene {total} líneas; pediste desde la {first}"
+                )
+            numbered = "\n".join(
+                f"{number}: {line}" for number, line in enumerate(lines[first - 1 : last], first)
+            )
+            content = f"[líneas {first}-{last} de {total}]\n{numbered}"
         truncated = len(content) > READ_LIMIT_CHARS
         if truncated:
             content = content[:READ_LIMIT_CHARS]
             note = f"\n\n[truncado: el archivo excede {READ_LIMIT_CHARS} caracteres]"
             content += note
         return ToolResult(success=True, output=content)
+
+
+def _line_range(arguments: dict) -> tuple[int, int]:
+    """``start_line``/``end_line`` válidos (0 = sin límite por ese lado)."""
+    values = []
+    for key in ("start_line", "end_line"):
+        try:
+            value = int(arguments.get(key) or 0)
+        except (TypeError, ValueError):
+            value = 0
+        values.append(max(0, value))
+    return values[0], values[1]
 
 
 class WriteFileTool(Tool):
@@ -207,7 +238,7 @@ def _resolve(raw: object, tool_ctx: ToolContext) -> Path:
     policy = tool_ctx.policy
     if (
         policy is not None
-        and not policy.check_path(path, tool_ctx.project_root)
+        and not inside_execution_roots(policy, path, tool_ctx)
         and not _granted_for_this_call(path, tool_ctx)
     ):
         from satellite.core.errors import PathOutsideProject
@@ -267,6 +298,8 @@ def _record_change(tool_ctx: ToolContext, path: Path, previous: str | None) -> b
     if not task_id or tool_ctx.project_root is None:
         return True  # sin tarea no hay a quién atribuirlo: no es un fallo
     try:
-        return ChangeLedger(tool_ctx.project_root).record(task_id, path, previous)
+        return ChangeLedger(tool_ctx.project_root).record(
+            task_id, path, previous, workdir=getattr(tool_ctx, "workdir", None)
+        )
     except OSError:
         return False

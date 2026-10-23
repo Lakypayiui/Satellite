@@ -146,31 +146,20 @@ def test_chat_records_each_turn_and_injects_the_memory(tmp_path: Path) -> None:
     assert "ahora agrega los tests" not in memory  # el turno actual aún no se resume
 
 
-def test_planner_and_runner_receive_the_memory(tmp_path: Path) -> None:
-    from satellite.agents.registry import DefaultAgentRegistry
+def test_the_pilot_context_receives_the_memory(tmp_path: Path) -> None:
     from satellite.core.context_models import ContextBundle
     from satellite.core.task import Task
-    from satellite.orchestration.planner import LLMPlanner
-    from satellite.orchestration.runner import _with_conversation
+    from satellite.orchestration.turn_context import with_conversation
 
     task = Task(
         goal="continúa",
         project_root=tmp_path,
         metadata={"session_memory": "MEMORIA-PERSISTENTE-XYZ"},
     )
-    bundle = _with_conversation(ContextBundle(), task)
+    bundle = with_conversation(ContextBundle(), task)
     assert any(
         "MEMORIA-PERSISTENTE-XYZ" in section.content for section in bundle.sections
     )
-
-    provider = FakeLLM(script=[{"content": '{"type":"capability_gap","missing":"x"}'}])
-    planner = LLMPlanner(provider, DefaultAgentRegistry())
-    try:
-        run(planner.plan(task, DefaultAgentRegistry()))
-    except Exception:  # el objetivo de la prueba es solo el prompt enviado
-        pass
-    enviado = "\n".join(message.content for message in provider.requests[0].messages)
-    assert "MEMORIA-PERSISTENTE-XYZ" in enviado
 
 
 def test_compaction_uses_the_persistent_summaries() -> None:

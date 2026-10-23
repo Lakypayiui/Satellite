@@ -43,11 +43,23 @@ async def press(prompt: Input, pilot, text: str) -> None:
     await pilot.pause()
 
 
+async def wait_for_screen(app: SatelliteTUI, pilot, kind: type, *, attempts: int = 60):
+    """Espera (acotado) a que la pantalla esté activa y compuesta.
+
+    ``push_screen`` activa la pantalla antes de componerla y, con la suite entera en
+    marcha, una sola pausa no basta: la aserción inmediata era intermitente.
+    """
+    for _ in range(attempts):
+        if isinstance(app.screen, ProviderScreen) and app.screen.query("#provider-apps"):
+            return app.screen
+        await pilot.pause(0.05)
+    assert isinstance(app.screen, kind), type(app.screen).__name__
+    return app.screen
+
+
 async def open_provider(app: SatelliteTUI, pilot) -> ProviderScreen:
     await press(app.query_one("#prompt", Input), pilot, "/provider")
-    screen = app.screen
-    assert isinstance(screen, ProviderScreen)
-    return screen
+    return await wait_for_screen(app, pilot, ProviderScreen)
 
 
 def test_provider_command_lists_catalog(tmp_path, monkeypatch) -> None:
@@ -299,8 +311,7 @@ def test_ctrl_p_opens_the_selector(tmp_path, monkeypatch) -> None:
         async with app.run_test() as pilot:
             await pilot.pause()
             await pilot.press("ctrl+p")
-            await pilot.pause()
-            assert isinstance(app.screen, ProviderScreen)
+            await wait_for_screen(app, pilot, ProviderScreen)
 
     asyncio.run(scenario())
 

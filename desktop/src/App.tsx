@@ -22,6 +22,7 @@ import {
   type ThemeId,
 } from "../electron/themes";
 import {
+  ApiError,
   Approval,
   ChangeSet,
   ChatReply,
@@ -34,9 +35,7 @@ import {
   JobInfo,
   JobOutput,
   JobWaitView,
-  MentionSummary,
   ParityView,
-  PlanOptionsView,
   QueueItem,
   SavedProviderView,
   SessionInfo,
@@ -236,10 +235,16 @@ export function App() {
   const [paletaInicial, setPaletaInicial] = useState<string | null>(null);
   const [confirmacion, setConfirmacion] = useState<Confirmacion | null>(null);
   const [detalle, setDetalle] = useState<Detalle | null>(null);
-  // Alternativas del modo plan pendientes de elección (las ofrece el runtime).
-  const [plan, setPlan] = useState<PlanOptionsView | null>(null);
   // Asistente inicial (proyecto + proveedor); se abre solo la primera vez.
   const onboardingAuto = useRef(false);
+  // Respuesta en vivo (TEXT_DELTA) del turno en curso: texto del segmento actual.
+  const [vivo, setVivo] = useState<{ segment: number; text: string } | null>(null);
+  // Turno que corre en el backend sin que esta ventana lo lanzara (p. ej. tras recargar).
+  const [turnoRemoto, setTurnoRemoto] = useState(false);
+  // Índice SSE en el que empezó el turno: la línea de estado sólo mira eventos posteriores.
+  const [desde, setDesde] = useState(0);
+  const ultimoIndice = useRef(0);
+  const ocupadoRef = useRef(false);
   // Sin carpeta elegida el "proyecto" sería la propia carpeta de Satellite: la ejecución se
   // bloquea (el backend lo hace cumplir igual; aquí es para no ofrecer lo que va a fallar).
   const bloqueado = Boolean(status && !status.project_explicit);
@@ -326,7 +331,6 @@ export function App() {
       listaTareas,
       listaTrabajos,
       vistaConfig,
-      vistaPlan,
       vistaGit,
       vistaArboles,
       vistaCola,
@@ -337,19 +341,18 @@ export function App() {
       api<{ tasks: TaskItem[] }>("/tasks"),
       api<{ jobs: JobInfo[] }>("/jobs"),
       api<ConfigView>("/config"),
-      api<{ plan: PlanOptionsView | null }>("/plan"),
       api<GitStatusView>("/git/status"),
       api<WorktreesView>("/worktrees"),
       api<{ items: QueueItem[] }>("/queue"),
     ]);
     setStatus(estado);
+    setTurnoRemoto(Boolean(estado.turn?.running) && !ocupadoRef.current);
     setProyectos(listaProyectos.recents);
     setSesiones(listaSesiones.sessions);
     setSesionActiva(listaSesiones.current);
     setTareas(listaTareas.tasks);
     setTrabajos(listaTrabajos.jobs);
     setConfig(vistaConfig);
-    setPlan(vistaPlan.plan);
     setGit(vistaGit);
     setArboles(vistaArboles);
     setCola(vistaCola.items);
@@ -393,8 +396,36 @@ export function App() {
     })();
     const cortarCaida = bridge.onBackendDown((mensaje) => setCaido(mensaje));
     const cortarEventos = bridge.subscribe(0, (item) => {
-      setEventos((previos) => [...previos, item].slice(-MAX_EVENTOS));
       const tipo = item.event.event_type;
+      if (typeof item.index === "number") {
+        ultimoIndice.current = Math.max(ultimoIndice.current, item.index);
+      }
+      // Los deltas de texto (streaming) alimentan la burbuja en vivo, no la actividad.
+      if (tipo === "text_delta") {
+        const payload = item.event.payload ?? {};
+        const segmento = typeof payload.segment === "number" ? payload.segment : 0;
+        const trozo = typeof payload.text === "string" ? payload.text : "";
+        setVivo((previo) =>
+          previo && previo.segment === segmento
+            ? { segment: segmento, text: previo.text + trozo }
+            : { segment: segmento, text: trozo },
+        );
+        return;
+      }
+      // Un permiso pendiente se anuncia por evento: no hace falta sondear.
+      if (tipo === "approval_requested" || tipo === "approval_resolved") {
+        void recargarPermisos().catch(() => {});
+        return;
+      }
+      if (tipo === "task_finished") {
+        setTurnoRemoto(false);
+        // Un turno que no lanzó esta ventana: su respuesta llega recargando la sesión.
+        if (!ocupadoRef.current) {
+          setVivo(null);
+          void cargarTodo().catch(() => {});
+        }
+      }
+      setEventos((previos) => [...previos, item].slice(-MAX_EVENTOS));
       if (tipo === "task_finished" || tipo === "task_started") {
         const tareaId = item.event.task_id;
         void api<{ tasks: TaskItem[] }>("/tasks")
@@ -406,8 +437,7 @@ export function App() {
             void api<GitStatusView>("/git/status").then(setGit).catch(() => {});
             const tarea = r.tasks.find((elemento) => elemento.task_id === tareaId);
             if (tarea && tarea.changes.length > 0) {
-              setPestana("cambios");
-              setDer(true);
+              // Se marca para revisar sin abrir el cajón: la respuesta es lo primero.
               setAtencionCambios(true);
               void api<ChangeSet>(`/tasks/${encodeURIComponent(tareaId)}/changes`)
                 .then(setCambios)
@@ -426,16 +456,15 @@ export function App() {
     // proyecto y seguir escuchando el anterior dejaba el panel desactualizado.
   }, [cargarTodo, recargarPermisos, status?.project_root]);
 
-  // Con un turno en marcha el runtime puede estar esperando un permiso, y eso no emite
-  // evento: se mira la lista de pendientes y los trabajos a intervalos cortos.
+  // Los permisos llegan por evento (approval_requested). Los trabajos en segundo plano no
+  // emiten eventos: se miran a intervalos cortos mientras hay un turno.
   useEffect(() => {
     if (!ocupado) return;
     const timer = setInterval(() => {
-      void recargarPermisos().catch(() => {});
       void api<{ jobs: JobInfo[] }>("/jobs").then((r) => setTrabajos(r.jobs)).catch(() => {});
     }, CADA_MS);
     return () => clearInterval(timer);
-  }, [ocupado, recargarPermisos]);
+  }, [ocupado]);
 
   // Router interno de Ajustes: el hash refleja la categoría/página abierta y el historial del
   // navegador (atrás/adelante) vuelve a aplicar la ruta.
@@ -527,6 +556,9 @@ export function App() {
     }
     setAviso(null);
     setOcupado(true);
+    ocupadoRef.current = true;
+    setDesde(ultimoIndice.current);
+    setVivo(null);
     // El mensaje del usuario se muestra de inmediato; la respuesta del backend lo
     // reconciliará con el turno persistido al terminar (cargarTodo reemplaza la lista).
     const optimista: Turn = {
@@ -538,10 +570,28 @@ export function App() {
     };
     setTurnos((previos) => [...previos, optimista]);
     try {
-      const respuesta = await api<{ error?: string | null; context?: MentionSummary }>("/messages", {
+      const respuesta = await api<ChatReply>("/messages", {
         method: "POST",
         body: { text: texto, plan_mode: planMode },
       });
+      // La respuesta se pinta en cuanto llega; la recarga completa va después, de fondo.
+      if (!respuesta.cancelled) {
+        const respuestaTurno: Turn = {
+          role: "assistant",
+          content: respuesta.text,
+          task_id: respuesta.task_id,
+          status: respuesta.status,
+          diagram: respuesta.diagram ?? null,
+          question: respuesta.question ?? null,
+        };
+        setTurnos((previos) => [
+          ...previos.map((turno) =>
+            turno === optimista ? { ...turno, status: "", task_id: respuesta.task_id } : turno,
+          ),
+          respuestaTurno,
+        ]);
+      }
+      setVivo(null);
       if (respuesta.error) setAviso(respuesta.error);
       else if (
         respuesta.context &&
@@ -555,40 +605,24 @@ export function App() {
         // autorizó), qué es ambiguo, qué es sensible/excluido y qué no se encontró.
         setAviso(t("app.context.summary", { resumen: respuesta.context.summary }));
       }
-      await cargarTodo();
+      void cargarTodo().catch((exc) => setAviso(error(exc)));
     } catch (exc) {
-      setAviso(error(exc));
+      if (exc instanceof ApiError && exc.code === "turn_running") {
+        // El backend ya tiene un turno (otra ventana, o tras recargar): se encola.
+        setTurnos((previos) => previos.filter((turno) => turno !== optimista));
+        await encolar(texto, planMode);
+        setAviso(t("app.busy.enqueue"));
+      } else {
+        setAviso(error(exc));
+      }
     } finally {
+      setVivo(null);
       setOcupado(false);
+      ocupadoRef.current = false;
       void recargarPermisos().catch(() => {});
     }
     // Terminado el turno, si hay instrucciones encoladas se ejecuta la siguiente.
     void drenarCola();
-  }
-
-  /** Elige una alternativa del modo plan (misma operación que el modal de la TUI). */
-  async function elegirPlan(optionId: string) {
-    if (bloqueado) {
-      setAviso(t("app.blocked.run"));
-      setPantalla("asistente");
-      return;
-    }
-    setAviso(null);
-    setOcupado(true);
-    try {
-      const respuesta = await api<ChatReply>("/plan", {
-        method: "POST",
-        body: { option_id: optionId },
-      });
-      if (respuesta.error) setAviso(respuesta.error);
-      await cargarTodo();
-    } catch (exc) {
-      // Se conserva la lista de alternativas: el usuario puede reintentar.
-      setAviso(error(exc));
-    } finally {
-      setOcupado(false);
-      void recargarPermisos().catch(() => {});
-    }
   }
 
   /** Corta el turno en curso. Lo ya hecho queda: no se finge que la tarea no pasó. */
@@ -608,7 +642,8 @@ export function App() {
     } catch (exc) {
       setAviso(error(exc));
     } finally {
-      setOcupado(false);
+      // «Ocupado» lo libera el propio turno cuando su petición termina: liberarlo aquí
+      // dejaba enviar otro mensaje mientras el anterior seguía en vuelo.
       await recargarPermisos().catch(() => {});
     }
   }
@@ -628,7 +663,6 @@ export function App() {
       setSesiones(respuesta.sessions);
       setSesionActiva(respuesta.session_id);
       setTurnos([]);
-      setPlan(null);
       setAtencionCambios(false);
     } catch (exc) {
       setAviso(error(exc));
@@ -642,8 +676,6 @@ export function App() {
       });
       setSesionActiva(id);
       setTurnos(respuesta.turns);
-      // El backend no arrastra las alternativas del modo plan entre conversaciones.
-      setPlan(null);
       setAtencionCambios(false);
     } catch (exc) {
       setAviso(error(exc));
@@ -734,7 +766,6 @@ export function App() {
       } else {
         setTurnos([]);
       }
-      setPlan(null);
       setAtencionCambios(false);
       setAviso(t("sidebar.deleted", { nombre }));
     } catch (exc) {
@@ -763,11 +794,12 @@ export function App() {
     projectRoot: string,
     decision: string,
     feedback = "",
+    reason = "",
   ) {
     try {
       await api(`/approvals/${proposalId}`, {
         method: "POST",
-        body: { decision, feedback, project_root: projectRoot },
+        body: { decision, feedback, reason, project_root: projectRoot },
       });
       await recargarPermisos();
     } catch (exc) {
@@ -1263,8 +1295,10 @@ export function App() {
           const id = arg("task_id");
           const datos = await api<TaskDetailView>(`/tasks/${encodeURIComponent(id)}`);
           setDetalle({
-            titulo: t("app.graph.title", { id }),
-            texto: JSON.stringify(datos.graph ?? datos.graph_error ?? {}, null, 2),
+            titulo: t("app.trace.title", { id }),
+            texto: datos.trace
+              ? JSON.stringify(datos.trace, null, 2)
+              : t("app.trace.none", { id }),
           });
           break;
         }
@@ -1839,20 +1873,21 @@ export function App() {
             turnos={turnos}
             permisos={permisos}
             eventos={eventos}
-            ocupado={ocupado}
+            desde={desde}
+            vivo={vivo?.text ?? null}
+            ocupado={ocupado || turnoRemoto}
             cargando={cargando}
             bloqueado={bloqueado}
             ruta={ruta}
             runtimeListo={Boolean(status?.runtime_ready)}
             marca={marca}
-            plan={plan}
             policyMode={config?.policy_mode ?? "ask"}
             onPolicyMode={(modo) => void cambiarAjustes({ policy_mode: modo })}
             onEnviar={(texto, planMode) => void enviar(texto, planMode)}
-            onPermiso={(id, projectRoot, decision, feedback) =>
-              void decidirPermiso(id, projectRoot, decision, feedback)
+            onPermiso={(id, projectRoot, decision, feedback, reason) =>
+              void decidirPermiso(id, projectRoot, decision, feedback, reason)
             }
-            onElegirPlan={(id) => void elegirPlan(id)}
+            onResponder={(texto) => void enviar(texto, false)}
             onComando={(spec) => lanzarComando(spec)}
             onCancelar={() => void cancelarTurno()}
             onBloqueado={() => setPantalla("asistente")}

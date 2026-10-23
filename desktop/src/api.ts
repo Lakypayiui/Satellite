@@ -24,6 +24,8 @@ export interface Status {
   project_explicit: boolean;
   /** Hay proveedor resoluble (lo que hace falta para que el runtime funcione). */
   provider_configured: boolean;
+  /** Turno en curso según el backend (sobrevive a recargar la ventana). */
+  turn?: { running: boolean; started_at?: number | null };
 }
 
 export interface SessionInfo {
@@ -62,12 +64,27 @@ export interface DiagramView {
   diagram_type?: string;
 }
 
+/** Una opción de una pregunta del agente. */
+export interface QuestionChoice {
+  id: string;
+  label: string;
+  detail?: string;
+}
+
+/** Pregunta abierta con la que terminó un turno (el siguiente mensaje la responde). */
+export interface QuestionView {
+  question: string;
+  choices: QuestionChoice[];
+  recommended?: string;
+}
+
 export interface Turn {
   role: string;
   content: string;
   task_id: string;
   status: string;
   diagram?: DiagramView | null;
+  question?: QuestionView | null;
 }
 
 export interface ChatReply {
@@ -78,31 +95,15 @@ export interface ChatReply {
   compaction?: unknown;
   /** @menciones del mensaje enviado: lo adjuntado y lo que no se encontró. */
   context?: MentionSummary;
-  /** Alternativas del modo plan, si la respuesta las trae (`null` = no hay ninguna). */
-  plan?: PlanOptionsView | null;
   /** Salida completa del runtime (incluye el diagrama, si lo hay). */
   output?: Record<string, unknown> | null;
   /** Diagrama del turno, si la respuesta produjo uno. */
   diagram?: DiagramView | null;
-}
-
-/** Una alternativa concreta del modo plan. */
-export interface PlanOptionView {
-  id: string;
-  title: string;
-  summary: string;
-  approach: string[];
-  tradeoffs: string;
-  effort: string;
-  risk: string;
-}
-
-/** Alternativas propuestas para una tarea ambigua (modo plan). */
-export interface PlanOptionsView {
-  type?: string;
-  question: string;
-  options: PlanOptionView[];
-  recommendation: string;
+  /** Pregunta abierta del turno, si el agente preguntó. */
+  question?: QuestionView | null;
+  /** El turno se canceló (la respuesta no trae texto). */
+  cancelled?: boolean;
+  note?: string;
 }
 
 /** Referencia externa de una @mención y en qué quedó su aprobación. */
@@ -325,12 +326,27 @@ export interface ContextView {
   window_source: string;
 }
 
-/** Detalle de una tarea: lo que se guarda, su grafo, sus eventos y sus cambios. */
+/** Lo que hizo un turno: tools del piloto y delegaciones. */
+export interface TaskTrace {
+  pilot_tools: { tool: string; ok: boolean }[];
+  delegations: {
+    agent_id: string;
+    status: string;
+    ok: boolean;
+    tokens_in: number;
+    tokens_out: number;
+    files_touched: string[];
+    budget_exhausted: boolean;
+    error: string | null;
+  }[];
+}
+
+/** Detalle de una tarea: lo que se guarda, su traza, sus eventos y sus cambios. */
 export interface TaskDetailView {
   task_id: string;
   task?: Record<string, unknown>;
-  graph?: Record<string, unknown>;
-  graph_error?: string;
+  /** ``null`` en tareas de versiones anteriores (sin traza guardada). */
+  trace?: TaskTrace | null;
   state?: Record<string, unknown>;
   events?: {
     event_type: string;

@@ -16,7 +16,7 @@ from satellite.agents.base import (
 )
 from satellite.context.base import ContextEngine
 from satellite.validation.base import CheckResult, ValidationContext, Validator
-from satellite.orchestration.base import GraphRunner, Orchestrator, Planner
+from satellite.orchestration.base import Orchestrator
 from satellite.events.base import EventSink
 from satellite.security.base import SecurityPolicy
 from satellite.persistence.base import Store
@@ -27,7 +27,6 @@ from satellite.core.result import AgentResult, AgentStatus
 from satellite.core.spec import AgentSpec
 from satellite.core.task import Task, TaskResult
 from satellite.core.context_models import ContextBundle, ContextLimits, ContextSnapshot
-from satellite.core.graph import ExecutionGraph
 from satellite.core.events import ExecutionEvent, EventType
 from satellite.core.errors import ToolError
 
@@ -120,16 +119,6 @@ class FakeValidator(Validator):
         return CheckResult(validator_id="v1", ok=True)
 
 
-class FakePlanner(Planner):
-    async def plan(self, task: Task, catalog: AgentRegistry, context_hint: tuple = ()) -> ExecutionGraph:
-        return ExecutionGraph(entry_node="n1")
-
-
-class FakeGraphRunner(GraphRunner):
-    async def run(self, graph: ExecutionGraph, task: Task, services) -> TaskResult:
-        return TaskResult(task_id=task.task_id, status=task_status_ok())
-
-
 def task_status_ok():
     from satellite.core.task import TaskStatus
     return TaskStatus.OK
@@ -161,12 +150,6 @@ class FakeStore(Store):
         pass
 
     async def load_task(self, task_id: str) -> Task:
-        raise KeyError(task_id)
-
-    async def save_graph(self, task_id: str, graph: ExecutionGraph) -> None:
-        pass
-
-    async def load_graph(self, task_id: str) -> ExecutionGraph:
         raise KeyError(task_id)
 
     async def append_event(self, task_id: str, event: ExecutionEvent) -> None:
@@ -204,10 +187,6 @@ def test_abcs_not_instantiable() -> None:
     with pytest.raises(TypeError):
         Validator()
     with pytest.raises(TypeError):
-        Planner()
-    with pytest.raises(TypeError):
-        GraphRunner()
-    with pytest.raises(TypeError):
         Orchestrator()
     with pytest.raises(TypeError):
         EventSink()
@@ -237,8 +216,6 @@ def test_minimal_subclasses_instantiate() -> None:
     FakePromptRegistry()
     FakeContextEngine()
     FakeValidator()
-    FakePlanner()
-    FakeGraphRunner()
     FakeOrchestrator()
     FakeEventSink()
     FakeSecurityPolicy()

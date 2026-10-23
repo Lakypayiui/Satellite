@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import re
+import time
 from dataclasses import asdict, is_dataclass
 from enum import Enum
 from pathlib import Path
@@ -209,8 +210,8 @@ class DesktopBackend:
         # Si el proyecto lo eligió el usuario (para el onboarding) y alternativas del modo
         # plan pendientes de elección, por proyecto.
         self._explicit_project = project_root is not None
-        self._plans: dict[str, Any] = {}
         self._turnos: dict[str, asyncio.Task] = {}
+        self._turn_started: dict[str, float] = {}
         self._cancelados: set[str] = set()
         self._recents_path = (
             Path(recents_path)
@@ -368,6 +369,14 @@ class DesktopBackend:
                 "status_unavailable", f"no se pudo leer el estado: {redact_text(str(exc))}", 503
             ) from exc
         data["runtime_ready"] = self.bridge(project_root).attached
+        # El turno en curso lo sabe el backend, no la ventana: tras recargar a mitad de
+        # un turno la app debe verlo ocupado.
+        key = str(self.resolve(project_root))
+        turno = self._turnos.get(key)
+        data["turn"] = {
+            "running": bool(turno is not None and not turno.done()),
+            "started_at": self._turn_started.get(key),
+        }
         # Para el onboarding: si el proyecto lo eligió una persona y si hay proveedor,
         # en vez de deducirlo de mensajes de error.
         data["project_explicit"] = self._explicit_project
@@ -488,6 +497,8 @@ class DesktopBackend:
         if port is None:
             port = DesktopApproval()
             self._approvals[key] = port
+        # Cada permiso pendiente se anuncia por SSE: la app no tiene que sondear.
+        port.sink = self.bridge(project_root)
         return port
 
     def pending_approvals(self, project_root=None) -> list[dict]:
@@ -596,7 +607,6 @@ class DesktopBackend:
     def new_session(self, name: str = "", project_root=None) -> dict:
         self._require_project()
         self.require_runtime(project_root)
-        self._plans.pop(str(self.resolve(project_root)), None)
         session_id = self.session(project_root).new_session(name)
         return {"session_id": session_id, "sessions": self.sessions(project_root)}
 
@@ -606,8 +616,6 @@ class DesktopBackend:
         session_id = session.use_session(target)
         if session_id is None:
             raise BackendError("session_not_found", f"no existe la sesión {target!r}", 404)
-        # Las alternativas del modo plan eran de la conversación anterior: no se arrastran.
-        self._plans.pop(str(self.resolve(project_root)), None)
         return {
             "session_id": session_id,
             "turns": self.session_turns(session_id, project_root),
@@ -659,13 +667,10 @@ class DesktopBackend:
             raise BackendError(
                 "session_not_found", f"no existe la sesión {session_id!r}", 404
             )
-        era_activa = store.active_id() == session_id
         try:
             self.session(project_root).delete_session(session_id)
         except Exception:  # noqa: BLE001 — el puntero del store es suficiente
             store.delete(session_id)
-        if era_activa:
-            self._plans.pop(str(self.resolve(project_root)), None)
         return {
             "session_id": session_id,
             "current": store.active_id(),
@@ -683,8 +688,6 @@ class DesktopBackend:
         destino = store.next_active_after_archive(archived_id)
         if destino is None:
             return
-        # Las alternativas del modo plan eran de la conversación anterior: no se arrastran.
-        self._plans.pop(str(self.resolve(project_root)), None)
         try:
             session = self.session(project_root)
             if session.use_session(destino) is None:
@@ -738,60 +741,17 @@ class DesktopBackend:
             "svg": svg,
         }
 
-    # --- modo plan (alternativas para elegir) ---
+    # --- conversación ---
 
-    def _remember_plan(self, reply, project_root=None) -> dict | None:
-        """Recuerda las alternativas del modo plan, o las olvida si la respuesta no trae."""
-        key = str(self.resolve(project_root))
-        output = getattr(reply, "output", None)
-        payload: dict | None = None
-        if isinstance(output, dict) and output.get("mode") == "plan_options":
-            candidate = output.get("plan_options")
-            payload = candidate if isinstance(candidate, dict) else None
-        if payload is None:
-            self._plans.pop(key, None)
-            return None
-        try:
-            from satellite.core.plan import PlanOptions
-
-            options = PlanOptions.from_dict(payload)
-        except Exception:  # noqa: BLE001 — datos incompletos: se ignora, no se inventa
-            self._plans.pop(key, None)
-            return None
-        self._plans[key] = options
-        return options.to_dict()
-
-    def pending_plan(self, project_root=None) -> dict | None:
-        """Alternativas pendientes de elección (las que la app debe ofrecer), o ``None``."""
-        options = self._plans.get(str(self.resolve(project_root)))
-        return options.to_dict() if options is not None else None
-
-    async def choose_plan(self, option_id: str, *, project_root=None) -> dict:
-        """Elige una alternativa del modo plan y continúa (igual que ``ChatSession.choose``)."""
-        self._require_project()
-        bridge = self.require_runtime(project_root)
-        key = str(self.resolve(project_root))
-        options = self._plans.get(key)
-        if options is None:
+    def _reject_if_turn_running(self, key: str) -> None:
+        """Un turno a la vez por proyecto: el segundo se rechaza (la app lo encola)."""
+        turno = self._turnos.get(key)
+        if turno is not None and not turno.done():
             raise BackendError(
-                "no_plan",
-                "no hay alternativas pendientes: vuelve a plantear la tarea",
+                "turn_running",
+                "ya hay un turno en curso: encola el mensaje o cancela el turno",
                 409,
             )
-        option = options.option(option_id)
-        if option is None:
-            raise BackendError(
-                "unknown_option", f"alternativa desconocida: {option_id!r}", 404
-            )
-        reply = await self.session(project_root).choose_option(
-            option, approval=self._approval_for(project_root)
-        )
-        # La elección consume las alternativas: no se vuelven a ofrecer.
-        self._plans.pop(key, None)
-        await bridge.drain()
-        return {**to_jsonable(reply), "plan": None}
-
-    # --- conversación ---
 
     async def send(self, text: str, *, plan_mode: bool = False, project_root=None) -> dict:
         """Un turno de conversación con el runtime real, aprobaciones incluidas.
@@ -802,6 +762,7 @@ class DesktopBackend:
         self._require_project()
         bridge = self.require_runtime(project_root)
         key = str(self.resolve(project_root))
+        self._reject_if_turn_running(key)
         # Las @menciones se resuelven igual que en la TUI (el propio ChatSession las vuelve a
         # parsear): aquí se calculan además para poder decir qué se adjuntó y qué no existía.
         contexto = self._mention_context(text, project_root)
@@ -811,6 +772,7 @@ class DesktopBackend:
             )
         )
         self._turnos[key] = tarea
+        self._turn_started[key] = time.time()
         try:
             reply = await tarea
         except asyncio.CancelledError:
@@ -824,20 +786,17 @@ class DesktopBackend:
                 "cancelled": True,
                 "note": "turno cancelado; lo que ya se hizo queda en el historial",
                 "context": contexto,
-                "plan": None,
             }
         finally:
             if self._turnos.get(key) is tarea:
                 self._turnos.pop(key, None)
+                self._turn_started.pop(key, None)
         await bridge.drain()
-        # El modo plan devuelve alternativas: se guardan para poder elegir después (incluso
-        # tras recargar la app). Cualquier otra respuesta olvida las anteriores.
-        plan = self._remember_plan(reply, project_root)
         # ChatSession resolvió las aprobaciones de @menciones externas: su ``context`` trae
         # el estado real (adjuntada/denegada/sin puerto). Se prefiere sobre el parseo previo,
         # que no puede conocer la decisión del usuario.
         contexto = getattr(reply, "context", None) or contexto
-        return {**to_jsonable(reply), "context": contexto, "plan": plan}
+        return {**to_jsonable(reply), "context": contexto}
 
     CANCEL_GRACE_S = 2.5
 
@@ -927,11 +886,10 @@ class DesktopBackend:
         ledger = ChangeLedger(root)
         detail: dict = {"task_id": task_id}
         detail["task"] = to_jsonable(await store.load_task(task_id))
-        try:
-            detail["graph"] = to_jsonable(await store.load_graph(task_id))
-        except Exception as exc:  # noqa: BLE001 — sin grafo guardado se dice, no se rellena
-            detail["graph_error"] = str(exc)
         detail["state"] = await store.load_state(task_id)
+        # Lo que hizo el turno (tools del piloto y delegaciones); ``None`` en tareas de
+        # versiones anteriores, que guardaban un grafo del planner retirado.
+        detail["trace"] = (detail["state"] or {}).get("trace")
         detail["events"] = [to_jsonable(event) for event in await store.load_events(task_id)]
         detail["changes"] = {
             "files": ledger.files(task_id),

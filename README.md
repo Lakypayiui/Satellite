@@ -145,13 +145,46 @@ python -m satellite.cli doctor              # verify config and credentials
 
 | Role | Used by |
 |---|---|
-| `orchestrator` | Planning and routing. |
+| `orchestrator` | The pilot that drives each turn. Needs tool calling. |
 | `context` | Turn summaries, compaction and context work. |
 | `agents` | Executing agents and language coders/auditors. |
 | `creator` | Creating new agents. |
 | `subagents` | Spawned child agents. |
 
 If a role is not set, it inherits the active provider.
+
+### How a turn works
+
+Each turn is driven by the **pilot** agent: one agent with read-only tools that reads
+the project, answers, asks with options when the request is ambiguous, and delegates
+changes, web research, diagrams and desktop control to the specialized agents. Replies
+stream as they are written. The pilot needs a model with tool calling (the
+`orchestrator` role); `satellite doctor` checks that the pilot is loaded.
+
+`scripts/eval_flow.py` runs a set of conversations against your provider, on a copy
+of the project, to measure the pilot (calls, tokens, latency).
+
+### Provider retries
+
+Connection drops, timeouts, `429` and `5xx` responses are retried with exponential
+backoff (6 attempts by default, about a minute in total; a `Retry-After` from the
+provider is honored up to 60 s) instead of failing the turn; the TUI and the desktop
+app show «reconectando con el proveedor (2/6)». Errors that will not go away by
+retrying (invalid key, bad request) fail at once.
+
+```json
+{ "llm": { "retry": { "attempts": 6, "base_delay_s": 2 } } }
+```
+
+### Delegation token budget
+
+To cap what the agents the pilot delegates to can spend in one turn (input + output
+tokens, nested delegations included), set a budget. Without it there is no cap; when it
+runs out, further delegations in that turn are refused and the pilot reports it.
+
+```json
+{ "llm": { "delegation": { "token_budget": 2000000 } } }
+```
 
 > **Never commit API keys.** Use the provider store or a global environment variable.
 
@@ -237,7 +270,7 @@ The local denylist (terminals, password managers, system settings) always wins.
 
 | Agent | Role |
 |---|---|
-| `orchestrator` | Turns a goal into a plan using the available catalog. |
+| `pilot` | Drives each turn: reads the project, answers, asks and delegates. |
 | `agent_creator` | Proposes a reusable agent for a capability you are missing. |
 | `skill_curator` | Keeps the skill catalog organized. |
 | `pele_diagram_agent` | Designs and renders diagrams. |

@@ -17,9 +17,19 @@ def make_app(tmp_path: Path, monkeypatch) -> SatelliteTUI:
     cfg_dir = tmp_path / ".satellite" / "config"
     cfg_dir.mkdir(parents=True, exist_ok=True)
     (cfg_dir / "config.json").write_text(
-        json.dumps({"name": "fake", "model": "m"}), encoding="utf-8"
+        json.dumps({"name": "fake", "model": "m"}),
+        encoding="utf-8",
     )
     return SatelliteTUI(Session(tmp_path, home=home))
+
+
+def test_the_approval_poll_survives_an_app_without_screens(tmp_path, monkeypatch) -> None:
+    """El intervalo de aprobaciones dispara también al arrancar y al cerrar: sin pila de
+    pantallas no debe lanzar (era la causa de los fallos intermitentes de la TUI)."""
+    app = make_app(tmp_path, monkeypatch)
+    app.approval.pending = lambda: [{"proposal_id": "p1", "summary": "s"}]  # type: ignore[method-assign]
+
+    app._poll_approvals()  # fuera de run_test: no hay pantallas ni bucle
 
 
 async def _press(prompt: Input, pilot, text: str) -> None:
@@ -134,100 +144,6 @@ def test_app_skill_commands(tmp_path, monkeypatch) -> None:
     asyncio.run(scenario())
 
 
-def test_app_plan_mode_choose_option(tmp_path, monkeypatch) -> None:
-    from satellite.core.plan import PlanOption, PlanOptions
-    from satellite.orchestration.plan_mode import PlanOptionGenerator
-    from satellite.tui.app import PlanOptionsScreen
-
-    async def scenario():
-        async def fake_generate(self, task, *, context="", history="", feedback=""):
-            return PlanOptions(
-                question="¿Cómo lo hacemos?",
-                options=(
-                    PlanOption(id="minimo", title="Mínimo", summary="cambio pequeño", approach=("paso a",)),
-                    PlanOption(id="robusto", title="Robusto", summary="solución completa", approach=("paso b",)),
-                ),
-                recommendation="minimo",
-            )
-
-        monkeypatch.setattr(PlanOptionGenerator, "generate", fake_generate)
-        app = make_app(tmp_path, monkeypatch)
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            prompt = app.query_one("#prompt", Input)
-            await _press(prompt, pilot, "/plan necesito agregar login")
-            await app.workers.wait_for_complete()
-            for _ in range(30):
-                await pilot.pause(0.05)
-                if isinstance(app.screen, PlanOptionsScreen):
-                    break
-            assert isinstance(app.screen, PlanOptionsScreen)
-            assert any(entry.startswith("opciones=") for entry in app.transcript)
-            app.screen.query_one("#opt-minimo", Button).press()
-            await pilot.pause(0.05)
-            await app.workers.wait_for_complete()
-            await pilot.pause()
-            assert any(entry.startswith("opción ") for entry in app.transcript)
-
-    asyncio.run(scenario())
-
-
-def test_plan_modal_makes_all_the_options_reachable(tmp_path, monkeypatch) -> None:
-    """Con 4 alternativas los 5 botones tienen que caber dentro de la caja.
-
-    Iban en un `Horizontal` sin wrap dentro de una caja de ancho fijo: los de la
-    derecha se salían y no se podían elegir (solo se veían 2 de 4).
-    """
-    from satellite.core.plan import PlanOption, PlanOptions
-    from satellite.orchestration.plan_mode import PlanOptionGenerator
-    from satellite.tui.app import PlanOptionsScreen
-
-    async def scenario():
-        async def fake_generate(self, task, *, context="", history="", feedback=""):
-            return PlanOptions(
-                question="¿Cómo lo hacemos?",
-                options=tuple(
-                    PlanOption(
-                        id=f"o{i}",
-                        title=f"Alternativa {i}",
-                        summary="s",
-                        approach=(f"p{i}",),
-                    )
-                    for i in range(1, 5)
-                ),
-                recommendation="o1",
-            )
-
-        monkeypatch.setattr(PlanOptionGenerator, "generate", fake_generate)
-        app = make_app(tmp_path, monkeypatch)
-        async with app.run_test(size=(100, 40)) as pilot:
-            await pilot.pause()
-            prompt = app.query_one("#prompt", Input)
-            await _press(prompt, pilot, "/plan necesito agregar login")
-            await app.workers.wait_for_complete()
-            for _ in range(30):
-                await pilot.pause(0.05)
-                if isinstance(app.screen, PlanOptionsScreen):
-                    break
-            assert isinstance(app.screen, PlanOptionsScreen)
-            await pilot.pause()
-
-            box = app.screen.query_one("#plan-box")
-            for bid in ("opt-o1", "opt-o2", "opt-o3", "opt-o4", "opt-other"):
-                boton = app.screen.query_one(f"#{bid}", Button)
-                assert boton.region.x >= box.region.x, bid
-                assert boton.region.right <= box.region.right, bid
-                assert boton.region.y >= box.region.y, bid
-
-            # elegir por número cierra el modal sin depender del ratón
-            await pilot.press("3")
-            await pilot.pause(0.05)
-            await app.workers.wait_for_complete()
-            assert not isinstance(app.screen, PlanOptionsScreen)
-
-    asyncio.run(scenario())
-
-
 def test_a_command_request_offers_allowing_it_for_the_session(tmp_path, monkeypatch) -> None:
     """Un comando también se puede permitir una vez o para la sesión."""
     from satellite.core.proposal import ApprovalStatus
@@ -288,25 +204,6 @@ def test_a_path_request_offers_allowing_it_for_the_session(tmp_path, monkeypatch
             app.screen.query_one("#approve", Button).press()
 
     asyncio.run(scenario())
-
-
-def test_the_number_keys_pick_the_right_option(monkeypatch) -> None:
-    from satellite.core.plan import PlanOption, PlanOptions
-    from satellite.tui.app import PlanOptionsScreen
-
-    options = PlanOptions(
-        question="q",
-        options=tuple(PlanOption(id=f"o{i}", title=f"t{i}", summary="s") for i in range(1, 5)),
-    )
-    elegido: dict = {}
-    monkeypatch.setattr(
-        PlanOptionsScreen, "dismiss", lambda self, value: elegido.setdefault("v", value)
-    )
-    screen = PlanOptionsScreen(options)
-    screen.action_pick(3)
-    assert elegido["v"] == "o3"
-    screen.action_pick(9)  # fuera de rango: ni elige ni revienta
-    assert elegido["v"] == "o3"
 
 
 def test_app_quit_command(tmp_path, monkeypatch) -> None:

@@ -9,10 +9,18 @@ del mínimo del modelo.
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from satellite.core.errors import ProviderError
-from satellite.core.messages import LLMRequest, LLMResponse, Message, Role, Usage
+from satellite.core.messages import (
+    LLMRequest,
+    LLMResponse,
+    Message,
+    Role,
+    StreamChunk,
+    Usage,
+)
 from satellite.core.tool_models import ToolCall
 from satellite.providers.base import LLMProvider
 from satellite.providers.caching import (
@@ -82,6 +90,8 @@ class AnthropicProvider(LLMProvider):
             kwargs: dict = {
                 "api_key": config.api_key or "not-needed",
                 "timeout": timeout_s,
+                # Los reintentos los hace ``RetryingProvider`` (con aviso a la UI).
+                "max_retries": 0,
             }
             base_url = normalize_base_url(getattr(config, "base_url", None))
             if base_url:
@@ -95,8 +105,8 @@ class AnthropicProvider(LLMProvider):
     def cache_strategy(self) -> CacheStrategy:
         return self.strategy
 
-    async def complete(self, request: LLMRequest) -> LLMResponse:
-        """Traduce la petición a formato Anthropic y normaliza la respuesta."""
+    def _kwargs(self, request: LLMRequest) -> dict:
+        """Parámetros de ``messages.create`` (y el plan de caché en ``last_plan``)."""
         system_texts = [m.content for m in request.messages if m.role is Role.SYSTEM]
         others = [m for m in request.messages if m.role is not Role.SYSTEM]
         stable = min(max(0, request.stable_user_count), len(others))
@@ -164,7 +174,11 @@ class AnthropicProvider(LLMProvider):
                     kwargs["max_tokens"] = limit
                 kwargs["thinking"] = thinking
                 kwargs.pop("temperature", None)
+        return kwargs
 
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        """Traduce la petición a formato Anthropic y normaliza la respuesta."""
+        kwargs = self._kwargs(request)
         create = self._diagnostics_create()
         sent = None
         if create is not None:
@@ -183,6 +197,29 @@ class AnthropicProvider(LLMProvider):
             if response_id:
                 self._response_ids[self.last_prefix_hash] = response_id
         return _from_anthropic_response(resp, diagnostics=sent)
+
+    async def stream(self, request: LLMRequest) -> AsyncIterator[StreamChunk]:
+        """Streaming de la API de mensajes: deltas de texto y la respuesta final.
+
+        Con el diagnóstico de caché activo (ruta beta, opt-in) se usa ``complete``: el
+        diagnóstico viene en la respuesta entera, no en los eventos del stream.
+        """
+        if self._diagnostics_create() is not None:
+            async for chunk in super().stream(request):
+                yield chunk
+            return
+        kwargs = self._kwargs(request)
+        acc = _AnthropicStreamAccumulator()
+        try:
+            events = await self._client.messages.create(**kwargs, stream=True)
+            async for event in events:
+                text = acc.add(event)
+                if text:
+                    yield StreamChunk(text=text)
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderError(f"error del proveedor Anthropic: {exc}") from exc
+        yield StreamChunk(response=_from_anthropic_response(acc.message()))
+
 
     # --- diagnóstico de caché (opt-in, best-effort) ---
 
@@ -383,3 +420,79 @@ def _normalise_anthropic_usage(raw_usage: Any) -> Usage:
         cache_creation_input_tokens=creation,
         cache_read_input_tokens=read,
     )
+
+
+class _AnthropicStreamAccumulator:
+    """Reconstruye un mensaje Anthropic a partir de los eventos del stream."""
+
+    def __init__(self) -> None:
+        self.id = ""
+        self.blocks: dict[int, SimpleNamespace] = {}
+        self.json_parts: dict[int, list[str]] = {}
+        self.usage: dict = {}
+        self.stop_reason = ""
+
+    def add(self, event: Any) -> str:
+        kind = getattr(event, "type", "")
+        if kind == "message_start":
+            message = getattr(event, "message", None)
+            self.id = str(getattr(message, "id", "") or "")
+            self._merge_usage(getattr(message, "usage", None))
+        elif kind == "content_block_start":
+            index = int(getattr(event, "index", 0) or 0)
+            block = getattr(event, "content_block", None)
+            block_type = getattr(block, "type", "")
+            self.blocks[index] = SimpleNamespace(
+                type=block_type,
+                text=str(getattr(block, "text", "") or ""),
+                id=str(getattr(block, "id", "") or ""),
+                name=str(getattr(block, "name", "") or ""),
+                input=getattr(block, "input", None) or {},
+            )
+        elif kind == "content_block_delta":
+            index = int(getattr(event, "index", 0) or 0)
+            delta = getattr(event, "delta", None)
+            delta_type = getattr(delta, "type", "")
+            block = self.blocks.setdefault(
+                index, SimpleNamespace(type="text", text="", id="", name="", input={})
+            )
+            if delta_type == "text_delta":
+                text = str(getattr(delta, "text", "") or "")
+                block.text += text
+                return text
+            if delta_type == "input_json_delta":
+                self.json_parts.setdefault(index, []).append(
+                    str(getattr(delta, "partial_json", "") or "")
+                )
+        elif kind == "message_delta":
+            delta = getattr(event, "delta", None)
+            self.stop_reason = str(getattr(delta, "stop_reason", "") or self.stop_reason)
+            self._merge_usage(getattr(event, "usage", None))
+        return ""
+
+    def _merge_usage(self, raw: Any) -> None:
+        if raw is None:
+            return
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        ):
+            value = getattr(raw, key, None)
+            if value is not None:
+                self.usage[key] = value
+
+    def message(self) -> SimpleNamespace:
+        content = []
+        for index in sorted(self.blocks):
+            block = self.blocks[index]
+            if index in self.json_parts:
+                block.input = "".join(self.json_parts[index]) or "{}"
+            content.append(block)
+        return SimpleNamespace(
+            id=self.id,
+            content=content,
+            usage=SimpleNamespace(**self.usage) if self.usage else None,
+            stop_reason=self.stop_reason,
+        )

@@ -6,7 +6,6 @@ import time
 from pathlib import Path
 
 from satellite.core.events import EventType, ExecutionEvent
-from satellite.core.graph import Edge, ExecutionGraph, Node
 from satellite.core.task import Task
 from satellite.persistence.store import FileStore
 
@@ -22,19 +21,6 @@ def test_task_roundtrip(tmp_path: Path) -> None:
     loaded = run(store.load_task(task.task_id))
     assert loaded.task_id == task.task_id
     assert loaded.goal == "crear html"
-
-
-def test_graph_roundtrip(tmp_path: Path) -> None:
-    store = FileStore(tmp_path)
-    graph = ExecutionGraph(entry_node="n1")
-    graph.add_node(Node(id="n1", spec_id="html_writer", task={"goal": "x"}))
-    graph.add_node(Node(id="n2", spec_id="html_reviewer"))
-    graph.add_edge(Edge(id="e1", source="n1", target="n2"))
-    run(store.save_graph("t1", graph))
-    loaded = run(store.load_graph("t1"))
-    assert loaded.entry_node == "n1"
-    assert len(loaded.nodes) == 2
-    assert len(loaded.edges) == 1
 
 
 def test_state_roundtrip(tmp_path: Path) -> None:

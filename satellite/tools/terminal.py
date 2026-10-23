@@ -9,7 +9,7 @@ from pathlib import Path
 
 from satellite.core.tool_models import ToolResult
 from satellite.sandbox.base import SandboxLevel, SandboxSpec, sanitize_env
-from satellite.tools.base import Tool, ToolContext
+from satellite.tools.base import Tool, ToolContext, inside_execution_roots
 
 OUTPUT_LIMIT_CHARS = 64_000
 
@@ -253,7 +253,7 @@ class RunCommandTool(Tool):
         rel = arguments.get("cwd_relative")
         if isinstance(rel, str) and rel:
             cwd = (base / rel).resolve()
-            if policy is not None and not policy.check_path(cwd, tool_ctx.project_root):
+            if not inside_execution_roots(policy, cwd, tool_ctx):
                 return ToolResult(success=False, error=f"permiso denegado: {cwd}")
         env = sanitize_env(tool_ctx.env)
         sandbox, motivo = execution_sandbox(tool_ctx)

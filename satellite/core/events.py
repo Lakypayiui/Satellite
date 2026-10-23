@@ -21,6 +21,11 @@ class EventType(Enum):
     RETRY = "retry"
     NODE_STUCK = "node_stuck"
     TASK_FINISHED = "task_finished"
+    # Texto que el modelo está escribiendo (streaming). Es efímero: no se persiste.
+    TEXT_DELTA = "text_delta"
+    # Un permiso espera decisión / ya se decidió (la UI deja de sondear).
+    APPROVAL_REQUESTED = "approval_requested"
+    APPROVAL_RESOLVED = "approval_resolved"
     # El asesor de plan no pudo proponer alternativas (antes desaparecía en silencio)
     PLAN_FAILED = "plan_failed"
     # Propuestas y aprobación (agentes y skills)

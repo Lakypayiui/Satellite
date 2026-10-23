@@ -128,9 +128,10 @@ def test_mcp_approval_never_approves_and_never_blocks() -> None:
     )
     assert decision.status is ApprovalStatus.REJECTED
     assert DENIED_REASON in decision.reason
-    assert port.pending()[0]["proposal_id"] == "prop1"
+    # Rechazada: la ejecución siguió, así que no queda «pendiente».
+    assert port.pending() == []
 
-    # y la tool de lectura sí lo ve, con la indicación de dónde decidir
+    # y la tool de lectura lo dice así (no lista decisiones ya tomadas)
     class FakeBundleWithApproval:
         approval = port
 
@@ -146,8 +147,7 @@ def test_mcp_approval_never_approves_and_never_blocks() -> None:
     })
     text = resp["result"]["content"][0]["text"]
     assert resp["result"]["isError"] is False
-    assert "prop1" in text
-    assert "CLI o en la TUI" in text
+    assert "sin propuestas pendientes" in text
 
 
 def test_unknown_method_returns_error() -> None:

@@ -156,16 +156,25 @@ class McpApproval(ApprovalPort):
     async def request(self, proposal: object, ctx: ApprovalContext) -> ApprovalDecision:
         """Pide confirmación al cliente y decide; fail-closed en todos los casos."""
         proposal_id = proposal_id_of(proposal, ctx)
-        if not any(item["proposal_id"] == proposal_id for item in self._awaiting):
-            self._awaiting.append(
-                {
-                    "proposal_id": proposal_id,
-                    "kind": ctx.kind,
-                    "task_id": ctx.task_id,
-                    "summary": ctx.summary,
-                    "mode": ctx.mode,
-                }
-            )
+        # Pendiente = esperando la respuesta del cliente. Cuando ``request`` devuelve, la
+        # decisión ya está tomada (aprobada, rechazada, vencida o arriesgada) y la
+        # ejecución siguió: nadie la espera, así que deja de listarse.
+        entry = {
+            "proposal_id": proposal_id,
+            "kind": ctx.kind,
+            "task_id": ctx.task_id,
+            "summary": ctx.summary,
+            "mode": ctx.mode,
+        }
+        self._awaiting.append(entry)
+        try:
+            return await self._decide(proposal, ctx, proposal_id)
+        finally:
+            self._awaiting = [item for item in self._awaiting if item is not entry]
+
+    async def _decide(
+        self, proposal: object, ctx: ApprovalContext, proposal_id: str
+    ) -> ApprovalDecision:
         reasons = risky_reasons(proposal, ctx)
         if reasons:
             return ApprovalDecision(
@@ -200,5 +209,5 @@ class McpApproval(ApprovalPort):
             return {"action": "timeout"}
 
     def pending(self) -> list[dict]:
-        """Propuestas esperando una decisión humana (solo informativo)."""
+        """Propuestas esperando ahora mismo la respuesta del cliente (solo informativo)."""
         return [dict(item) for item in self._awaiting]

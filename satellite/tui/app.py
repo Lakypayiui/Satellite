@@ -111,58 +111,6 @@ class ApprovalScreen(ModalScreen[ApprovalDecision]):
         )
 
 
-class PlanOptionsScreen(ModalScreen[str]):
-    """Modal del modo plan: elige una alternativa o «otra cosa».
-
-    Devuelve el id de la opción elegida, o ``""`` para «otra cosa».
-    """
-
-    BINDINGS = [
-        ("escape", "other", "Otra cosa"),
-        ("o", "other", "Otra cosa"),
-        ("1", "pick(1)", "Opción 1"),
-        ("2", "pick(2)", "Opción 2"),
-        ("3", "pick(3)", "Opción 3"),
-        ("4", "pick(4)", "Opción 4"),
-    ]
-
-    def __init__(self, options) -> None:
-        super().__init__()
-        self.options = options
-
-    def compose(self) -> ComposeResult:
-        # Los botones van en vertical dentro de un contenedor con scroll: en una fila
-        # no caben (cada uno mide >=16 columnas) y los de la derecha quedaban
-        # recortados, así que algunas opciones no se podían elegir.
-        with VerticalScroll(id="plan-box"):
-            yield Static(render.plan_options_panel(self.options), id="approval-body")
-            with Container(id="plan-actions"):
-                for index, option in enumerate(self.options.options, 1):
-                    label = f"{index}. {option.title}"
-                    if len(label) > 40:
-                        label = label[:37] + "…"
-                    yield Button(label, id=f"opt-{option.id}")
-                yield Button("Otra cosa…", variant="warning", id="opt-other")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        button_id = event.button.id or ""
-        if button_id == "opt-other":
-            self.dismiss("")
-        elif button_id.startswith("opt-"):
-            self.dismiss(button_id[len("opt-"):])
-        else:
-            self.dismiss("")
-
-    def action_other(self) -> None:
-        self.dismiss("")
-
-    def action_pick(self, index: int) -> None:
-        """Elegir por número, sin depender del foco ni del ratón."""
-        options = list(getattr(self.options, "options", ()) or ())
-        if 1 <= index <= len(options):
-            self.dismiss(options[index - 1].id)
-
-
 class SatelliteTUI(App):
     """Sesión interactiva sobre el runtime de Satellite."""
 
@@ -189,6 +137,7 @@ class SatelliteTUI(App):
     .agent-card.running { border: round #38bdf8; }
     .agent-card.done { border: round #22c55e; }
     .agent-card.failed { border: round #ef4444; }
+    #live { height: auto; max-height: 50%; display: none; padding: 0 0; }
     #statusbar { height: auto; padding: 0 1; background: #0f172a; }
     #prompt { border: round #38bdf8; background: #1e293b; color: #e2e8f0; }
     #prompt:focus { border: round #22c55e; }
@@ -198,12 +147,6 @@ class SatelliteTUI(App):
     }
     #approval-actions { height: auto; align-horizontal: center; }
     #approval-actions Button { margin: 0 2; }
-    #plan-box {
-        width: 84; max-width: 95%; height: auto; max-height: 90%;
-        border: round #facc15; background: #1e293b; padding: 1 2;
-    }
-    #plan-actions { height: auto; }
-    #plan-actions Button { width: 1fr; margin-bottom: 1; }
     #approval-scroll { height: auto; max-height: 24; }
     #provider-box {
         width: 92; height: auto; max-height: 92%;
@@ -241,7 +184,6 @@ class SatelliteTUI(App):
         self.approval = TuiApproval()
         self.transcript: list[str] = []
         self._subscribed = False
-        self._pending_options = None
         self._chat_announced = False
         # Un turno a la vez: la cola sólo avanza entre turnos; nunca en paralelo.
         self._turn_active = False
@@ -249,6 +191,9 @@ class SatelliteTUI(App):
         self._agents: dict[str, dict] = {}
         self._node_agent: dict[str, str] = {}
         self._cards: dict[str, Static] = {}
+        # Respuesta en vivo (TEXT_DELTA): texto del segmento actual del modelo.
+        self._live_text = ""
+        self._live_segment: object = None
 
     # --- composición ---
 
@@ -258,6 +203,7 @@ class SatelliteTUI(App):
             yield RichLog(id="log", highlight=True, markup=True, wrap=True)
             with VerticalScroll(id="agents-panel"):
                 pass
+        yield Static(id="live")
         yield Static(id="statusbar")
         yield Input(placeholder=PROMPT_HINT, id="prompt")
         yield Footer()
@@ -311,8 +257,81 @@ class SatelliteTUI(App):
         self._ensure_subscribed()
 
     def _on_event(self, event) -> None:
-        self._log(render.event_text(event), plain=event.event_type.value)
+        kind = event.event_type.value
+        payload = event.payload or {}
+        if kind == "text_delta":
+            self._live_append(payload)
+            return
         self._track_agent(event)
+        self._busy_from_event(event)
+        if kind in render.LIFECYCLE_EVENTS:
+            return
+        if kind in ("delegation_started", "delegation_completed"):
+            self._log(render.delegation_line(event))
+            return
+        if render.is_reconnect(event):
+            self._log(render.reconnect_line(event))
+            return
+        if kind == "tool_called":
+            tool = str(getattr(event, "tool_name", "") or payload.get("tool", ""))
+            if render.is_quiet_tool(tool):
+                self._log(
+                    render.tool_line(
+                        tool,
+                        payload.get("arguments"),
+                        success=bool(payload.get("success", True)),
+                        error=str(payload.get("error") or ""),
+                    )
+                )
+                return
+        self._log(render.event_text(event), plain=kind)
+
+    # --- respuesta en vivo ---
+
+    def _live_append(self, payload: dict) -> None:
+        segment = payload.get("segment")
+        if segment != self._live_segment:
+            # Un segmento nuevo es otra llamada al modelo: la narración anterior
+            # («voy a leer…») no es la respuesta y se sustituye.
+            self._live_segment = segment
+            self._live_text = ""
+        self._live_text += str(payload.get("text") or "")
+        try:
+            live = self.query_one("#live", Static)
+        except Exception:  # noqa: BLE001 — la app puede estar desmontándose
+            return
+        live.update(render.live_panel(self._live_text))
+        live.display = True
+        self._busy(True, "escribiendo…")
+
+    def _live_clear(self) -> None:
+        self._live_text = ""
+        self._live_segment = None
+        try:
+            live = self.query_one("#live", Static)
+        except Exception:  # noqa: BLE001
+            return
+        live.update("")
+        live.display = False
+
+    def _busy_from_event(self, event) -> None:
+        """La línea de espera dice qué se está haciendo de verdad."""
+        if not self._turn_active:
+            return
+        kind = event.event_type.value
+        payload = event.payload or {}
+        if kind == "node_started":
+            self._busy(True, "pensando…")
+        elif kind == "tool_called":
+            tool = str(getattr(event, "tool_name", "") or payload.get("tool", ""))
+            self._busy(True, render.tool_action(tool, payload.get("arguments")) + "…")
+        elif kind == "delegation_started":
+            self._busy(True, f"{payload.get('agent_id', 'un agente')} trabajando…")
+        elif render.is_reconnect(event):
+            self._busy(
+                True,
+                f"reconectando con el proveedor ({payload.get('attempt')}/{payload.get('max')})…",
+            )
 
     # --- panel de agentes ---
 
@@ -385,6 +404,9 @@ class SatelliteTUI(App):
             payload = getattr(event, "payload", {}) or {}
             if kind is EventType.TASK_STARTED:
                 self._clear_agents()
+            elif self._agent_of(event) == "pilot":
+                # El piloto es la conversación misma: no se pinta como una tarjeta más.
+                return
             elif kind is EventType.NODE_STARTED:
                 self._upsert_agent(self._agent_of(event), status="running", action="razonando")
             elif kind is EventType.TOOL_CALLED:
@@ -455,6 +477,10 @@ class SatelliteTUI(App):
     # --- aprobación ---
 
     def _poll_approvals(self) -> None:
+        # El intervalo puede disparar mientras la app arranca o se cierra: sin pantallas
+        # en la pila, ``self.screen`` lanza ``ScreenStackError`` y el sondeo muere.
+        if not self.is_running or not self.screen_stack:
+            return
         if isinstance(self.screen, ApprovalScreen):
             return
         pending = self.approval.pending()
@@ -545,12 +571,16 @@ class SatelliteTUI(App):
                         ),
                         plain=f"restaurados {restored}",
                     )
+            self._live_clear()
             self._log(
                 render.reply_panel(
                     reply, elapsed_ms=elapsed_ms, metrics=getattr(reply, "metrics", None)
                 ),
                 plain=f"respuesta {reply.status}",
             )
+            pista = render.question_hint(getattr(reply, "question", None))
+            if pista is not None:
+                self._log(pista, plain="pregunta abierta")
             if reply.compaction and reply.compaction.get("dropped"):
                 self._log(
                     Text(
@@ -560,11 +590,10 @@ class SatelliteTUI(App):
                     ),
                     plain="compactado-auto",
                 )
-            if (reply.output or {}).get("mode") == "plan_options":
-                self._open_plan_options(reply.output.get("plan_options") or {})
         except Exception as exc:  # noqa: BLE001
             self._log(Text(f"error: {exc}", style="red"))
         finally:
+            self._live_clear()
             self._turn_active = False
             self._busy(False)
             self._refresh_status()
@@ -598,56 +627,6 @@ class SatelliteTUI(App):
             ),
             plain=f"compactado {result.dropped}",
         )
-
-    def _open_plan_options(self, payload: dict) -> None:
-        """Muestra las alternativas y abre el modal de elección."""
-        from satellite.core.plan import PlanOptions
-
-        try:
-            options = PlanOptions.from_dict(payload)
-        except Exception as exc:  # noqa: BLE001
-            self._log(Text(f"alternativas inválidas: {exc}", style="red"))
-            return
-        self._log(render.plan_options_panel(options), plain=f"opciones={len(options.options)}")
-        self._pending_options = options
-        self.push_screen(PlanOptionsScreen(options), self._on_plan_choice)
-
-    def _on_plan_choice(self, option_id: str | None) -> None:
-        """Continúa con la alternativa elegida (o pide el enfoque propio)."""
-        options = getattr(self, "_pending_options", None)
-        if not option_id:
-            self._log(
-                Text("describe tu propio enfoque y envíalo como mensaje", style="italic")
-            )
-            return
-        option = None
-        if options is not None:
-            option = options.option(option_id)
-        if option is None:
-            self._log(Text(f"alternativa desconocida: {option_id}", style="red"))
-            return
-        self._log(Text(f"opción elegida: {option.title}", style="bold green"), plain=f"opción {option.id}")
-        self._spawn(
-            self._do_chat_option(option), name="plan-choice"
-        )
-
-    async def _do_chat_option(self, option) -> None:
-        self._busy(True, "el agente está trabajando…")
-        inicio = time.perf_counter()
-        try:
-            reply = await self.session.choose_option(option, approval=self.approval)
-            elapsed_ms = (time.perf_counter() - inicio) * 1000
-            self._log(
-                render.reply_panel(
-                    reply, elapsed_ms=elapsed_ms, metrics=getattr(reply, "metrics", None)
-                ),
-                plain=f"respuesta {reply.status}",
-            )
-        except Exception as exc:  # noqa: BLE001
-            self._log(Text(f"error: {exc}", style="red"))
-        finally:
-            self._busy(False)
-            self._refresh_status()
 
     async def _do_create(self, need: str) -> None:
         self._busy(True, "creando agente…")
@@ -696,10 +675,16 @@ class SatelliteTUI(App):
         from satellite.persistence.store import FileStore
 
         try:
-            graph = await FileStore(self.session.project_root).load_graph(task_id)
-            self._log(Text(json.dumps(graph.to_dict(), indent=2, ensure_ascii=False)), plain=f"graph {task_id}")
+            state = await FileStore(self.session.project_root).load_state(task_id) or {}
         except Exception as exc:  # noqa: BLE001
             self._log(Text(f"error: {exc}", style="red"))
+            return
+        trace = state.get("trace")
+        if trace is None:
+            self._log(Text(f"sin traza para {task_id}", style="yellow"), plain=f"trace {task_id}")
+            return
+        texto = json.dumps({"status": state.get("status"), **trace}, indent=2, ensure_ascii=False)
+        self._log(Text(texto), plain=f"trace {task_id}")
 
     # --- comandos sincrónicos ---
 
@@ -1594,6 +1579,18 @@ class SatelliteTUI(App):
         self.action_clear_log()
 
     def _cmd_quit(self, arg: str) -> None:
+        self._spawn(self._quit_after_flush(), name="quit")
+
+    async def action_quit(self) -> None:
+        """Ctrl+Q sale igual que ``/quit``: sin perder el resumen del último turno."""
+        await self._quit_after_flush()
+
+    async def _quit_after_flush(self) -> None:
+        # El resumen del último turno se guarda en segundo plano: se espera (acotado)
+        # para no perderlo al salir.
+        chat = getattr(self.session, "_chat", None)
+        if chat is not None:
+            await chat.flush_background(timeout=5.0)
         self.exit()
 
     # --- acciones de teclado ---

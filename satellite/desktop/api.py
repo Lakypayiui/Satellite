@@ -19,12 +19,6 @@ class MessageIn(BaseModel):
     plan_mode: bool = False
 
 
-class PlanChooseIn(BaseModel):
-    """Alternativa del modo plan que se elige."""
-
-    option_id: str = Field(min_length=1)
-
-
 class ProjectIn(BaseModel):
     """Carpeta a abrir."""
 
@@ -355,18 +349,6 @@ def build_router(backend: DesktopBackend, auth: Callable) -> APIRouter:
     async def cancel_turn() -> dict:
         """Corta el turno en curso: cooperativa si el runtime cede, y si no, lo corta."""
         return await backend.cancel_turn()
-
-    # --- modo plan ---
-
-    @router.get("/plan")
-    def plan() -> dict:
-        """Alternativas del modo plan pendientes de elección (o ``null``)."""
-        return {"plan": backend.pending_plan()}
-
-    @router.post("/plan")
-    async def choose_plan(payload: PlanChooseIn) -> dict:
-        """Elige una alternativa del modo plan y continúa (igual que ``ChatSession.choose``)."""
-        return await backend.choose_plan(payload.option_id)
 
     # --- aprobaciones ---
 

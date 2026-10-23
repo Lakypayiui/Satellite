@@ -4,8 +4,8 @@ El índice persistente del proyecto (``.satellite/context/index.json``) es estru
 bajo demanda: se adjunta una vista acotada a cada turno, y quien consulta lee solo los
 archivos que el índice elige. Estas pruebas reproducen la brecha reportada: que un
 proyecto recién indexado, al preguntar «¿De qué trata el proyecto?», envíe al proveedor
-extractos **reales** del proyecto por las tres rutas (chat directo, planner y ejecución)
-y que las preguntas normales recuperen archivos relevantes desde todas las interfaces.
+extractos **reales** del proyecto por el turno del piloto (también en modo plan) y que
+las preguntas normales recuperen archivos relevantes desde todas las interfaces.
 
 Cubren además los casos que no deben regresar: proyecto **sin índice** (se dice, no se
 finge) y archivos **sensibles** o de **fuera** del proyecto (no se leen como contexto).
@@ -14,21 +14,21 @@ finge) y archivos **sensibles** o de **fuera** del proyecto (no se leen como con
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 from satellite.agents.base import Agent, AgentContext, AgentFactory
-from satellite.agents.registry import DefaultAgentRegistry
+from satellite.cli import runtime_builder
 from satellite.context.engine import DefaultContextEngine
 from satellite.context.mentions import parse
 from satellite.context.project_index import ProjectIndex
-from satellite.core.graph import ExecutionGraph, Node
 from satellite.core.context_models import ContextRefKind
 from satellite.core.result import AgentResult, AgentStatus
+from satellite.core.spec import AgentSpec
 from satellite.core.task import Task, TaskResult, TaskStatus
-from satellite.orchestration.base import GraphRunner, Planner, PlanningResult, RuntimeServices
+from satellite.orchestration.base import RuntimeServices
 from satellite.orchestration.chat import ChatSession
-from satellite.orchestration.orchestrator import DefaultOrchestrator
-from satellite.orchestration.runner import DefaultGraphRunner
+from satellite.orchestration.pilot import PilotOrchestrator
 from satellite.providers.fake import FakeLLM
 
 
@@ -39,61 +39,33 @@ def run(coro):
 # --- dobles -------------------------------------------------------------------
 
 
-class _PlannerQueNoPlanifica(Planner):
-    async def plan(self, task, catalog, context_hint=()):
-        raise AssertionError("una respuesta directa no debe planificar")
+class _PilotoGrabador(Agent):
+    """Piloto de mentira: se queda con el contexto que recibe."""
 
-
-class _RunnerQueNoCorre(GraphRunner):
-    async def run(self, graph, task, services):
-        raise AssertionError("una respuesta directa no debe ejecutar el grafo")
-
-
-class _PlannerFijo(Planner):
-    """Devuelve siempre el mismo grafo (una sola vez: no replanifica)."""
-
-    def __init__(self, graph: ExecutionGraph) -> None:
-        self.graph = graph
-        self.llamadas = 0
-
-    async def plan(self, task, catalog, context_hint=()):
-        self.llamadas += 1
-        return PlanningResult(kind="plan", graph=self.graph)
-
-
-class _AgenteGrabador(Agent):
-    """Agente de mentira: se queda con el contexto que recibe."""
-
-    def __init__(self, spec_id: str) -> None:
-        self.spec_id = spec_id
+    def __init__(self) -> None:
+        self.spec = AgentSpec(
+            id="pilot", name="Pilot", capabilities=("pilot",), prompt_ref="pilot"
+        )
+        self.tools: list = []
         self.last_ctx: AgentContext | None = None
 
     async def execute(self, task: dict, ctx: AgentContext) -> AgentResult:
         self.last_ctx = ctx
         return AgentResult(
-            node_id=ctx.node_id, spec_id=self.spec_id, status=AgentStatus.OK, summary="ok"
+            node_id=ctx.node_id,
+            spec_id="pilot",
+            status=AgentStatus.OK,
+            output={"content": "ok"},
         )
 
 
 class _FactoryGrabadora(AgentFactory):
     def __init__(self) -> None:
-        self.agents: dict[str, _AgenteGrabador] = {}
+        self.pilot = _PilotoGrabador()
 
     def create(self, spec_id: str, *, model_role: str | None = None) -> Agent:
-        self.agents.setdefault(spec_id, _AgenteGrabador(spec_id))
-        return self.agents[spec_id]
-
-
-class _AdvisorGrabador:
-    """Asesor de plan de mentira: guarda el historial/contexto que recibe."""
-
-    def __init__(self) -> None:
-        self.history = ""
-        self.context = ""
-
-    async def generate(self, task, *, context="", history="", feedback=""):
-        self.context, self.history = context, history
-        return None  # sin alternativas: basta con ver qué se envió
+        assert spec_id == "pilot"
+        return self.pilot
 
 
 class _OrquestadorGrabador:
@@ -108,10 +80,20 @@ class _OrquestadorGrabador:
         return TaskResult(task_id=task.task_id, status=TaskStatus.OK, summary="listo")
 
 
-def _one_node_graph() -> ExecutionGraph:
-    graph = ExecutionGraph(entry_node="n1")
-    graph.add_node(Node(id="n1", spec_id="sA"))
-    return graph
+def _runtime(tmp_path: Path, monkeypatch, provider: FakeLLM):
+    """Runtime real con el piloto, sobre ``tmp_path/project``, y un proveedor de mentira."""
+    monkeypatch.setenv("SATELLITE_HOME", str(tmp_path / "home"))
+    project = tmp_path / "project"
+    project.mkdir()
+    cfg = project / ".satellite" / "config"
+    cfg.mkdir(parents=True)
+    (cfg / "config.json").write_text(
+        json.dumps({"name": "fake", "model": "fake-model"}), encoding="utf-8"
+    )
+    monkeypatch.setattr(runtime_builder, "_load_provider", lambda _root: provider)
+    monkeypatch.setattr(runtime_builder, "_role_provider", lambda _root, _role, default: default)
+    orchestrator, _bus, _store, _registry = runtime_builder.build_runtime(project)
+    return project, orchestrator
 
 
 def _proyecto(tmp_path: Path) -> Path:
@@ -131,38 +113,26 @@ def _enviado(provider: FakeLLM) -> str:
 # --- el índice llega al proveedor por cada flujo ------------------------------
 
 
-def test_explain_question_reaches_the_provider_with_the_readme(tmp_path: Path) -> None:
-    """El atajo conversacional recibe el README real del proyecto indexado."""
-    project = _proyecto(tmp_path)
+def test_explain_question_reaches_the_provider_with_the_readme(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """El turno del piloto recibe el README real del proyecto indexado."""
     provider = FakeLLM(script=[{"content": "Es un punto de venta."}])
-    services = RuntimeServices(
-        registry=DefaultAgentRegistry(),
-        provider=provider,
-        context=DefaultContextEngine(project),
-    )
-    orch = DefaultOrchestrator(
-        _PlannerQueNoPlanifica(), _RunnerQueNoCorre(), services, allow_chat_direct=True
-    )
+    project, orch = _runtime(tmp_path, monkeypatch, provider)
+    _proyecto(project)
 
     run(orch.execute(Task(goal="¿De qué trata el proyecto?", project_root=project)))
 
     enviado = _enviado(provider)
     assert "caja registradora" in enviado  # el README, no una suposición
-    assert "PROJECT CONTEXT" in enviado
+    assert "project index" in enviado
 
 
-def test_chat_session_attaches_the_index_before_sending(tmp_path: Path) -> None:
+def test_chat_session_attaches_the_index_before_sending(tmp_path: Path, monkeypatch) -> None:
     """TUI y escritorio hablan por ChatSession: el índice tiene que ir en el turno."""
-    project = _proyecto(tmp_path)
     provider = FakeLLM(script=[{"content": "Es un punto de venta."}])
-    services = RuntimeServices(
-        registry=DefaultAgentRegistry(),
-        provider=provider,
-        context=DefaultContextEngine(project),
-    )
-    orch = DefaultOrchestrator(
-        _PlannerQueNoPlanifica(), _RunnerQueNoCorre(), services, allow_chat_direct=True
-    )
+    project, orch = _runtime(tmp_path, monkeypatch, provider)
+    _proyecto(project)
     chat = ChatSession(project, orch, persist=False)
 
     reply = run(chat.send("¿De qué trata el proyecto?"))
@@ -171,34 +141,11 @@ def test_chat_session_attaches_the_index_before_sending(tmp_path: Path) -> None:
     assert "caja registradora" in _enviado(provider)
 
 
-def test_the_planner_receives_the_project_context(tmp_path: Path) -> None:
-    """El planner arma el grafo con el índice del proyecto en su slot dinámico."""
-    project = _proyecto(tmp_path)
-    provider = FakeLLM(script=[{"content": '{"type":"needs_clarification","question":"¿?"}'}])
-    from satellite.orchestration.planner import LLMPlanner
-
-    task = Task(goal="haz lo que haga falta", project_root=project)
-    index = ProjectIndex(project)
-    index.ensure_persisted()
-    task.metadata["project_context"] = index.context_for_goal(task.goal)
-
-    run(LLMPlanner(provider, DefaultAgentRegistry()).plan(task, DefaultAgentRegistry()))
-
-    assert "caja registradora" in _enviado(provider)
-
-
-def test_the_plan_mode_advisor_receives_the_project_context(tmp_path: Path) -> None:
-    """El modo plan también ve el proyecto (no solo el planner normal)."""
-    project = _proyecto(tmp_path)
-    advisor = _AdvisorGrabador()
-    services = RuntimeServices(registry=DefaultAgentRegistry(), context=DefaultContextEngine(project))
-    orch = DefaultOrchestrator(
-        _PlannerQueNoPlanifica(),
-        _RunnerQueNoCorre(),
-        services,
-        allow_chat_direct=False,
-        plan_advisor=advisor,
-    )
+def test_plan_mode_receives_the_project_context(tmp_path: Path, monkeypatch) -> None:
+    """El modo plan también ve el proyecto (no solo el turno normal)."""
+    provider = FakeLLM(script=[{"content": "Propongo dos enfoques."}])
+    project, orch = _runtime(tmp_path, monkeypatch, provider)
+    _proyecto(project)
 
     run(
         orch.execute(
@@ -206,47 +153,34 @@ def test_the_plan_mode_advisor_receives_the_project_context(tmp_path: Path) -> N
         )
     )
 
-    assert "caja registradora" in advisor.history
+    enviado = _enviado(provider)
+    assert "Plan mode" in enviado
+    assert "caja registradora" in enviado
 
 
-def test_a_graph_node_receives_the_project_context(tmp_path: Path) -> None:
-    """La ruta de ejecución: el nodo recibe el índice como sección dinámica."""
+def test_the_pilot_agent_receives_the_project_context(tmp_path: Path) -> None:
+    """El agente piloto recibe el índice como sección dinámica de su contexto."""
     project = _proyecto(tmp_path)
     factory = _FactoryGrabadora()
-    services = RuntimeServices(
-        registry=DefaultAgentRegistry(),
-        factory=factory,
-        context=DefaultContextEngine(project),
-    )
-    orch = DefaultOrchestrator(
-        _PlannerFijo(_one_node_graph()),
-        DefaultGraphRunner(factory),
-        services,
-        allow_chat_direct=False,
-    )
+    services = RuntimeServices(factory=factory, context=DefaultContextEngine(project))
 
-    result = run(orch.execute(Task(goal="revisa caja.py", project_root=project)))
+    result = run(
+        PilotOrchestrator(services).execute(Task(goal="revisa caja.py", project_root=project))
+    )
 
     assert result.status is TaskStatus.OK
-    secciones = factory.agents["sA"].last_ctx.context.sections
+    secciones = factory.pilot.last_ctx.context.sections
     assert any("caja registradora" in section.content for section in secciones)
 
 
 # --- preguntas normales recuperan archivos relevantes -------------------------
 
 
-def test_a_normal_question_retrieves_the_relevant_file(tmp_path: Path) -> None:
+def test_a_normal_question_retrieves_the_relevant_file(tmp_path: Path, monkeypatch) -> None:
     """Una pregunta normal trae al prompt el archivo del proyecto que el índice elige."""
-    project = _proyecto(tmp_path)
     provider = FakeLLM(script=[{"content": "cobrar devuelve el total."}])
-    services = RuntimeServices(
-        registry=DefaultAgentRegistry(),
-        provider=provider,
-        context=DefaultContextEngine(project),
-    )
-    orch = DefaultOrchestrator(
-        _PlannerQueNoPlanifica(), _RunnerQueNoCorre(), services, allow_chat_direct=True
-    )
+    project, orch = _runtime(tmp_path, monkeypatch, provider)
+    _proyecto(project)
 
     run(orch.execute(Task(goal="¿qué hace caja.py?", project_root=project)))
 
@@ -268,34 +202,23 @@ def test_the_same_index_view_is_bounded(tmp_path: Path) -> None:
 # --- proyecto sin índice -------------------------------------------------------
 
 
-def test_an_empty_project_says_there_is_no_context(tmp_path: Path) -> None:
-    """Sin archivos indexables, un turno explicativo lo dice en vez de fingir contexto."""
-    provider = FakeLLM(script=[{"content": "No lo sé."}])
-    services = RuntimeServices(
-        registry=DefaultAgentRegistry(),
-        provider=provider,
-        context=DefaultContextEngine(tmp_path),
-    )
-    orch = DefaultOrchestrator(
-        _PlannerQueNoPlanifica(), _RunnerQueNoCorre(), services, allow_chat_direct=True
-    )
-    chat = ChatSession(tmp_path, orch, persist=False)
+def test_an_empty_project_is_told_to_the_pilot(tmp_path: Path, monkeypatch) -> None:
+    """Sin archivos indexables, el piloto lo sabe (y lo dice) en vez de fingir contexto."""
+    provider = FakeLLM(script=[{"content": "No hay archivos que leer en el proyecto."}])
+    project, orch = _runtime(tmp_path, monkeypatch, provider)
+    chat = ChatSession(project, orch, persist=False)
 
     reply = run(chat.send("¿De qué trata el proyecto?"))
 
-    assert "No hay contexto de proyecto" in reply.text
+    sent = "\n".join(message.content for message in provider.requests[0].messages)
+    assert '"project_index": "empty"' in sent
+    # La conversación ya no antepone un aviso por regex: la respuesta es la del piloto.
+    assert reply.text == "No hay archivos que leer en el proyecto."
 
 
-def _orchestrator_for(project: Path) -> DefaultOrchestrator:
-    return DefaultOrchestrator(
-        _PlannerQueNoPlanifica(),
-        _RunnerQueNoCorre(),
-        RuntimeServices(
-            registry=DefaultAgentRegistry(),
-            provider=FakeLLM(script=[{"content": "ok"}]),
-            context=DefaultContextEngine(project),
-        ),
-        allow_chat_direct=True,
+def _orchestrator_for(project: Path) -> PilotOrchestrator:
+    return PilotOrchestrator(
+        RuntimeServices(factory=_FactoryGrabadora(), context=DefaultContextEngine(project))
     )
 
 
@@ -347,22 +270,14 @@ def test_sensitive_files_are_not_attached_and_are_reported(tmp_path: Path) -> No
     assert reply.context["ignored"] == [".env"]
 
 
-def test_the_explain_question_never_leaks_a_secret(tmp_path: Path) -> None:
+def test_the_explain_question_never_leaks_a_secret(tmp_path: Path, monkeypatch) -> None:
     """El índice nunca mete un secreto al prompt (regresión del punto 3)."""
-    _proyecto(tmp_path)
-    (tmp_path / ".env").write_text("API_KEY=never-store", encoding="utf-8")
-
     provider = FakeLLM(script=[{"content": "ok"}])
-    services = RuntimeServices(
-        registry=DefaultAgentRegistry(),
-        provider=provider,
-        context=DefaultContextEngine(tmp_path),
-    )
-    orch = DefaultOrchestrator(
-        _PlannerQueNoPlanifica(), _RunnerQueNoCorre(), services, allow_chat_direct=True
-    )
+    project, orch = _runtime(tmp_path, monkeypatch, provider)
+    _proyecto(project)
+    (project / ".env").write_text("API_KEY=never-store", encoding="utf-8")
 
-    run(orch.execute(Task(goal="¿De qué trata el proyecto?", project_root=tmp_path)))
+    run(orch.execute(Task(goal="¿De qué trata el proyecto?", project_root=project)))
 
     enviado = _enviado(provider)
     assert "never-store" not in enviado

@@ -2,34 +2,6 @@
 
 from __future__ import annotations
 
-PLAN_STEP_SCHEMA: dict = {
-    "type": "object",
-    "properties": {
-        "id": {"type": "string"},
-        "agent_id": {"type": "string"},
-        "instruction": {"type": "string"},
-        "depends_on": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["id", "agent_id", "instruction"],
-}
-
-ORCHESTRATOR_OUTPUT_SCHEMA: dict = {
-    "type": "object",
-    "required": ["type"],
-    "properties": {
-        "type": {
-            "type": "string",
-            "enum": ["plan", "capability_gap", "needs_clarification"],
-        },
-        "steps": {"type": "array", "items": PLAN_STEP_SCHEMA},
-        "rationale": {"type": "string"},
-        "missing": {"type": "string"},
-        "steps_blocked": {"type": "array", "items": {"type": "string"}},
-        "partial_plan": {"type": "array", "items": PLAN_STEP_SCHEMA},
-        "question": {"type": "string"},
-    },
-}
-
 PROPOSED_AGENT_SCHEMA: dict = {
     "type": "object",
     "properties": {
@@ -107,33 +79,6 @@ PROPOSED_AGENT_SCHEMA: dict = {
         "question": {"type": "string"},
     },
     "required": ["type"],
-}
-
-PLAN_OPTIONS_SCHEMA: dict = {
-    "type": "object",
-    "required": ["question", "options"],
-    "properties": {
-        "question": {"type": "string"},
-        "recommendation": {"type": "string"},
-        "options": {
-            "type": "array",
-            "minItems": 2,
-            "maxItems": 4,
-            "items": {
-                "type": "object",
-                "required": ["id", "title", "summary"],
-                "properties": {
-                    "id": {"type": "string"},
-                    "title": {"type": "string"},
-                    "summary": {"type": "string"},
-                    "approach": {"type": "array", "items": {"type": "string"}},
-                    "tradeoffs": {"type": "string"},
-                    "effort": {"type": "string"},
-                    "risk": {"type": "string"},
-                },
-            },
-        },
-    },
 }
 
 CURATOR_OUTPUT_SCHEMA: dict = {

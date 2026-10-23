@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -199,11 +200,22 @@ class LLMAgent(Agent):
         spawn_manager=None,
         spawn_guard: SpawnGuard | None = None,
         is_child: bool = False,
+        stream_text: bool = False,
     ) -> None:
         self.spec = spec
+        # Publicar el texto en streaming (TEXT_DELTA). Sólo quien habla con el usuario
+        # (el piloto); los agentes delegados trabajan sin narrar al chat.
+        self.stream_text = bool(stream_text)
+        self._segment = 0
+        # Presupuesto de rondas de tools (None = ``spec.max_turns``) y cuántos resultados
+        # de tools recientes se conservan enteros (None = todos). Los usa el piloto.
+        self.tool_round_budget: int | None = None
+        self.keep_tool_results: int | None = None
+        # True si la última ejecución se quedó sin rondas de tools: quien delegó sabe
+        # que el trabajo puede estar a medias y continúa en vez de repetirlo.
+        self.budget_exhausted = False
         self.system_prompt = system_prompt
         self.user_template = user_template
-        self._spec_fp = canonical_fingerprint(spec.to_dict())
         self.tools = tools
         self.provider = provider
         self.tool_registry = tool_registry
@@ -249,6 +261,11 @@ class LLMAgent(Agent):
             updates = {"user_language": ctx.user_language}
             if ctx.task_id:
                 updates["task_id"] = ctx.task_id
+            # Y la sesión: sin ella el delegado corría con una sesión vacía y un permiso
+            # «para esta sesión» se comportaba como uno de una sola tarea.
+            session_id = getattr(ctx, "session_id", "") or ""
+            if session_id and hasattr(self.delegation_ctx, "session_id"):
+                updates["session_id"] = session_id
             self.delegation_ctx = replace(self.delegation_ctx, **updates)
         started = time.monotonic()
         tool_records: list[ToolRecord] = []
@@ -280,19 +297,29 @@ class LLMAgent(Agent):
             node_id=ctx.node_id or str(task.get("node_id", "")),
             agent_id=self.spec.id,
             role=self.spec.model_role,
-            spec_fp=self._spec_fp,
+            **_fingerprints(self.spec),
         )
         final_output: dict | None = None
         error: str | None = None
 
         # Fase 1: rondas LLM↔tool (máx spec.max_turns)
-        remaining = self.spec.max_turns
+        self.budget_exhausted = False
+        reads = _ReadLedger(project_root=self.workdir or self.project_root)
+        remaining = (
+            self.tool_round_budget
+            if self.tool_round_budget is not None
+            else self.spec.max_turns
+        )
         while True:
             # Si ya pidieron cancelar, ni se llama: el aborto en vuelo es la red, no la norma.
             if getattr(ctx, "cancel", None) is not None and getattr(
                 ctx.cancel, "cancelled", False
             ):
                 return self._cancelled(ctx, node_id, started, usage_total, tuple(tool_records))
+            if self.keep_tool_results is not None:
+                # Cada llamada reenvía toda la conversación: los resultados viejos de las
+                # tools se recortan para que el coste no crezca con cada lectura.
+                messages = _compact_tool_results(messages, self.keep_tool_results)
             response = await self._complete(
                 ctx,
                 LLMRequest(
@@ -347,7 +374,15 @@ class LLMAgent(Agent):
                         return self._cancelled(
                             ctx, node_id, started, usage_total, tuple(tool_records)
                         )
-                    runs[tool_call.id] = await self._run_tool(tool_call, ctx)
+                    tool_total = sum(1 for m in messages if m.role is Role.TOOL)
+                    # Se cuentan también los resultados de ESTA ronda: tras añadirlos, la
+                    # compactación recorta lo que quede fuera de la ventana.
+                    after_round = tool_total + len(response.tool_calls)
+                    if reads.repeated(tool_call, total=after_round, keep=self.keep_tool_results):
+                        # Ya está entero más arriba: releerlo sólo encarece cada llamada.
+                        runs[tool_call.id] = _already_read(tool_call)
+                    else:
+                        runs[tool_call.id] = await self._run_tool(tool_call, ctx)
                 if spawn_tasks:
                     gathered = await asyncio.gather(
                         *spawn_tasks.values(), return_exceptions=True
@@ -367,6 +402,16 @@ class LLMAgent(Agent):
                         ),
                     )
                     tool_records.append(record)
+                    # Una tool que pudo tocar archivos invalida lo leído aunque fallara
+                    # (un coder que edita y luego no cumple el schema deja el cambio hecho).
+                    reads.forget_writes(tool_call)
+                    if tool_result.success:
+                        output = tool_result.output
+                        if not (isinstance(output, dict) and output.get("already_read")):
+                            reads.remember(
+                                tool_call,
+                                ordinal=sum(1 for m in messages if m.role is Role.TOOL),
+                            )
                     messages.append(
                         Message(
                             role=Role.TOOL,
@@ -381,11 +426,27 @@ class LLMAgent(Agent):
                             tool_call_id=tool_call.id,
                         )
                     )
+                # `ask_user` termina el turno: no se gasta otra llamada al modelo y el
+                # turno queda esperando la respuesta del usuario.
+                question = self._task_state.get("ask_user")
+                if isinstance(question, dict):
+                    return self._asked(ctx, node_id, started, usage_total, tool_records, question)
                 if remaining > 0:
                     remaining -= 1
+                    if self.tool_round_budget is not None and remaining == BUDGET_WARNING_AT:
+                        messages.append(
+                            Message(role=Role.USER, content=BUDGET_WARNING.format(n=remaining))
+                        )
                     continue
                 else:
                     # sin turnos restantes: sigue a síntesis con lo acumulado
+                    self.budget_exhausted = True
+                    messages.append(
+                        Message(
+                            role=Role.USER,
+                            content=REPORT_PROGRESS if self.spec.output_schema else ANSWER_NOW,
+                        )
+                    )
                     response = await self._complete(
                         ctx,
                         LLMRequest(
@@ -444,7 +505,23 @@ class LLMAgent(Agent):
             else:
                 final_output = parsed
         else:
-            final_output = {"content": response.content or ""}
+            content = response.content or ""
+            if _has_tool_markup(content):
+                # Algunos modelos escriben una llamada a tool como texto cuando ya no
+                # tienen tools: eso no es una respuesta. Se pide la respuesta una vez más.
+                messages.append(Message(role=Role.ASSISTANT, content=content))
+                messages.append(Message(role=Role.USER, content=ANSWER_NOW))
+                retry = await self._complete(
+                    ctx,
+                    LLMRequest(messages=tuple(messages), tools=(), temperature=0.0, call=call),
+                )
+                if retry is None:
+                    return self._cancelled(ctx, node_id, started, usage_total, tuple(tool_records))
+                usage_total = _accumulate(usage_total, retry.usage)
+                content = retry.content or ""
+                if _has_tool_markup(content):
+                    content = _strip_tool_markup(content)
+            final_output = {"content": content}
 
         duration = int((time.monotonic() - started) * 1000)
         status = AgentStatus.FAILED if error else AgentStatus.OK
@@ -474,8 +551,59 @@ class LLMAgent(Agent):
         """
         from satellite.orchestration.cancel import race_cancel
 
-        valor, cancelado = await race_cancel(getattr(ctx, "cancel", None), self.provider.complete(request))
+        if self.stream_text:
+            from satellite.providers.streaming import DeltaPublisher, complete_streaming
+
+            # Cada llamada es un segmento: la UI sabe que el texto de un segmento
+            # anterior (p. ej. «voy a leer el archivo») ya no es la respuesta final.
+            self._segment += 1
+            publisher = DeltaPublisher(
+                ctx.sink,
+                task_id=ctx.task_id,
+                node_id=ctx.node_id or None,
+                agent_id=self.spec.id,
+                segment=self._segment,
+            )
+            llamada = complete_streaming(self.provider, request, publisher)
+        else:
+            llamada = self.provider.complete(request)
+        from satellite.providers.retry import retry_listener
+
+        # Un reintento del proveedor se ve en la UI («reconectando 2/4…») en vez de
+        # parecer un turno colgado.
+        token = retry_listener.set(
+            lambda info: self._emit(ctx, EventType.RETRY, {**info, "agent_id": self.spec.id})
+        )
+        try:
+            valor, cancelado = await race_cancel(getattr(ctx, "cancel", None), llamada)
+        finally:
+            retry_listener.reset(token)
         return None if cancelado else valor
+
+    def _asked(self, ctx, node_id, started, usage, tool_records, question: dict):
+        """Resultado de un turno que termina con una pregunta al usuario."""
+        from satellite.tools.ask_user import render_question
+
+        output = {"mode": "question", "content": render_question(question), **question}
+        result = AgentResult(
+            node_id=node_id,
+            spec_id=self.spec.id,
+            status=AgentStatus.NEEDS_USER_INPUT,
+            summary=_clip_summary(question.get("question", "")),
+            output=output,
+            tool_calls=tuple(tool_records),
+            metrics=ExecutionMetrics(
+                tokens_in=usage.prompt_tokens,
+                tokens_out=usage.completion_tokens,
+                duration_ms=int((time.monotonic() - started) * 1000),
+            ),
+        )
+        self._emit(
+            ctx,
+            EventType.NODE_FINISHED,
+            {"status": result.status.value, "summary": result.summary},
+        )
+        return result
 
     def _cancelled(
         self,
@@ -641,6 +769,23 @@ class LLMAgent(Agent):
         )
         return record, result
 
+    def _offered_tool_denial(self, call: ToolCall) -> tuple[str, str] | None:
+        """Sólo se ejecutan las tools que se ofrecieron a este agente.
+
+        La lista de tools decide qué ve el modelo; sin esta comprobación, una llamada a
+        una tool que no se le ofreció (``write_file`` en modo plan, ``delegate`` en un
+        auditor) se ejecutaba igual contra el registro global.
+        """
+        offered = {tool.id for tool in self.tools or ()}
+        if call.name in offered:
+            return None
+        available = ", ".join(sorted(offered)) or "none"
+        return (
+            f"Tool '{call.name}' is not offered to this agent (tool_not_offered). "
+            f"Available tools: {available}.",
+            "tool_not_offered",
+        )
+
     def _child_tool_denial(self, call: ToolCall) -> tuple[str, str] | None:
         """Code-enforced boundary for subagents.
 
@@ -693,7 +838,7 @@ class LLMAgent(Agent):
 
     async def _run_tool(self, call: ToolCall, ctx: AgentContext):
         started = time.monotonic()
-        denial = self._child_tool_denial(call)
+        denial = self._offered_tool_denial(call) or self._child_tool_denial(call)
         if denial is not None:
             from satellite.core.tool_models import ToolResult
 
@@ -754,6 +899,12 @@ class LLMAgent(Agent):
             result = await self._ask_for_path(call, tool_ctx, result)
         elif result.error_code == "command_not_allowed" and tool_ctx.approval is not None:
             result = await self._ask_for_command(call, tool_ctx, result)
+        if not result.success and call.name in ("run_command", "run_argv"):
+            # Un comando que no se puede ejecutar suele tener su tool: se dice cuál, para
+            # que el modelo no pruebe variantes del mismo comando.
+            hint = command_hint(_command_text(call))
+            if hint:
+                result = replace(result, error=f"{result.error or ''} {hint}".strip())
         if result.success and call.name in ("run_command", "run_argv", "run_python"):
             # Evidence for propose_skill: a successful execution happened in this task.
             self._task_state.setdefault("successful_runs", []).append(
@@ -812,6 +963,224 @@ class LLMAgent(Agent):
                 payload=payload,
             )
         )
+
+
+BUDGET_WARNING_AT = 2
+BUDGET_WARNING = (
+    "Budget note: you have {n} tool rounds left. Stop exploring unless something "
+    "essential is missing, and prepare your answer."
+)
+ANSWER_NOW = (
+    "You cannot call tools any more. Answer the user now, in plain text and in the "
+    "user's language, with what you already found. Do not write tool calls."
+)
+REPORT_PROGRESS = (
+    "You have no tool rounds left. Give your final answer now with what you have: "
+    "in the summary, say what you finished and, explicitly, what is still left to do. "
+    "If you could not run the verification, mark it as not passed."
+)
+TRUNCATED_NOTE = "\n[older tool result truncated to save context; call the tool again if you need it]"
+TRUNCATED_KEEP_CHARS = 400
+
+_TOOL_MARKUP_RE = re.compile(
+    r"<[｜|]{1,2}DSML[｜|]{1,2}|<tool_call>|<function_calls>|<invoke name=|<\|tool_call",
+)
+
+
+def _has_tool_markup(text: str) -> bool:
+    return bool(_TOOL_MARKUP_RE.search(text or ""))
+
+
+def _strip_tool_markup(text: str) -> str:
+    """Quita los bloques de llamada a tool escritos como texto (último recurso)."""
+    cleaned = re.sub(r"<[｜|]{1,2}DSML[｜|]{1,2}[^>]*>.*?(?:</[｜|]{1,2}DSML[｜|]{1,2}[^>]*>|$)", "", text, flags=re.S)
+    cleaned = re.sub(r"<(tool_call|function_calls)>.*?(</\1>|$)", "", cleaned, flags=re.S)
+    return cleaned.strip()
+
+
+_TEST_RUNNER_RE = re.compile(
+    r"(^|[\s/])(pytest|py\.test|unittest|nosetests|tox|jest|vitest|mocha)\b"
+    r"|\b(npm|pnpm|yarn)\s+(run\s+)?test\b|\bgo\s+test\b|\bcargo\s+test\b"
+    r"|\b(mvn|gradle|gradlew)\b.*\btest\b|\bdotnet\s+test\b|\bphpunit\b",
+    re.IGNORECASE,
+)
+_FILE_INSPECTION_RE = re.compile(
+    r"^\s*(cat|head|tail|wc|ls|tree|stat|file|find|grep|egrep|rg|ag|sed\s+-n|awk)\b"
+    r"|\bpython3?\s+-c\b.*\b(read_text|read_bytes|open\(|listdir|glob|walk)",
+    re.IGNORECASE,
+)
+TEST_HINT = (
+    "To run tests use the code_task tool with action=test and path=<test file> "
+    "(it picks the right runner); do not retry this through run_command."
+)
+FILES_HINT = (
+    "To inspect files use read_file (with start_line/end_line), list_dir, or "
+    "search_files with `content` to search text; do not retry this through run_command."
+)
+
+
+def command_hint(command: str) -> str | None:
+    """La tool que corresponde a un comando de consola habitual, o ``None``."""
+    text = str(command or "").strip()
+    if not text:
+        return None
+    if _TEST_RUNNER_RE.search(text):
+        return TEST_HINT
+    if _FILE_INSPECTION_RE.search(text):
+        return FILES_HINT
+    return None
+
+
+def _command_text(call: ToolCall) -> str:
+    args = call.arguments or {}
+    if call.name == "run_argv":
+        argv = args.get("argv")
+        return " ".join(str(part) for part in argv) if isinstance(argv, list) else ""
+    return str(args.get("command") or "")
+
+
+READ_TOOL = "read_file"
+WRITE_TOOLS = frozenset({"write_file", "edit_file"})
+# Tools que no cambian el proyecto: todo lo demás (escribir, ejecutar, delegar, lanzar
+# hijos…) puede haber tocado archivos, así que invalida lo leído.
+READ_ONLY_TOOLS = frozenset(
+    {
+        READ_TOOL,
+        "list_dir",
+        "search_files",
+        "lsp",
+        "git_status",
+        "request_context",
+        "describe_runtime",
+        "search_skills",
+        "web_search",
+        "web_fetch",
+        "ask_user",
+    }
+)
+ALREADY_READ_NOTE = (
+    "You already read exactly this range earlier in this conversation and that result "
+    "is still above, complete. Use it instead of reading again."
+)
+
+
+def _read_key(call: ToolCall) -> tuple | None:
+    """(ruta normalizada, inicio, fin) de una llamada a ``read_file``."""
+    if call.name != READ_TOOL:
+        return None
+    args = call.arguments or {}
+    path = str(args.get("path") or "").strip()
+    if not path:
+        return None
+    return (_norm_path(path), args.get("start_line"), args.get("end_line"))
+
+
+def _norm_path(path: str, project_root: Path | None = None) -> str:
+    import posixpath
+
+    text = path.replace("\\", "/")
+    if project_root is not None:
+        # Las rutas relativas lo son al proyecto (no al cwd del proceso), y una absoluta
+        # dentro del proyecto es la misma que su forma relativa.
+        base = Path(project_root).resolve()
+        candidate = Path(text)
+        if not candidate.is_absolute():
+            candidate = base / candidate
+        try:
+            text = candidate.resolve().relative_to(base).as_posix()
+        except (ValueError, OSError):
+            text = candidate.as_posix()
+    normalized = posixpath.normpath(text)
+    return normalized[2:] if normalized.startswith("./") else normalized
+
+
+class _ReadLedger:
+    """Qué rangos se leyeron en esta ejecución y en qué posición de la conversación.
+
+    Un rango repetido sólo se ahorra si su resultado sigue **entero** (entre los
+    ``keep`` resultados de tools más recientes, que la compactación no recorta) y el
+    archivo no se escribió después.
+    """
+
+    def __init__(self, project_root: Path | None = None) -> None:
+        self._seen: dict[tuple, int] = {}
+        self._root = project_root
+
+    def _key(self, call: ToolCall) -> tuple | None:
+        key = _read_key(call)
+        if key is None:
+            return None
+        return (_norm_path(key[0], self._root),) + key[1:]
+
+    def remember(self, call: ToolCall, *, ordinal: int) -> None:
+        key = self._key(call)
+        if key is not None:
+            self._seen[key] = ordinal
+
+    def repeated(self, call: ToolCall, *, total: int, keep: int | None) -> bool:
+        key = self._key(call)
+        if key is None or key not in self._seen:
+            return False
+        return keep is None or total - self._seen[key] <= keep
+
+    def forget_writes(self, call: ToolCall) -> None:
+        """Olvida lo leído de un archivo escrito; o todo, si la tool pudo tocar cualquiera."""
+        if call.name in READ_ONLY_TOOLS:
+            return
+        path = str((call.arguments or {}).get("path") or "").strip()
+        if call.name not in WRITE_TOOLS or not path:
+            # delegate, spawn_agent, run_command, code_task…: no se sabe qué cambió.
+            self._seen.clear()
+            return
+        target = _norm_path(path, self._root)
+        self._seen = {key: pos for key, pos in self._seen.items() if key[0] != target}
+
+
+def _already_read(call: ToolCall):
+    from satellite.core.tool_models import ToolResult
+
+    result = ToolResult(
+        call_id=call.id,
+        success=True,
+        output={"already_read": True, "note": ALREADY_READ_NOTE},
+    )
+    record = ToolRecord(
+        tool_name=call.name,
+        arguments=dict(call.arguments or {}),
+        success=True,
+        duration_ms=0,
+    )
+    return record, result
+
+
+# Resultados que no se recortan: son el único registro de lo que hizo otro agente, y
+# «vuelve a llamar a la tool» significaría repetir la delegación (y sus cambios).
+_UNCOMPACTABLE_TOOLS = frozenset({"delegate", "spawn_agent"})
+
+
+def _compact_tool_results(messages: list[Message], keep: int) -> list[Message]:
+    """Recorta los resultados de tools salvo los ``keep`` más recientes."""
+    protected = {
+        call.id
+        for m in messages
+        if m.role is Role.ASSISTANT
+        for call in (m.tool_calls or ())
+        if call.name in _UNCOMPACTABLE_TOOLS
+    }
+    tool_indexes = [
+        i for i, m in enumerate(messages)
+        if m.role is Role.TOOL and m.tool_call_id not in protected
+    ]
+    old = set(tool_indexes[:-keep] if keep > 0 else tool_indexes)
+    if not old:
+        return messages
+    out: list[Message] = []
+    for index, message in enumerate(messages):
+        content = message.content or ""
+        if index in old and not content.endswith(TRUNCATED_NOTE) and len(content) > TRUNCATED_KEEP_CHARS:
+            message = replace(message, content=content[:TRUNCATED_KEEP_CHARS] + TRUNCATED_NOTE)
+        out.append(message)
+    return out
 
 
 def _prune_to_schema(schema, value, _path: str = ""):
@@ -969,3 +1338,19 @@ def _summarize(task: dict, output: dict | None, error: str | None) -> str:
         if rendered and rendered not in ("{}", "null"):
             return _clip_summary(rendered)
     return "Node completado"
+
+
+def _fingerprints(spec: AgentSpec) -> dict:
+    """Huellas de la llamada: la spec sin su catálogo, y el catálogo aparte.
+
+    El catálogo de delegación (``can_call``) va en el system, así que un agente nuevo
+    cambia el prefijo: con su propia huella se clasifica como cambio de catálogo y no
+    como deriva. Se calcula al llamar porque quien crea el agente (el piloto) puede
+    fijar ``can_call`` después de construirlo.
+    """
+    data = spec.to_dict()
+    catalog = data.pop("can_call", None) or []
+    return {
+        "spec_fp": canonical_fingerprint(data),
+        "catalog_fp": canonical_fingerprint(catalog) if catalog else "",
+    }

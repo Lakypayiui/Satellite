@@ -246,11 +246,9 @@ REPLY_FALLBACKS: dict[str, dict[str, str]] = {
         "es": "No obtuve respuesta del modelo. Inténtalo de nuevo o reformula tu pregunta.",
         "en": "I didn't get a response from the model. Please try again or rephrase your question.",
     },
-    "no_project_context": {
-        "es": "No hay contexto de proyecto que adjuntar "
-        "(el índice está vacío o no está disponible).",
-        "en": "There is no project context to attach "
-        "(the index is empty or unavailable).",
+    "cancelled": {
+        "es": "Turno cancelado",
+        "en": "Turn cancelled",
     },
     "greeting": {
         "es": "¡Hola! ¿En qué puedo ayudarte?",

@@ -126,6 +126,10 @@ let ventana: BrowserWindow | null = null;
 let backend: Backend | null = null;
 const chatgptAccount = new ChatGPTAccount();
 let cortarFlujo: (() => void) | null = null;
+// Último índice SSE recibido: al reconectar se pide desde ahí (sin repetir ni saltar).
+let ultimoIndice = 0;
+let reintentosFlujo = 0;
+const MAX_REINTENTOS_FLUJO = 3;
 // Arranque único: una petición que llegue antes del handshake espera a este intento en vez
 // de fallar con "el backend no está en marcha" (era lo que dejaba la ventana bloqueada).
 let arranque: Promise<Backend> | null = null;
@@ -239,7 +243,9 @@ function iniciarBackend(): Promise<Backend> {
       await instancia.start(process.env.SATELLITE_PROJECT || undefined);
       backend = instancia;
       errorArranque = "";
-      if (ventana) suscribir();
+      // Un backend nuevo numera sus eventos desde cero.
+      ultimoIndice = 0;
+      if (ventana) suscribir(0);
       return instancia;
     })()
       .catch((exc: unknown) => {
@@ -257,23 +263,39 @@ async function arrancarBackend(): Promise<void> {
   await iniciarBackend();
 }
 
-function suscribir(): void {
+function suscribir(after = ultimoIndice): void {
   cortarFlujo?.();
   cortarFlujo = null;
   if (!backend?.ready) {
     // El backend aún no está listo: se engancha al terminar (una sola vez).
     void iniciarBackend()
       .then(() => {
-        if (ventana && !cortarFlujo) suscribir();
+        if (ventana && !cortarFlujo) suscribir(0);
       })
       .catch(() => {});
     return;
   }
   if (!ventana) return;
   cortarFlujo = backend.stream(
-    0,
-    (item: StreamItem) => ventana?.webContents.send("satellite:event", item),
-    (mensaje: string) => ventana?.webContents.send("satellite:backend-down", mensaje),
+    after,
+    (item: StreamItem) => {
+      if (typeof item.index === "number") ultimoIndice = item.index;
+      reintentosFlujo = 0;
+      ventana?.webContents.send("satellite:event", item);
+    },
+    (mensaje: string) => {
+      // Un corte del flujo no es un backend caído: se reconecta desde el último índice
+      // y sólo si fallan los reintentos se avisa (y se ofrece reiniciar).
+      if (backend?.ready && reintentosFlujo < MAX_REINTENTOS_FLUJO) {
+        const espera = 500 * 2 ** reintentosFlujo;
+        reintentosFlujo += 1;
+        setTimeout(() => {
+          if (ventana) suscribir(ultimoIndice);
+        }, espera);
+        return;
+      }
+      ventana?.webContents.send("satellite:backend-down", mensaje);
+    },
   );
 }
 
@@ -545,8 +567,9 @@ ipcMain.handle("satellite:restart", async (evento) => {
   }
 });
 
-ipcMain.on("satellite:subscribe", (evento) => {
-  if (remitenteValido(evento)) suscribir();
+ipcMain.on("satellite:subscribe", (evento, after: unknown) => {
+  // El renderer pide desde su propio cursor (0 al montar: reconstruye la actividad).
+  if (remitenteValido(evento)) suscribir(typeof after === "number" && after >= 0 ? after : 0);
 });
 ipcMain.on("satellite:unsubscribe", (evento) => {
   if (!remitenteValido(evento)) return;

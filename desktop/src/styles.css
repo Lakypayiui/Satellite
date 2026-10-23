@@ -864,6 +864,27 @@ textarea:focus {
   color: var(--text-soft);
 }
 
+/* El agente preguntó: el turno espera la respuesta del usuario. */
+.turno.agente.pregunta {
+  border-left: 2px solid var(--accent);
+  color: var(--text);
+}
+
+/* La respuesta mientras se escribe (streaming). */
+.turno.agente.vivo {
+  opacity: 0.85;
+}
+
+.opciones-pregunta {
+  flex-wrap: wrap;
+  margin-top: var(--s2);
+}
+
+.cambios-pedidos {
+  flex: 1;
+  min-width: 0;
+}
+
 /* Markdown del agente: el turno usa pre-wrap para el texto plano del usuario;
    dentro del render Markdown mandan los bloques. */
 .markdown {
@@ -1251,72 +1272,6 @@ textarea:focus {
   gap: var(--s2);
   margin-top: var(--s3);
   flex-wrap: wrap;
-}
-
-/* -------------------------------------- plan del turno (elegir alternativa) */
-
-.plan {
-  width: 100%;
-  max-width: 900px;
-  margin: 10px auto;
-  padding: var(--s3) 20px;
-  border-top: 1px solid var(--line-soft);
-  border-bottom: 1px solid var(--line-soft);
-  background: var(--bg-2);
-}
-
-.plan-cabecera {
-  margin-bottom: var(--s2);
-  font-family: var(--mono);
-  font-size: var(--fs-dato);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.opcion-plan {
-  padding: var(--s3) 0;
-  border-top: 1px solid var(--line-soft);
-}
-
-.opcion-plan-cabecera {
-  display: flex;
-  align-items: baseline;
-  gap: var(--s2);
-}
-
-.opcion-plan h3 {
-  flex: 1;
-  margin: 0;
-  font-size: var(--fs-cuerpo);
-  font-weight: 600;
-  color: var(--text);
-}
-
-.opcion-plan .resumen {
-  margin: var(--s1) 0 0;
-  color: var(--text-soft);
-}
-
-.pasos-plan {
-  margin: var(--s2) 0 0;
-  padding-left: var(--s4);
-  font-size: var(--fs-mono);
-  color: var(--text-soft);
-}
-
-.meta-plan {
-  display: flex;
-  gap: var(--s3);
-  flex-wrap: wrap;
-  margin-top: var(--s2);
-  font-family: var(--mono);
-  font-size: var(--fs-dato);
-  color: var(--muted);
-}
-
-.opcion-plan .acciones {
-  margin-top: var(--s2);
 }
 
 /* ------------------------------------------------------- caja de texto */

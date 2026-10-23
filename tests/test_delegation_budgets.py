@@ -1,17 +1,13 @@
-"""Tests de presupuestos de delegación y del token_budget del runner (Fase 7)."""
+"""Tests de presupuestos de delegación (profundidad y tokens) del DelegationManager."""
 
 import asyncio
 
 from satellite.agents.base import Agent, AgentFactory
 from satellite.agents.registry import DefaultAgentRegistry
 from satellite.approval.base import AutoApprovalPort
-from satellite.core.graph import Edge, ExecutionGraph, GraphLimits, Node
-from satellite.core.result import AgentResult, AgentStatus, ExecutionMetrics
+from satellite.core.result import AgentResult, AgentStatus
 from satellite.core.spec import AgentSpec, CanCallEntry
-from satellite.core.task import Task
-from satellite.orchestration.base import RuntimeServices
 from satellite.orchestration.delegation import DelegationContext, DelegationManager
-from satellite.orchestration.runner import DefaultGraphRunner
 
 
 def run(coro):
@@ -69,30 +65,3 @@ def test_budget_exhausted_blocks_delegation() -> None:
     assert result.ok is False
     assert "token" in (result.error or "")
 
-
-def test_runner_token_budget_aborts(tmp_path) -> None:
-    class TokAgent(Agent):
-        async def execute(self, task, ctx):
-            return AgentResult(
-                node_id=ctx.node_id,
-                spec_id="ok",
-                status=AgentStatus.OK,
-                summary="x",
-                metrics=ExecutionMetrics(tokens_in=100, tokens_out=0),
-            )
-
-    class TokFactory(AgentFactory):
-        def create(self, spec_id, *, model_role=None):
-            return TokAgent()
-
-    graph = ExecutionGraph(entry_node="n1", limits=GraphLimits(token_budget=50))
-    graph.add_node(Node(id="n1", spec_id="ok"))
-    graph.add_node(Node(id="n2", spec_id="ok"))
-    graph.add_edge(Edge(id="e1", source="n1", target="n2", payload="result"))
-
-    runner = DefaultGraphRunner(factory=TokFactory())
-    task = Task(goal="x", project_root=tmp_path)
-    result = run(runner.run(graph, task, RuntimeServices(factory=TokFactory())))
-    assert result.status is not None
-    assert result.status.value == "failed"
-    assert "token_budget" in (result.error or "")

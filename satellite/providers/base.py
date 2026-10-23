@@ -6,8 +6,9 @@ el orquestador no conocen estos detalles.
 """
 
 from abc import ABC, abstractmethod
+from typing import AsyncIterator
 
-from satellite.core.messages import LLMRequest, LLMResponse
+from satellite.core.messages import LLMRequest, LLMResponse, StreamChunk
 from satellite.providers.caching import CacheStrategy, NoCacheStrategy
 
 
@@ -32,3 +33,16 @@ class LLMProvider(ABC):
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Completa la petición y devuelve la respuesta normalizada."""
         raise NotImplementedError
+
+    async def stream(self, request: LLMRequest) -> AsyncIterator[StreamChunk]:
+        """Completa la petición cediendo deltas de texto y, al final, la respuesta.
+
+        Contrato: el último chunk lleva ``response`` con la respuesta completa, igual a
+        la que devolvería ``complete``. Por defecto no hay streaming real: se llama a
+        ``complete`` y se cede el texto entero de una vez, así cualquier proveedor sigue
+        siendo válido aunque no implemente streaming.
+        """
+        response = await self.complete(request)
+        if response.content:
+            yield StreamChunk(text=response.content)
+        yield StreamChunk(response=response)

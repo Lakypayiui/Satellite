@@ -13,6 +13,7 @@ from pathlib import Path
 RESERVED_AGENT_IDS: frozenset[str] = frozenset(
     {
         "orchestrator",
+        "pilot",
         "agent_creator",
         "skill_curator",
         "pele_diagram_agent",
@@ -41,6 +42,10 @@ RESERVED_AGENT_IDS: frozenset[str] = frozenset(
     }
 )
 
+# Agentes base retirados: siguen reservados (nadie puede crear uno con ese id) y el
+# runtime ignora la copia que quede en los datos de una versión anterior.
+RETIRED_AGENT_IDS: frozenset[str] = frozenset({"orchestrator"})
+
 # Ids del kernel: ni agentes ni skills pueden crearse o sobrescribirse con ellos.
 # Cubre **todos** los tools que expone `build_tool_registry()`; hay un test de
 # guardia que falla si esta lista se queda atrás.
@@ -58,6 +63,9 @@ RESERVED_SKILL_IDS: frozenset[str] = frozenset(
         "git_status",
         "request_context",
         "delegate",
+        "ask_user",
+        "describe_runtime",
+        "create_agent",
         "spawn_agent",
         "search_skills",
         "propose_skill",

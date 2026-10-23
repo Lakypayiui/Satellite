@@ -2,7 +2,7 @@
 
 Regla de producto que estas pruebas protegen:
 
-1. **Todo prompt interno va en inglés** (planeación, agentes, curador, revisión,
+1. **Todo prompt interno va en inglés** (piloto, agentes, curador, revisión,
    herramientas y mensajes internos), o lleva la instrucción común de idioma.
 2. La **respuesta visible** sigue el idioma del mensaje/conversación del usuario:
    eso lo garantiza la instrucción común, inyectada en cada prompt que llega al
@@ -35,29 +35,22 @@ from satellite.core.language import (
     reply_fallback,
     with_output_language,
 )
-from satellite.agents.schemas import (
-    CURATOR_OUTPUT_SCHEMA,
-    ORCHESTRATOR_OUTPUT_SCHEMA,
-    PLAN_OPTIONS_SCHEMA,
-    PLAN_STEP_SCHEMA,
-    PROPOSED_AGENT_SCHEMA,
-)
+from satellite.agents.schemas import CURATOR_OUTPUT_SCHEMA, PROPOSED_AGENT_SCHEMA
 from satellite.context.compaction import summarize_turns
 from satellite.core.spec import AgentSpec
 from satellite.core.task import Task, TaskResult, TaskStatus
 from satellite.orchestration.base import RuntimeServices
 from satellite.orchestration.chat import Turn, reply_from_result
-from satellite.orchestration.orchestrator import DefaultOrchestrator
+from satellite.orchestration.pilot import PilotOrchestrator
 from satellite.providers.fake import FakeLLM
 
 PKG = Path(__file__).resolve().parent.parent / "satellite" / "agents"
 PROMPTS = PKG / "prompts"
 EXAMPLES = PKG / "examples"
 BASE_PROMPT_IDS = (
-    "orchestrator",
+    "pilot",
     "agent_creator",
     "skill_curator",
-    "plan_options",
     "web_researcher",
 ) + tuple(
     f"{language}_{role}"
@@ -95,10 +88,26 @@ def _base_prompts() -> DefaultPromptRegistry:
     return registry
 
 
-def _orchestrator(provider: FakeLLM) -> DefaultOrchestrator:
-    services = RuntimeServices(registry=DefaultAgentRegistry(), provider=provider)
-    # planner/runner no intervienen en la respuesta directa ni en la redacción final.
-    return DefaultOrchestrator(None, None, services)
+class _PilotFactory:
+    """Crea el piloto real (prompts del paquete) sin tools, hablando con ``provider``."""
+
+    def __init__(self, provider: FakeLLM) -> None:
+        self.provider = provider
+
+    def create(self, spec_id: str, *, model_role: str | None = None) -> LLMAgent:
+        prompts = _base_prompts()
+        return LLMAgent(
+            spec=AgentSpec(id=spec_id, name="Pilot", capabilities=("converse",), prompt_ref=spec_id),
+            system_prompt=prompts.get_system(spec_id),
+            user_template=prompts.get_user(spec_id),
+            tools=[],
+            provider=self.provider,
+        )
+
+
+def _pilot(provider: FakeLLM) -> PilotOrchestrator:
+    services = RuntimeServices(registry=DefaultAgentRegistry(), factory=_PilotFactory(provider))
+    return PilotOrchestrator(services)
 
 
 # ---------------------------------------------------------------- (1) prompts en inglés
@@ -136,15 +145,9 @@ def test_desktop_operator_prompt_is_in_english() -> None:
     assert "UNTRUSTED" in system
 
 
-def test_classifier_and_preprocessor_prompts_are_in_english(tmp_path: Path) -> None:
+def test_preprocessor_prompts_are_in_english(tmp_path: Path) -> None:
     """Los prompts internos sin respuesta al usuario también van en inglés."""
     from satellite.context.preprocessor import LocalPreprocessor
-    from satellite.orchestration.chat_detector import _llm_classify
-
-    provider = FakeLLM(script=[{"content": "task"}])
-    run(_llm_classify("clima de bogota", provider))
-    sent = "\n".join(m.content for m in provider.requests[-1].messages)
-    assert _SPANISH_PROMPT.search(sent) is None, sent
 
     proc_provider = FakeLLM(script=[{"content": "{}"}])
     run(LocalPreprocessor(proc_provider, tmp_path).preprocess("haz la app"))
@@ -199,7 +202,7 @@ def test_common_rule_keeps_internal_process_in_english() -> None:
 
 @pytest.mark.parametrize("prompt_id", BASE_PROMPT_IDS)
 def test_meta_prompts_reach_the_model_with_the_language_rule(prompt_id: str) -> None:
-    """Planner/creator/curator/plan usan build_meta_messages → llevan la regla."""
+    """Creator/curator (y cualquier prompt base) vía build_meta_messages → llevan la regla."""
     registry = _base_prompts()
     messages, _stable = build_meta_messages(
         system_prompt=registry.get_system(prompt_id),
@@ -234,88 +237,60 @@ def test_executing_agent_sends_the_language_rule(tmp_path: Path) -> None:
 # ---------------------------------------------------------------- (2) respuesta en el idioma del usuario
 
 
-def test_direct_reply_asks_for_the_user_language(tmp_path: Path) -> None:
+def test_pilot_reply_asks_for_the_user_language(tmp_path: Path) -> None:
     provider = FakeLLM(script=[{"content": "Hola, ¿en qué te ayudo?"}])
-    result = run(_orchestrator(provider)._answer_direct(Task(goal="hola", project_root=tmp_path)))
-    assert result.output["mode"] == "direct_reply"
+    result = run(_pilot(provider).execute(Task(goal="hola", project_root=tmp_path)))
+    assert result.output["mode"] == "pilot_reply"
     system = provider.requests[-1].messages[0].content
     assert OUTPUT_LANGUAGE_MARKER in system
     assert "language of the user's latest message" in system
 
 
-def test_direct_reply_empty_completion_is_a_helpful_localized_fallback(tmp_path: Path) -> None:
-    """Una completion vacía que NO es un saludo no se muestra como «(sin respuesta)».
-
-    Antes ``_answer_direct`` devolvía el literal mudo; ahora avisa de forma útil y en
-    el idioma del usuario.
-    """
+def test_pilot_empty_completion_is_a_helpful_localized_fallback(tmp_path: Path) -> None:
+    """Una completion vacía que NO es un saludo no se muestra como «(sin respuesta)»:
+    avisa de forma útil y en el idioma del usuario."""
     provider = FakeLLM(script=[{"content": ""}])
     result = run(
-        _orchestrator(provider)._answer_direct(
-            Task(goal="¿qué es la fotosíntesis?", project_root=tmp_path)
-        )
+        _pilot(provider).execute(Task(goal="¿qué es la fotosíntesis?", project_root=tmp_path))
     )
-    assert result.output["mode"] == "direct_reply"
+    assert result.output["mode"] == "pilot_reply"
     assert result.summary.strip()
     assert "(sin respuesta)" not in result.summary
     assert "no obtuve respuesta" in result.summary.lower()
     assert result.output["user_language"] == "es"
 
 
-def test_direct_reply_empty_completion_is_localized_in_english(tmp_path: Path) -> None:
+def test_pilot_empty_completion_is_localized_in_english(tmp_path: Path) -> None:
     provider = FakeLLM(script=[{"content": "   "}])
-    result = run(
-        _orchestrator(provider)._answer_direct(
-            Task(goal="what is a closure?", project_root=tmp_path)
-        )
-    )
+    result = run(_pilot(provider).execute(Task(goal="what is a closure?", project_root=tmp_path)))
     assert "(no answer)" not in result.summary
     assert result.summary.strip()
     assert "didn't get a response" in result.summary.lower()
     assert result.output["user_language"] == "en"
 
 
-def test_direct_reply_empty_greeting_greets_back_in_spanish(tmp_path: Path) -> None:
+def test_pilot_empty_greeting_greets_back_in_spanish(tmp_path: Path) -> None:
     """El caso reportado: «Hola» con completion vacía debe saludar, no avisar de un fallo."""
     provider = FakeLLM(script=[{"content": ""}])
-    result = run(_orchestrator(provider)._answer_direct(Task(goal="Hola", project_root=tmp_path)))
-    assert result.output["mode"] == "direct_reply"
+    result = run(_pilot(provider).execute(Task(goal="Hola", project_root=tmp_path)))
     assert result.summary == "¡Hola! ¿En qué puedo ayudarte?"
-    assert "no obtuve respuesta" not in result.summary.lower()
     assert result.output["user_language"] == "es"
 
 
-def test_direct_reply_empty_greeting_greets_back_in_english(tmp_path: Path) -> None:
+def test_pilot_empty_greeting_greets_back_in_english(tmp_path: Path) -> None:
     provider = FakeLLM(script=[{"content": ""}])
-    result = run(_orchestrator(provider)._answer_direct(Task(goal="Hello", project_root=tmp_path)))
+    result = run(_pilot(provider).execute(Task(goal="Hello", project_root=tmp_path)))
     assert result.summary == "Hello! How can I help you?"
-    assert "didn't get a response" not in result.summary.lower()
     assert result.output["user_language"] == "en"
 
 
-def test_direct_reply_greeting_embedded_in_a_task_does_not_greet(tmp_path: Path) -> None:
+def test_pilot_greeting_embedded_in_a_task_does_not_greet(tmp_path: Path) -> None:
     """Un saludo dentro de una tarea real no debe activar la respuesta de saludo."""
     provider = FakeLLM(script=[{"content": "   "}])
     result = run(
-        _orchestrator(provider)._answer_direct(
-            Task(goal="hola, arregla el build", project_root=tmp_path)
-        )
+        _pilot(provider).execute(Task(goal="hola, arregla el build", project_root=tmp_path))
     )
     assert "no obtuve respuesta" in result.summary.lower()
-
-
-def test_prose_synthesis_asks_for_the_user_language(tmp_path: Path) -> None:
-    provider = FakeLLM(script=[{"content": "La carpeta contiene dos archivos."}])
-    structured = TaskResult(
-        task_id="t", status=TaskStatus.OK, output={"estructura": ["a.txt", "b.txt"]}
-    )
-    run(
-        _orchestrator(provider)._answer_in_prose(
-            Task(goal="dime qué hay", project_root=tmp_path), structured
-        )
-    )
-    system = provider.requests[-1].messages[0].content
-    assert OUTPUT_LANGUAGE_MARKER in system
 
 
 def test_compaction_summary_prompt_carries_the_language_rule() -> None:
@@ -324,15 +299,6 @@ def test_compaction_summary_prompt_carries_the_language_rule() -> None:
     run(summarize_turns([Turn("user", "hola, ¿qué haces?")], provider))
     system = provider.requests[-1].messages[0].content
     assert OUTPUT_LANGUAGE_MARKER in system
-
-
-def test_catalog_answer_stays_localized_in_spanish() -> None:
-    from satellite.orchestration.catalog_answer import answer_catalog_question
-
-    services = RuntimeServices(registry=DefaultAgentRegistry())
-    text = answer_catalog_question("¿qué agentes tienes?", services)
-    assert text is not None
-    assert "agente" in text
 
 
 def test_capability_gap_reply_follows_user_language() -> None:
@@ -409,25 +375,6 @@ def test_cli_tool_listing_stays_in_spanish(tmp_path: Path, monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------- (4) schema ⇄ prompt
-
-
-def test_orchestrator_schema_matches_its_prompt() -> None:
-    prompt = _base_prompts().get_system("orchestrator")
-    for kind in ORCHESTRATOR_OUTPUT_SCHEMA["properties"]["type"]["enum"]:
-        assert kind in prompt, kind
-    for key in PLAN_STEP_SCHEMA["properties"]:
-        assert key in prompt, key
-    for key in PLAN_STEP_SCHEMA["required"]:
-        assert key in prompt, key
-
-
-def test_plan_options_schema_matches_its_prompt() -> None:
-    prompt = _base_prompts().get_system("plan_options")
-    for key in PLAN_OPTIONS_SCHEMA["required"]:
-        assert key in prompt, key
-    option = PLAN_OPTIONS_SCHEMA["properties"]["options"]["items"]
-    for key in option["required"]:
-        assert key in prompt, key
 
 
 def test_curator_schema_matches_its_prompt() -> None:
@@ -509,22 +456,11 @@ def test_code_explainer_example_is_aligned() -> None:
 # ---------------------------------------------------------------- (5) campos internos vs visibles
 
 
-def test_orchestrator_marks_plan_steps_internal_and_question_user_facing() -> None:
-    """Los pasos de plan son instrucciones internas (inglés); sólo la pregunta es del usuario."""
-    prompt = _base_prompts().get_system("orchestrator")
-    assert "# FIELD LANGUAGE" in prompt
-    assert "steps[].instruction" in prompt
-    assert "MUST be in English" in prompt
-    assert "question" in prompt and "user's language" in prompt
-
-
-def test_plan_options_marks_visible_fields_user_facing() -> None:
-    prompt = _base_prompts().get_system("plan_options")
-    assert "# FIELD LANGUAGE" in prompt
-    assert "user's language" in prompt
-    for field in ("question", "title", "summary", "approach", "tradeoffs"):
-        assert field in prompt
-    assert "internal/machine fields in English" in prompt
+def test_pilot_marks_delegation_internal_and_reply_user_facing() -> None:
+    """La tarea delegada es instrucción interna (inglés); sólo la respuesta es del usuario."""
+    prompt = _base_prompts().get_system("pilot")
+    assert "Write it in English" in prompt
+    assert "in the user's language" in prompt
 
 
 def test_preprocessor_marks_internal_fields_english(tmp_path: Path) -> None:
@@ -689,86 +625,30 @@ def test_ambiguous_current_uses_latest_user_turn_and_ignores_assistant() -> None
 
 def test_preprocessed_goal_uses_original_language(tmp_path: Path) -> None:
     """Si el preprocessor reescribe el goal a inglés, se detecta el original (refined_from)."""
-    orch = _orchestrator(FakeLLM())
+    provider = FakeLLM(script=[{"content": "ok"}])
     task = Task(
         goal="Explain the module's behavior",
         project_root=tmp_path,
         metadata={"refined_from": "explícame el módulo"},
     )
-    stamped = orch._with_language_hint(
-        task, TaskResult(task_id="t", status=TaskStatus.OK, output={})
-    )
-    assert stamped.output["user_language"] == "es"  # el original manda, no el goal refinado
+    result = run(_pilot(provider).execute(task))
+    assert result.output["user_language"] == "es"  # el original manda, no el goal refinado
+    assert "Spanish" in provider.requests[-1].messages[-1].content
 
 
 def test_language_hint_stores_only_the_code(tmp_path: Path) -> None:
     """El hint guarda el código de idioma, nunca el mensaje (no se persiste contenido)."""
-    orch = _orchestrator(FakeLLM())
-    task = Task(goal="arregla el archivo de configuración", project_root=tmp_path)
-    stamped = orch._with_language_hint(task, TaskResult(task_id="t", status=TaskStatus.OK, output={}))
-    assert stamped.output["user_language"] == "es"
-    assert "configuración" not in str(stamped.output)
+    result = run(
+        _pilot(FakeLLM(script=[{"content": "ok"}])).execute(
+            Task(goal="arregla el archivo de configuración", project_root=tmp_path)
+        )
+    )
+    assert result.output["user_language"] == "es"
+    assert "configuración" not in str(result.output)
 
-    english = orch._with_language_hint(
-        Task(goal="fix the failing build", project_root=tmp_path),
-        TaskResult(task_id="t", status=TaskStatus.OK, output={}),
+    english = run(
+        _pilot(FakeLLM(script=[{"content": "ok"}])).execute(
+            Task(goal="fix the failing build", project_root=tmp_path)
+        )
     )
     assert english.output["user_language"] == "en"
-
-
-def test_answer_in_prose_localizes_errors_and_preserves_literals(tmp_path: Path) -> None:
-    """Un error ya se redacta en el idioma del usuario y el diagnóstico viaja literal."""
-    provider = FakeLLM(script=[{"content": "No pude completarlo: falló la compilación."}])
-    orch = _orchestrator(provider)
-    failed = TaskResult(
-        task_id="t",
-        status=TaskStatus.FAILED,
-        error="exit code 2: no such file /tmp/x.py",
-        output={"user_language": "es"},
-    )
-
-    nuevo = run(orch._answer_in_prose(Task(goal="arregla el fallo", project_root=tmp_path), failed))
-
-    assert nuevo.output["content"] == "No pude completarlo: falló la compilación."
-    assert reply_from_result(nuevo) == "No pude completarlo: falló la compilación."
-    assert nuevo.error == "exit code 2: no such file /tmp/x.py"  # el diagnóstico no se toca
-    sent = "\n".join(m.content for m in provider.requests[-1].messages)
-    assert "exit code 2: no such file /tmp/x.py" in sent  # literal enviado al modelo
-    assert "VERBATIM" in sent
-    assert OUTPUT_LANGUAGE_MARKER in provider.requests[-1].messages[0].content
-
-
-def test_answer_in_prose_localizes_capability_gap_and_keeps_data(tmp_path: Path) -> None:
-    provider = FakeLLM(script=[{"content": "I'm missing a capability to audit the repo."}])
-    orch = _orchestrator(provider)
-    gap = TaskResult(
-        task_id="t",
-        status=TaskStatus.NEEDS_USER_INPUT,
-        output={
-            "mode": "capability_gap",
-            "capability_gap": {"missing": "audit the repo"},
-            "options": ["create an agent"],
-            "user_language": "en",
-        },
-    )
-
-    nuevo = run(orch._answer_in_prose(Task(goal="audit the repo", project_root=tmp_path), gap))
-
-    assert nuevo.output["content"] == "I'm missing a capability to audit the repo."
-    # datos estructurados intactos
-    assert nuevo.output["capability_gap"] == {"missing": "audit the repo"}
-    assert nuevo.output["options"] == ["create an agent"]
-    # reply_from_result prefiere la prosa localizada al fallback
-    assert reply_from_result(nuevo) == "I'm missing a capability to audit the repo."
-
-
-def test_answer_in_prose_without_provider_returns_result_unchanged(tmp_path: Path) -> None:
-    """Sin proveedor no se inventa prosa: el fallback determinista lo resuelve abajo."""
-    services = RuntimeServices(registry=DefaultAgentRegistry(), provider=None)
-    orch = DefaultOrchestrator(None, None, services)
-    failed = TaskResult(
-        task_id="t", status=TaskStatus.FAILED, error="boom", output={"user_language": "en"}
-    )
-    mismo = run(orch._answer_in_prose(Task(goal="fix it", project_root=tmp_path), failed))
-    assert mismo is failed
-    assert reply_from_result(failed) == "I couldn't complete it: boom"

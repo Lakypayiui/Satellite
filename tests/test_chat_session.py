@@ -276,19 +276,6 @@ def test_send_error_notice_follows_language(tmp_path: Path) -> None:
     assert "No pude" not in en.text  # sin mezcla de español en la respuesta inglesa
 
 
-def test_send_missing_context_notice_follows_language(tmp_path: Path) -> None:
-    es = run(ChatSession(tmp_path, _SinIndiceDeProyecto(), persist=False).send(
-        "¿De qué trata este proyecto?"
-    ))
-    assert "No hay contexto de proyecto que adjuntar" in es.text
-
-    en = run(ChatSession(tmp_path, _SinIndiceDeProyecto(), persist=False).send(
-        "What is this project about?"
-    ))
-    assert "There is no project context to attach" in en.text
-    assert "contexto de proyecto" not in en.text.lower()
-
-
 def test_send_ignored_mention_notice_follows_language(tmp_path: Path) -> None:
     (tmp_path / ".env").write_text("X=1", encoding="utf-8")
     es = run(ChatSession(tmp_path, _SinIndiceDeProyecto(), persist=False).send("mira @.env"))

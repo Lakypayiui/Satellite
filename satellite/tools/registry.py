@@ -73,7 +73,16 @@ class DefaultToolRegistry(ToolRegistry):
           (NO excepción: el LLM debe ver el error y poder corregir).
         - Si la tool lanza ToolError → ToolResult con error.
         """
-        tool = self.get(call.name)
+        try:
+            tool = self.get(call.name)
+        except ToolError as exc:
+            # Una tool inexistente es un error que el modelo puede corregir, no una
+            # excepción que tumbe el turno.
+            result = ToolResult(
+                call_id=call.id, success=False, error=str(exc), error_code="unknown_tool"
+            )
+            self._emit_called(call, tool_ctx, result)
+            return result
         policy = self.policy or tool_ctx.policy
         if policy is not None and not policy.check_tool(call.name, call.arguments):
             result = ToolResult(

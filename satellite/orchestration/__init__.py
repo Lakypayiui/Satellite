@@ -1,32 +1,18 @@
-"""Coordinación global: Planner, GraphRunner, Orchestrator."""
+"""Coordinación global: el orquestador piloto y la delegación entre agentes."""
 
-from satellite.orchestration.base import (
-    GraphRunner,
-    Orchestrator,
-    Planner,
-    PlanningResult,
-    RuntimeServices,
-)
-from satellite.orchestration.runner import DefaultGraphRunner
+from satellite.orchestration.base import Orchestrator, RuntimeServices
 from satellite.orchestration.delegation import (
     DelegationContext,
     DelegationManager,
     DelegationResult,
 )
-from satellite.orchestration.planner import LLMPlanner, plan_to_graph
-from satellite.orchestration.orchestrator import DefaultOrchestrator
+from satellite.orchestration.pilot import PilotOrchestrator
 
 __all__ = [
     "RuntimeServices",
-    "Planner",
-    "PlanningResult",
-    "GraphRunner",
     "Orchestrator",
-    "DefaultGraphRunner",
     "DelegationContext",
     "DelegationManager",
     "DelegationResult",
-    "LLMPlanner",
-    "plan_to_graph",
-    "DefaultOrchestrator",
+    "PilotOrchestrator",
 ]

@@ -9,8 +9,16 @@ el estado de cache, clasifica la deriva del prefijo y aplica
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import AsyncIterator
 
-from satellite.core.messages import CallContext, LLMRequest, LLMResponse, Message, Role
+from satellite.core.messages import (
+    CallContext,
+    LLMRequest,
+    LLMResponse,
+    Message,
+    Role,
+    StreamChunk,
+)
 from satellite.metrics.pricing import PriceBook
 from satellite.observability.call_log import CallRecord, CallRecorder, cache_status
 from satellite.observability.drift import PrefixDriftDetector, diagnosis_kind
@@ -97,6 +105,30 @@ class MeteredProvider(LLMProvider):
             self.last_record = self._build_record(request, response, payload, payload_hash)
             self.recorder.record(self.last_record)
         return response
+
+    async def stream(self, request: LLMRequest) -> AsyncIterator[StreamChunk]:
+        """Igual que ``complete`` (calentamiento, grupo de prefijo y registro), en streaming.
+
+        La medición se hace con la respuesta final del stream, así el registro de la
+        llamada es idéntico al de ``complete``.
+        """
+        request = self._with_max_tokens(request)
+        payload, payload_hash = self._prefix_parts(request)
+        response: LLMResponse | None = None
+        try:
+            async with self.gate.enter(payload_hash) as warmed:
+                self.last_warmed = warmed
+                if warmed and self.prewarm:
+                    await self._prewarm(request)
+                async for chunk in self.inner.stream(request):
+                    if chunk.response is not None:
+                        response = chunk.response
+                    yield chunk
+        finally:
+            self.last_group_status = self._observe_group(request, payload_hash)
+        if self.recorder is not None and response is not None:
+            self.last_record = self._build_record(request, response, payload, payload_hash)
+            self.recorder.record(self.last_record)
 
     async def _prewarm(self, request: LLMRequest) -> None:
         """Calienta el prefijo estable con ``max_tokens=0`` (best-effort).

@@ -188,7 +188,7 @@ def test_safe_mode_filters_user_agents(tmp_path: Path, monkeypatch) -> None:
         set_safe_mode(False)
     ids = {spec.id for spec in registry.all()}
     assert "user_agent" not in ids
-    assert {"orchestrator", "agent_creator", "skill_curator"} <= ids
+    assert {"pilot", "agent_creator", "skill_curator"} <= ids
 
 
 # --- sesiones: fijar y archivar (paridad con la app y la TUI) ---

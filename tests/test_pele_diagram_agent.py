@@ -1,22 +1,19 @@
 """Agente declarativo ``pele_diagram_agent``: spec, prompts, fábrica y registro.
 
-El agente de diagrama es una capacidad **condicional** que se enruta desde
-``DiagramFlow``. Aquí se comprueba que el spec es declarativo y completo, que sus
+El agente de diagrama es una capacidad **condicional**: el piloto le delega los
+diagramas con ``delegate``. Aquí se comprueba que el spec es declarativo y completo, que sus
 prompts siguen el contrato system/user, que la fábrica lo construye con la tool de
 render, y que se registra en el runtime/paquete a través del mismo mecanismo
 (``verify_and_restore`` + catálogo) que el resto de agentes base.
 """
 
-import asyncio
 from pathlib import Path
 
 from satellite.agents.factory import DefaultAgentFactory
 from satellite.agents.prompts import DefaultPromptRegistry, find_placeholders
 from satellite.agents.registry import DefaultAgentRegistry
 from satellite.agents.store import AgentCatalogStore
-from satellite.core.task import Task
 from satellite.kernel.manifest import RESERVED_AGENT_IDS, is_reserved, verify_and_restore
-from satellite.orchestration.diagram_flow import DiagramFlow
 from satellite.providers.fake import FakeLLM
 from satellite.security.policy import DefaultSecurityPolicy
 from satellite.tools.diagram import RenderDiagramTool
@@ -27,10 +24,6 @@ SPECS = PKG / "specs"
 PROMPTS = PKG / "prompts"
 
 AGENT_ID = "pele_diagram_agent"
-
-
-def run(coro):
-    return asyncio.run(coro)
 
 
 def _registry() -> DefaultAgentRegistry:
@@ -128,7 +121,8 @@ def test_installed_package_registers_agent(tmp_path: Path) -> None:
     assert AGENT_ID in store.load_prompts()
 
 
-def test_flow_without_factory_falls_through(tmp_path: Path) -> None:
-    flow = DiagramFlow(factory=None, project_root=tmp_path)
-    task = Task(goal="dibuja un diagrama del login", project_root=tmp_path)
-    assert run(flow.run(task)) is None
+def test_pilot_routes_diagrams_to_the_agent() -> None:
+    """El piloto (no un flujo determinista) es quien le delega los diagramas."""
+    pilot_system = _prompts().get_system("pilot")
+    assert AGENT_ID in pilot_system
+    assert "diagram" in pilot_system.lower()

@@ -42,14 +42,23 @@ class EventBridge:
         self._attached = True
         bus.subscribe(self._on_event)
 
+    def emit(self, event) -> None:
+        """Publica un evento que no viene del bus (p. ej. del puerto de aprobación)."""
+        self._on_event(event)
+
     def _on_event(self, event) -> None:
         """Llega desde el runtime, en el mismo bucle: reparte y persiste."""
         self._index += 1
         item = {"index": self._index, "event": event.to_dict()}
-        self._history.append(item)
+        # Los deltas de texto son efímeros: se reparten en vivo, pero no ocupan el
+        # historial de reenganche ni se guardan (el texto final llega con la respuesta).
+        efimero = getattr(getattr(event, "event_type", None), "value", "") == "text_delta"
+        if not efimero:
+            self._history.append(item)
         for queue in list(self._queues):
             queue.put_nowait(item)
-        self._persist(event)
+        if not efimero:
+            self._persist(event)
 
     def _persist(self, event) -> None:
         """Guarda el evento sin poder tumbar la ejecución que lo produjo."""

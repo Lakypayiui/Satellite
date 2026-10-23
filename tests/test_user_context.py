@@ -13,12 +13,12 @@ from satellite.context.instructions import (
 from satellite.context.mentions import MAX_MENTIONS, parse, user_refs
 from satellite.context.resolver import ContextResolver
 from satellite.core.context_models import ContextRef, ContextRefKind, ContextLimits
-from satellite.core.graph import ExecutionGraph, Node
 from satellite.core.result import AgentResult, AgentStatus
+from satellite.core.spec import AgentSpec
 from satellite.core.task import Task, TaskResult, TaskStatus
 from satellite.orchestration.base import RuntimeServices
 from satellite.orchestration.chat import ChatSession
-from satellite.orchestration.runner import DefaultGraphRunner
+from satellite.orchestration.pilot import PilotOrchestrator
 
 
 def run(coro):
@@ -194,7 +194,7 @@ def test_without_instructions_the_rules_section_is_none(tmp_path: Path) -> None:
     assert run(resolver.resolve_ref(ref)) is None
 
 
-# --- el runner ---
+# --- el piloto ---
 
 
 class _MotorFalso:
@@ -214,34 +214,34 @@ class _MotorFalso:
         )
 
 
-class _AgenteFalso(Agent):
-    def __init__(self, spec_id: str) -> None:
-        self.spec_id = spec_id
+class _PilotoFalso(Agent):
+    def __init__(self) -> None:
+        self.spec = AgentSpec(
+            id="pilot", name="Pilot", capabilities=("pilot",), prompt_ref="pilot"
+        )
+        self.tools: list = []
         self.last_ctx: AgentContext | None = None
 
     async def execute(self, task: dict, ctx: AgentContext) -> AgentResult:
         self.last_ctx = ctx
         return AgentResult(
-            node_id=ctx.node_id, spec_id=self.spec_id, status=AgentStatus.OK, summary="ok"
+            node_id=ctx.node_id,
+            spec_id="pilot",
+            status=AgentStatus.OK,
+            output={"content": "ok"},
         )
 
 
 class _FactoryFalsa(AgentFactory):
     def __init__(self) -> None:
-        self.agents: dict[str, _AgenteFalso] = {}
+        self.pilot = _PilotoFalso()
 
     def create(self, spec_id: str, *, model_role: str | None = None) -> Agent:
-        self.agents.setdefault(spec_id, _AgenteFalso(spec_id))
-        return self.agents[spec_id]
+        assert spec_id == "pilot"
+        return self.pilot
 
 
-def _one_node_graph() -> ExecutionGraph:
-    graph = ExecutionGraph(entry_node="n1")
-    graph.add_node(Node(id="n1", spec_id="sA"))
-    return graph
-
-
-def test_the_node_gets_the_mentions_and_the_project_rules(tmp_path: Path) -> None:
+def test_the_pilot_gets_the_mentions_and_the_project_rules(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("print(1)\n", encoding="utf-8")
     (tmp_path / "AGENTS.md").write_text("Sé breve.\n", encoding="utf-8")
     engine = _MotorFalso()
@@ -253,29 +253,25 @@ def test_the_node_gets_the_mentions_and_the_project_rules(tmp_path: Path) -> Non
     )
 
     result = run(
-        DefaultGraphRunner(factory).run(
-            _one_node_graph(), task, RuntimeServices(factory=factory, context=engine)
-        )
+        PilotOrchestrator(RuntimeServices(factory=factory, context=engine)).execute(task)
     )
 
     assert result.status is TaskStatus.OK
     kinds = [ref.kind for ref in engine.refs]
     assert ContextRefKind.PATH in kinds
     assert ContextRefKind.PROJECT_RULES in kinds
-    secciones = factory.agents["sA"].last_ctx.context.sections
+    secciones = factory.pilot.last_ctx.context.sections
     assert any(section.ref.kind is ContextRefKind.PROJECT_RULES for section in secciones)
     assert any("a.py" in section.content for section in secciones)
 
 
-def test_without_mentions_or_rules_the_refs_are_only_the_node_ones(tmp_path: Path) -> None:
+def test_without_mentions_or_rules_nothing_is_resolved(tmp_path: Path) -> None:
     engine = _MotorFalso()
     factory = _FactoryFalsa()
 
     run(
-        DefaultGraphRunner(factory).run(
-            _one_node_graph(),
-            Task(goal="hola", project_root=tmp_path),
-            RuntimeServices(factory=factory, context=engine),
+        PilotOrchestrator(RuntimeServices(factory=factory, context=engine)).execute(
+            Task(goal="hola", project_root=tmp_path)
         )
     )
 

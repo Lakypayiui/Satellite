@@ -2,16 +2,25 @@
 
 El prefijo estable es tools -> system -> catálogo. Si dos construcciones con los
 mismos datos no producen bytes idénticos, el proveedor no puede acertar la caché.
+En el piloto el catálogo de delegación va dentro del system (``# DELEGATION``) y el
+historial en el mensaje dinámico del usuario.
 """
 
 import time
+from pathlib import Path
+from types import SimpleNamespace
 
 from satellite.agents.prompting import build_meta_messages
-from satellite.agents.runtime import build_system_prompt, build_user_prompt
-from satellite.core.context_models import ContextBundle, ContextRef, ContextRefKind
+from satellite.agents.prompts import DefaultPromptRegistry
+from satellite.agents.registry import DefaultAgentRegistry
+from satellite.agents.runtime import LLMAgent, build_system_prompt, build_user_prompt
+from satellite.core.context_models import ContextBundle
 from satellite.core.spec import AgentSpec
+from satellite.core.task import Task
 from satellite.core.tool_models import ToolSchema
-from satellite.orchestration.planner_prompt import build_catalog_context, render_history
+from satellite.orchestration.pilot import PilotOrchestrator
+from satellite.orchestration.turn_context import render_history, with_conversation
+from satellite.providers.fake import FakeLLM
 from satellite.providers.prefix import (
     canonical_fingerprint,
     canonical_json,
@@ -41,6 +50,42 @@ def make_spec(spec_id: str, *, capabilities=("do_thing",), tools=("read_file",),
     )
     data.update(overrides)
     return AgentSpec(**data)
+
+
+PROMPTS = Path(__file__).resolve().parent.parent / "satellite" / "agents" / "prompts"
+
+
+class PilotFactory:
+    """Crea el piloto real (prompts del paquete) sin tools ni proveedor de verdad."""
+
+    def __init__(self) -> None:
+        self.prompts = DefaultPromptRegistry()
+        self.prompts.load_dir(PROMPTS)
+
+    def create(self, spec_id, *, model_role=None):
+        spec = AgentSpec(id=spec_id, name="Pilot", capabilities=("converse",), prompt_ref=spec_id)
+        return LLMAgent(
+            spec=spec,
+            system_prompt=self.prompts.get_system(spec_id),
+            user_template=self.prompts.get_user(spec_id),
+            tools=[],
+            provider=FakeLLM(),
+        )
+
+
+def pilot_system(specs) -> str:
+    """System del piloto tal como lo arma ``PilotOrchestrator`` con ese catálogo."""
+    registry = DefaultAgentRegistry()
+    for spec in specs:
+        registry.register_spec(spec)
+    services = SimpleNamespace(registry=registry)
+    agent = PilotOrchestrator(services)._pilot(PilotFactory(), services)
+    return build_system_prompt(
+        agent.system_prompt,
+        output_schema=agent.spec.output_schema,
+        tools=agent.tools,
+        can_call=agent.spec.can_call,
+    )
 
 
 # ---------------------------------------------------------------- serialización
@@ -97,22 +142,14 @@ def test_spec_fingerprint_ignores_dict_key_order() -> None:
 # ---------------------------------------------------------------- catálogo
 
 
-def test_catalog_context_orders_specs_by_id() -> None:
+def test_pilot_catalog_orders_specs_by_id() -> None:
     specs = [make_spec("zeta_agent"), make_spec("alpha_agent"), make_spec("mu_agent")]
-    text = build_catalog_context(specs)
-    reversed_text = build_catalog_context(list(reversed(specs)))
-    assert text == reversed_text
-    positions = [text.index(f"id={spec_id}") for spec_id in ("alpha_agent", "mu_agent", "zeta_agent")]
+    text = pilot_system(specs)
+    assert text == pilot_system(list(reversed(specs)))
+    positions = [text.index(f"- {spec_id}:") for spec_id in ("alpha_agent", "mu_agent", "zeta_agent")]
     assert positions == sorted(positions)
-
-
-def test_catalog_context_orders_hints() -> None:
-    first = ContextRef(ContextRefKind.PATH, "a.txt")
-    second = ContextRef(ContextRefKind.PATH, "b.txt")
-    assert build_catalog_context([], (first, second)) == build_catalog_context([], (second, first))
-    assert build_catalog_context([], (first, second)).index("a.txt") < build_catalog_context(
-        [], (first, second)
-    ).index("b.txt")
+    # el piloto no se ofrece a sí mismo como destino
+    assert "- pilot:" not in pilot_system(specs + [make_spec("pilot")])
 
 
 def test_render_history_keeps_chronological_order() -> None:
@@ -129,19 +166,28 @@ def test_render_history_empty_and_sanitized() -> None:
     assert render_history([{"role": "user", "content": "hola"}]).startswith("Recent conversation")
 
 
-def test_history_is_not_in_the_stable_catalog_block() -> None:
+def test_history_is_not_in_the_stable_pilot_system(tmp_path) -> None:
     specs = [make_spec("alpha_agent")]
-    history = [{"role": "user", "content": "TAREA-ANTERIOR"}]
-    catalog = build_catalog_context(specs)
-    assert "TAREA-ANTERIOR" not in catalog
-    assert "TAREA-ANTERIOR" in render_history(history)
-    # y el catálogo es el mismo con o sin historial -> breakpoint (b) estable
-    assert catalog == build_catalog_context(specs, ())
+    system = pilot_system(specs)
+    task = Task(
+        goal="x",
+        project_root=tmp_path,
+        metadata={"history": [{"role": "user", "content": "TAREA-ANTERIOR"}]},
+    )
+    user = build_user_prompt(
+        PilotFactory().prompts.get_user("pilot"),
+        task={"goal": task.goal},
+        context=with_conversation(ContextBundle(), task),
+    )
+    assert "TAREA-ANTERIOR" not in system
+    assert "TAREA-ANTERIOR" in user
+    # y el system es el mismo con o sin historial -> prefijo estable
+    assert system == pilot_system(specs)
 
 
-def test_catalog_context_empty_is_stable() -> None:
-    assert build_catalog_context([]) == build_catalog_context([], ())
-    assert "(empty catalog)" in build_catalog_context([])
+def test_pilot_without_catalog_is_stable() -> None:
+    assert pilot_system([]) == pilot_system([])
+    assert "# DELEGATION" not in pilot_system([])
 
 
 # ---------------------------------------------------------------- system prompt
@@ -181,17 +227,19 @@ def test_prefix_has_no_volatile_data_across_calls() -> None:
             system_prompt=system_prompt,
             user_template=user_template,
             output_schema={"type": "object"},
-            catalog=build_catalog_context(specs),
+            catalog="\n".join(f"- id={spec.id}" for spec in specs),
             task="haz algo",
         )
         assert stable == 1
         return messages[0].content, messages[1].content, messages[2].content
 
     first = build()
+    pilot_first = pilot_system(specs)
     time.sleep(0.01)  # un timestamp/UUID/contador rompería la igualdad
     second = build()
     assert first == second
     assert prefix_hash(None, first[0], first[1]) == prefix_hash(None, second[0], second[1])
+    assert pilot_first == pilot_system(specs)
 
 
 def test_user_prompt_is_deterministic() -> None:

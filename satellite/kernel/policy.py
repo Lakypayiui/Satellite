@@ -16,6 +16,16 @@ class PolicyMode(Enum):
     UNRESTRICTED = "unrestricted"
 
 
+def _int_or(value: object, default: int) -> int:
+    """Entero de la config, o el valor por defecto si no lo es (la carga nunca lanza)."""
+    if isinstance(value, bool) or value is None:
+        return default
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass(frozen=True)
 class Quotas:
     """Límites anti-abuso configurables (protegen contra spam de propuestas)."""
@@ -45,14 +55,10 @@ class Quotas:
             return cls()
         defaults = cls()
         return cls(
-            max_agents=int(d.get("max_agents", defaults.max_agents)),
-            max_skills=int(d.get("max_skills", defaults.max_skills)),
-            proposals_per_hour=int(
-                d.get("proposals_per_hour", defaults.proposals_per_hour)
-            ),
-            proposals_per_task=int(
-                d.get("proposals_per_task", defaults.proposals_per_task)
-            ),
+            max_agents=_int_or(d.get("max_agents"), defaults.max_agents),
+            max_skills=_int_or(d.get("max_skills"), defaults.max_skills),
+            proposals_per_hour=_int_or(d.get("proposals_per_hour"), defaults.proposals_per_hour),
+            proposals_per_task=_int_or(d.get("proposals_per_task"), defaults.proposals_per_task),
             max_prompt_chars=int(d.get("max_prompt_chars", defaults.max_prompt_chars)),
             max_script_bytes=int(d.get("max_script_bytes", defaults.max_script_bytes)),
             max_catalog_bytes=int(
@@ -91,8 +97,6 @@ class Settings:
     # Comandos que no se preguntan (``terminal.allowed_commands`` en config.json). Vacío
     # por defecto: todo comando se pregunta. No hay forma de decir "permitir todo".
     allowed_commands: tuple[str, ...] = ()
-    refine_goal: bool = False
-    direct_reply: bool = True
     max_tokens: dict = field(default_factory=dict)
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
 
@@ -109,8 +113,6 @@ class Settings:
             "quotas": self.quotas.to_dict(),
             "sandbox_level": self.sandbox_level,
             "allowed_commands": list(self.allowed_commands),
-            "refine_goal": self.refine_goal,
-            "direct_reply": self.direct_reply,
             "max_tokens": dict(self.max_tokens),
             "compaction": self.compaction.to_dict(),
         }
@@ -180,6 +182,8 @@ def _allowed_commands_from(data: dict) -> tuple[str, ...]:
     return tuple(vistos)
 
 
+
+
 def load_settings(path: Path | None = None) -> Settings:
     """Carga la configuración de forma tolerante (nunca lanza por datos corruptos).
 
@@ -206,8 +210,6 @@ def load_settings(path: Path | None = None) -> Settings:
         quotas=Quotas.from_dict(data.get("quotas")),
         sandbox_level=str(data.get("sandbox_level", "N0")),
         allowed_commands=_allowed_commands_from(data),
-        refine_goal=bool(data.get("refine_goal", False)),
-        direct_reply=bool(data.get("direct_reply", True)),
         max_tokens=_max_tokens_from(data),
         compaction=_compaction_from(data),
     )

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from satellite.core.tool_models import ToolResult
 from satellite.sandbox.base import sanitize_env
-from satellite.tools.base import Tool, ToolContext
+from satellite.tools.base import Tool, ToolContext, inside_execution_roots
 from satellite.tools.fs import ListDirTool, ReadFileTool, WriteFileTool
 from satellite.tools.terminal import RunCommandTool, execute_argv
 
@@ -141,7 +141,11 @@ class SearchFilesTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Finds files by glob pattern (e.g. '**/*.py') inside the project."
+        return (
+            "Finds files by glob pattern (e.g. '**/*.py') inside the project. With "
+            "'content', searches inside those files instead and returns the matching "
+            "lines as path, line number and text (like grep)."
+        )
 
     @property
     def categories(self) -> tuple[str, ...]:
@@ -154,6 +158,18 @@ class SearchFilesTool(Tool):
             "properties": {
                 "pattern": {"type": "string", "description": "Relative glob pattern."},
                 "path": {"type": "string", "description": "Base subdirectory (default '.')."},
+                "content": {
+                    "type": "string",
+                    "description": "Text to search for inside the matched files.",
+                },
+                "regex": {
+                    "type": "boolean",
+                    "description": "Treat 'content' as a regular expression (default false).",
+                },
+                "ignore_case": {
+                    "type": "boolean",
+                    "description": "Case-insensitive content search (default false).",
+                },
             },
             "required": ["pattern"],
         }
@@ -199,7 +215,7 @@ class SearchFilesTool(Tool):
                 error=f"ruta inválida: {exc}",
                 error_code="invalid_arguments",
             )
-        if policy is not None and not policy.check_path(root, tool_ctx.project_root):
+        if not inside_execution_roots(policy, root, tool_ctx):
             return ToolResult(success=False, error=f"permiso denegado: {root}")
         if not root.is_dir():
             return ToolResult(success=False, error=f"no es un directorio: {root}")
@@ -213,20 +229,88 @@ class SearchFilesTool(Tool):
             )
 
         project_root = Path(tool_ctx.project_root).resolve()
+        # Las rutas se devuelven relativas al workdir (un worktree vive dentro de
+        # ``.satellite/worktrees``): así ``read_file`` las entiende y la búsqueda por
+        # contenido no las descarta como si fueran de ``.satellite``.
+        base_root = Path(base).resolve()
         files = []
         for match in matches:
             try:
-                # Se resuelve para que un symlink no escape del proyecto, y se exige que
-                # el destino siga estando dentro de la raíz del proyecto.
+                # Se resuelve para que un symlink no escape, y se exige que el destino siga
+                # dentro del proyecto o del workdir activo (un worktree hermano).
                 resolved = match.resolve(strict=True)
                 if not resolved.is_file():
                     continue
-                resolved.relative_to(project_root)
-                if policy is not None and not policy.check_path(resolved, project_root):
+                if policy is None:
+                    if not (_within(resolved, project_root) or _within(resolved, base_root)):
+                        continue
+                elif not inside_execution_roots(policy, resolved, tool_ctx):
                     continue
-                rel = match.relative_to(project_root).as_posix()
+                rel = match.relative_to(base_root).as_posix()
                 size = resolved.stat().st_size
             except (OSError, ValueError, RuntimeError):
                 continue
             files.append({"path": rel, "size": size})
+        content = arguments.get("content")
+        if isinstance(content, str) and content:
+            return _search_content(base_root, files, content, arguments)
         return ToolResult(success=True, output=files)
+
+
+CONTENT_MAX_MATCHES = 100
+def _within(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
+CONTENT_MAX_FILE_BYTES = 1_000_000
+CONTENT_LINE_CHARS = 200
+# Directorios que no son código del proyecto: buscar dentro sólo produce ruido.
+CONTENT_SKIP_DIRS = frozenset(
+    {".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build",
+     ".mypy_cache", ".pytest_cache", ".ruff_cache", ".satellite"}
+)
+
+
+def _search_content(project_root: Path, files: list[dict], content: str, arguments: dict) -> ToolResult:
+    """Busca ``content`` en ``files`` y devuelve las líneas que coinciden (como grep)."""
+    import re
+
+    flags = re.IGNORECASE if arguments.get("ignore_case") is True else 0
+    source = content if arguments.get("regex") is True else re.escape(content)
+    try:
+        matcher = re.compile(source, flags)
+    except re.error as exc:
+        return ToolResult(
+            success=False,
+            error=f"expresión regular inválida: {exc}",
+            error_code="invalid_arguments",
+        )
+    matches: list[dict] = []
+    scanned = 0
+    truncated = False
+    for item in files:
+        rel = item["path"]
+        if item["size"] > CONTENT_MAX_FILE_BYTES or CONTENT_SKIP_DIRS.intersection(rel.split("/")[:-1]):
+            continue
+        try:
+            raw = (project_root / rel).read_bytes()
+        except OSError:
+            continue
+        if b"\x00" in raw[:4096]:
+            continue  # binario
+        scanned += 1
+        for number, line in enumerate(raw.decode("utf-8", errors="replace").splitlines(), 1):
+            if matcher.search(line):
+                text = line.strip()
+                if len(text) > CONTENT_LINE_CHARS:
+                    text = text[: CONTENT_LINE_CHARS - 1] + "…"
+                matches.append({"path": rel, "line": number, "text": text})
+                if len(matches) >= CONTENT_MAX_MATCHES:
+                    truncated = True
+                    break
+        if truncated:
+            break
+    return ToolResult(
+        success=True,
+        output={"matches": matches, "files_scanned": scanned, "truncated": truncated},
+    )

@@ -16,6 +16,18 @@ changes, find defects, and add or run the tests that prove the code is correct.
 # Rust NOTES
 Keep code rustfmt-clean and clippy-friendly; prefer Result over panic in library code; respect ownership and borrowing; tests run through cargo test.
 
+# WORKING EFFICIENTLY
+- You have a limited number of tool rounds and older tool results are shortened.
+  Know what you are looking for before you call a tool.
+- Find code with search_files: `content` searches text inside files (like grep)
+  and `pattern` chooses which files. Do not use run_command for grep, rg, find or
+  ad-hoc search scripts, and do not create temporary files.
+- Read only the relevant part with read_file start_line/end_line.
+- Verify with code_task action="test" and `path` set to the test file or folder
+  involved. A passing run is final: do not repeat it, and do not rerun the same
+  tests through run_command.
+- Several independent lookups can go in the same message.
+
 # RULES
 - Never claim a test passed without running it.
 - You have direct access to the project: read and search files with the tools.

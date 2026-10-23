@@ -32,23 +32,51 @@ class ChangeLedger:
         self.root = Path(data or (self.project_root / ".satellite")) / "state" / "changes"
         self._base = self.project_root.resolve()
 
-    def record(self, task_id: str, path: Path | str, previous: str | None) -> bool:
+    def record(
+        self,
+        task_id: str,
+        path: Path | str,
+        previous: str | None,
+        *,
+        workdir: Path | str | None = None,
+    ) -> bool:
         """Anota que la tarea tocó ``path``, guardando lo que había antes.
+
+        ``workdir``: el directorio de trabajo activo. Si es un worktree fuera del
+        proyecto, el cambio se anota relativo a él (con su base) para poder mostrarlo y
+        deshacerlo igual que uno del proyecto.
 
         Devuelve ``False`` sólo si no se pudo guardar; la escritura ya ocurrió, así que
         el fallo se comunica como aviso y no como error.
         """
         if not task_id:
             return False
+        base: Path | None = None
         try:
-            relative = Path(path).resolve().relative_to(self._base).as_posix()
-        except (OSError, ValueError):
-            return True  # fuera del proyecto: no es un fallo, es que no aplica
+            resolved = Path(path).resolve()
+        except OSError:
+            return True
+        try:
+            relative = resolved.relative_to(self._base).as_posix()
+        except ValueError:
+            outside = Path(workdir).resolve() if workdir is not None else None
+            if outside is None:
+                return True  # fuera del proyecto y sin worktree: no aplica
+            try:
+                relative = resolved.relative_to(outside).as_posix()
+            except ValueError:
+                return True
+            base = outside
         target = self.root / task_id
         manifest = self._manifest(target)
-        if any(entry.get("path") == relative for entry in manifest):
+        if any(
+            entry.get("path") == relative and entry.get("base") == (str(base) if base else None)
+            for entry in manifest
+        ):
             return True
         entry: dict = {"path": relative}
+        if base is not None:
+            entry["base"] = str(base)
         if previous is None:
             entry["existed"] = False
         else:
@@ -101,7 +129,10 @@ class ChangeLedger:
                 continue
             anterior = self._previous(task_id, entry)
             actual = ""
-            path = self.project_root / name
+            path = self._path_of(entry)
+            if path is None:
+                bloques.append(f"--- {name}\n(su worktree ya no está registrado)")
+                continue
             try:
                 if path.is_file():
                     actual = path.read_text(encoding="utf-8", errors="replace")
@@ -124,8 +155,11 @@ class ChangeLedger:
         resultado: dict[str, list[str]] = {"restored": [], "removed": [], "skipped": []}
         for entry in self.entries(task_id):
             name = str(entry.get("path", ""))
-            path = self.project_root / name
-            if not self._inside(path):
+            path = self._path_of(entry)
+            if path is None:
+                resultado["skipped"].append(f"{name} (su worktree ya no está registrado)")
+                continue
+            if not self._inside(path, entry):
                 resultado["skipped"].append(f"{name} (fuera del proyecto)")
                 continue
             if not entry.get("existed"):
@@ -149,9 +183,42 @@ class ChangeLedger:
                 resultado["skipped"].append(f"{name} ({exc})")
         return resultado
 
-    def _inside(self, path: Path) -> bool:
+    def _path_of(self, entry: dict) -> Path | None:
+        """Dónde está el archivo de una entrada (``None`` si su worktree ya no existe).
+
+        El manifiesto es un archivo en disco: una ``base`` sólo se usa si sigue siendo un
+        worktree registrado del proyecto, para no escribir nunca en otra carpeta.
+        """
+        name = str(entry.get("path", ""))
+        base = entry.get("base")
+        if not base:
+            return self.project_root / name
+        allowed = self._worktree_base(str(base))
+        return allowed / name if allowed is not None else None
+
+    def _worktree_base(self, base: str) -> Path | None:
+        from satellite import gitops
+
         try:
-            path.resolve().relative_to(self._base)
+            wanted = Path(base).resolve()
+            registered = {
+                Path(item["path"]).resolve()
+                for item in gitops.list_worktrees(self.project_root)
+                if item.get("path")
+            }
+        except Exception:  # noqa: BLE001 — sin git o sin repo: no hay worktrees
+            return None
+        return wanted if wanted in registered else None
+
+    def _inside(self, path: Path, entry: dict | None = None) -> bool:
+        root = self._base
+        if entry is not None and entry.get("base"):
+            allowed = self._worktree_base(str(entry["base"]))
+            if allowed is None:
+                return False
+            root = allowed
+        try:
+            path.resolve().relative_to(root)
         except (OSError, ValueError):
             return False
         return True

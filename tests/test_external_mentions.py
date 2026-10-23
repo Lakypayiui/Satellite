@@ -6,8 +6,8 @@ no viaja por metadata ni se reutiliza en el turno siguiente.
 """
 
 import asyncio
+import json
 from pathlib import Path
-from types import SimpleNamespace
 
 from satellite.agents.base import Agent, AgentContext, AgentFactory
 from satellite.approval.base import (
@@ -18,15 +18,16 @@ from satellite.approval.base import (
 )
 from satellite.context.engine import DefaultContextEngine
 from satellite.context.mentions import parse
+from satellite.cli import runtime_builder
 from satellite.core.context_models import ApprovedExternalContext, ContextRefKind
-from satellite.core.graph import ExecutionGraph, Node
 from satellite.core.proposal import ApprovalDecision, ApprovalStatus
 from satellite.core.result import AgentResult, AgentStatus
+from satellite.core.spec import AgentSpec
 from satellite.core.task import Task, TaskResult, TaskStatus
-from satellite.orchestration.base import PlanningResult, RuntimeServices
+from satellite.orchestration.base import RuntimeServices
 from satellite.orchestration.chat import ChatSession
-from satellite.orchestration.orchestrator import DefaultOrchestrator, _append_external_context
-from satellite.orchestration.runner import DefaultGraphRunner
+from satellite.orchestration.pilot import PilotOrchestrator, append_external_context
+from satellite.providers.fake import FakeLLM
 
 
 def run(coro):
@@ -221,34 +222,32 @@ def test_approval_does_not_leak_to_the_next_turn(tmp_path: Path) -> None:
     assert "Adjunté" not in segundo.text
 
 
-# --- el contenido llega a la respuesta directa y a los nodos ---
+# --- el contenido llega al piloto ---
 
 
-class _Proveedor:
-    def __init__(self) -> None:
-        self.prompts: list[str] = []
-
-    async def complete(self, request):
-        self.prompts.append(request.messages[-1].content)
-        return SimpleNamespace(content="respuesta", usage=None)
-
-
-def test_direct_reply_prompt_carries_the_authorized_content(tmp_path: Path) -> None:
+def test_the_pilot_prompt_carries_the_authorized_content(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SATELLITE_HOME", str(tmp_path / "home"))
+    project = tmp_path / "project"
+    cfg = project / ".satellite" / "config"
+    cfg.mkdir(parents=True)
+    (cfg / "config.json").write_text(
+        json.dumps({"name": "fake", "model": "fake-model"}), encoding="utf-8"
+    )
+    proveedor = FakeLLM(script=[{"content": "respuesta"}])
+    monkeypatch.setattr(runtime_builder, "_load_provider", lambda _root: proveedor)
+    monkeypatch.setattr(runtime_builder, "_role_provider", lambda _root, _role, default: default)
+    orchestrator, _bus, _store, _registry = runtime_builder.build_runtime(project)
     task = Task(
         goal="¿qué dice?",
-        project_root=tmp_path,
+        project_root=project,
         metadata={"context_external": ApprovedExternalContext("--- /x ---\nSECRETO_EXTERNO")},
     )
-    _append_external_context(task)
+
+    run(orchestrator.execute(task))
+
     assert "SECRETO_EXTERNO" in task.metadata["project_context"]
-
-    proveedor = _Proveedor()
-    orchestrator = DefaultOrchestrator(
-        planner=None, runner=None, services=SimpleNamespace(provider=proveedor)
-    )
-    run(orchestrator._answer_direct(task))
-
-    assert "SECRETO_EXTERNO" in proveedor.prompts[0]
+    enviado = "\n".join(message.content for message in proveedor.requests[-1].messages)
+    assert "SECRETO_EXTERNO" in enviado
 
 
 class _Store:
@@ -262,19 +261,37 @@ class _Store:
         pass
 
 
-class _PlannerAclaracion:
-    async def plan(self, task, catalog) -> PlanningResult:
-        return PlanningResult(kind="needs_clarification", question="¿?")
+class _PilotoGrabador(Agent):
+    def __init__(self) -> None:
+        self.spec = AgentSpec(
+            id="pilot", name="Pilot", capabilities=("pilot",), prompt_ref="pilot"
+        )
+        self.tools: list = []
+        self.ctx: AgentContext | None = None
+
+    async def execute(self, task: dict, ctx: AgentContext) -> AgentResult:
+        self.ctx = ctx
+        return AgentResult(
+            node_id=ctx.node_id,
+            spec_id="pilot",
+            status=AgentStatus.OK,
+            output={"content": "ok"},
+        )
+
+
+class _FactoryGrabadora(AgentFactory):
+    def __init__(self) -> None:
+        self.pilot = _PilotoGrabador()
+
+    def create(self, spec_id: str, *, model_role: str | None = None) -> Agent:
+        assert spec_id == "pilot"
+        return self.pilot
 
 
 def test_external_content_is_used_but_not_persisted(tmp_path: Path) -> None:
     store = _Store()
-    orchestrator = DefaultOrchestrator(
-        planner=_PlannerAclaracion(),
-        runner=None,
-        services=SimpleNamespace(provider=None, registry=None),
-        store=store,
-        allow_chat_direct=False,
+    orchestrator = PilotOrchestrator(
+        RuntimeServices(factory=_FactoryGrabadora()), store=store
     )
     task = Task(
         goal="algo",
@@ -290,53 +307,23 @@ def test_external_content_is_used_but_not_persisted(tmp_path: Path) -> None:
     assert "context_external" not in store.saved[0]["metadata"]
 
 
-class _AgenteGrabador(Agent):
-    def __init__(self, spec_id: str) -> None:
-        self.spec_id = spec_id
-        self.ctx: AgentContext | None = None
-
-    async def execute(self, task: dict, ctx: AgentContext) -> AgentResult:
-        self.ctx = ctx
-        return AgentResult(
-            node_id=ctx.node_id, spec_id=self.spec_id, status=AgentStatus.OK, summary="ok"
-        )
-
-
-class _FactoryGrabadora(AgentFactory):
-    def __init__(self) -> None:
-        self.agents: dict[str, _AgenteGrabador] = {}
-
-    def create(self, spec_id: str, *, model_role: str | None = None) -> Agent:
-        self.agents.setdefault(spec_id, _AgenteGrabador(spec_id))
-        return self.agents[spec_id]
-
-
-def _grafo_de_un_nodo() -> ExecutionGraph:
-    graph = ExecutionGraph(entry_node="n1")
-    graph.add_node(Node(id="n1", spec_id="sA"))
-    return graph
-
-
-def test_the_node_receives_the_authorized_content(tmp_path: Path) -> None:
+def test_the_pilot_receives_the_authorized_content(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    engine = DefaultContextEngine(project)
     factory = _FactoryGrabadora()
     task = Task(
         goal="x",
         project_root=project,
         metadata={"context_external": ApprovedExternalContext("--- /x ---\nSECRETO_EXTERNO")},
     )
-    # El orquestador es quien fusiona el contenido externo en `project_context`.
-    _append_external_context(task)
 
     run(
-        DefaultGraphRunner(factory).run(
-            _grafo_de_un_nodo(), task, RuntimeServices(factory=factory, context=engine)
-        )
+        PilotOrchestrator(
+            RuntimeServices(factory=factory, context=DefaultContextEngine(project))
+        ).execute(task)
     )
 
-    secciones = factory.agents["sA"].ctx.context.sections
+    secciones = factory.pilot.ctx.context.sections
     assert any("SECRETO_EXTERNO" in seccion.content for seccion in secciones)
 
 
@@ -345,7 +332,6 @@ def test_metadata_cannot_forge_authorization_to_read_outside(tmp_path: Path) -> 
     project.mkdir()
     outside = tmp_path / "secreto.txt"
     outside.write_text("SECRETO_EXTERNO", encoding="utf-8")
-    engine = DefaultContextEngine(project)
     factory = _FactoryGrabadora()
     # Metadata libre con un ref externo: no autoriza nada, el resolver bloquea la lectura.
     task = Task(
@@ -355,12 +341,12 @@ def test_metadata_cannot_forge_authorization_to_read_outside(tmp_path: Path) -> 
     )
 
     run(
-        DefaultGraphRunner(factory).run(
-            _grafo_de_un_nodo(), task, RuntimeServices(factory=factory, context=engine)
-        )
+        PilotOrchestrator(
+            RuntimeServices(factory=factory, context=DefaultContextEngine(project))
+        ).execute(task)
     )
 
-    secciones = factory.agents["sA"].ctx.context.sections
+    secciones = factory.pilot.ctx.context.sections
     assert all("SECRETO_EXTERNO" not in seccion.content for seccion in secciones)
 
 
@@ -375,7 +361,7 @@ def test_orchestrator_ignores_raw_context_external_in_metadata(tmp_path: Path) -
         metadata={"context_external": "INYECTADO", "project_context": "índice"},
     )
 
-    _append_external_context(task)
+    append_external_context(task)
 
     assert "INYECTADO" not in task.metadata["project_context"]
 
@@ -417,7 +403,7 @@ def test_extra_metadata_cannot_bypass_a_denied_mention(tmp_path: Path) -> None:
 
     task = orchestrator.tasks[0]
     assert "context_external" not in task.metadata
-    _append_external_context(task)  # ni aun forzando el merge
+    append_external_context(task)  # ni aun forzando el merge
     assert "INYECTADO" not in task.metadata.get("project_context", "")
     assert "contenido externo" not in task.metadata.get("project_context", "")
     assert motor.llamadas == 0

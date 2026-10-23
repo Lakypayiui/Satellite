@@ -126,11 +126,31 @@ def test_schema_is_a_flat_object_of_primitives() -> None:
     assert APPROVAL_SCHEMA["required"] == ["approve"]
 
 
-def test_pending_is_reported() -> None:
-    port, _ = make_port({"action": "decline"})
+def test_pending_is_reported_only_while_the_client_is_asked() -> None:
+    seen: list = []
+    port = McpApproval(None)
+
+    def channel(message, schema, timeout):
+        seen.append(port.pending())
+        return {"action": "decline"}
+
+    port.elicitation = channel
     run(port.request({"proposal_id": "prop1"}, make_ctx()))
-    assert port.pending()[0]["proposal_id"] == "prop1"
-    assert port.pending()[0]["kind"] == "agent"
+
+    assert [item["proposal_id"] for item in seen[0]] == ["prop1"]
+    assert seen[0][0]["kind"] == "agent"
+    # Decidida (aquí rechazada), ya no espera a nadie.
+    assert port.pending() == []
+
+
+def test_resolved_proposals_never_stay_pending() -> None:
+    for action in ({"action": "accept", "content": {"approve": True}}, {"action": "decline"}, {"action": "timeout"}):
+        port, _ = make_port(action)
+        run(port.request({"proposal_id": "p"}, make_ctx()))
+        assert port.pending() == [], action
+    risky, _ = make_port({"action": "accept", "content": {"approve": True}})
+    run(risky.request({"proposal_id": "p"}, make_ctx(kind="edit")))
+    assert risky.pending() == []
 
 
 # ---------------------------------------------------------------- servidor

@@ -191,7 +191,6 @@ export const TEXTOS = {
     es: "Propone un plan antes de tocar nada",
     en: "Proposes a plan before touching anything",
   },
-  "chat.plan.aria": { es: "alternativas del plan", en: "plan alternatives" },
   "chat.policy.label": { es: "permisos", en: "permissions" },
   "chat.policy.aria": { es: "modo de permisos", en: "permission mode" },
   "chat.policy.title": {
@@ -201,19 +200,11 @@ export const TEXTOS = {
   "chat.policy.ask": { es: "ask", en: "ask" },
   "chat.policy.auto": { es: "auto", en: "auto" },
   "chat.policy.unrestricted": { es: "unrestricted", en: "unrestricted" },
-  "chat.plan.header": {
-    es: "modo plan · elige una alternativa",
-    en: "plan mode · choose an alternative",
-  },
-  "chat.plan.recommended": { es: "recomendada", en: "recommended" },
-  "chat.plan.effort": { es: "esfuerzo: {valor}", en: "effort: {valor}" },
-  "chat.plan.risk": { es: "riesgo: {valor}", en: "risk: {valor}" },
-  "chat.plan.choose": { es: "elegir esta", en: "choose this one" },
-  "chat.plan.note": {
-    es: "o describe tu propio enfoque en el mensaje: se ejecuta como una instrucción más.",
-    en: "or describe your own approach in the message: it runs as one more instruction.",
-  },
   "chat.status.planning": { es: "planificando", en: "planning" },
+  "chat.status.reconnecting": {
+    es: "reconectando con el proveedor",
+    en: "reconnecting to the provider",
+  },
   "chat.status.hint": {
     es: "enter envía · shift+enter salta línea",
     en: "enter sends · shift+enter adds a line",
@@ -247,6 +238,12 @@ export const TEXTOS = {
   "chat.permission.reject": { es: "rechazar", en: "reject" },
   "chat.permission.approve": { es: "aprobar", en: "approve" },
   "chat.permission.needsChanges": { es: "pedir cambios", en: "request changes" },
+  "chat.permission.changesPlaceholder": {
+    es: "¿qué debería cambiar?",
+    en: "what should change?",
+  },
+  "chat.permission.sendChanges": { es: "enviar", en: "send" },
+  "chat.question.other": { es: "otra respuesta", en: "other answer" },
   "chat.queue.aria": { es: "instrucciones encoladas", en: "queued instructions" },
   "chat.queue.header": {
     es: "En cola ({n}) · se ejecutan en orden",
@@ -1715,7 +1712,11 @@ export const TEXTOS = {
   },
   "app.events.title": { es: "eventos de {id}", en: "events for {id}" },
   "app.events.empty": { es: "(sin eventos)", en: "(no events)" },
-  "app.graph.title": { es: "grafo de {id}", en: "graph for {id}" },
+  "app.trace.title": { es: "traza de {id}", en: "trace for {id}" },
+  "app.trace.none": {
+    es: "Sin traza para {id} (la tarea no existe o es de una versión anterior).",
+    en: "No trace for {id} (the task does not exist or is from an earlier version).",
+  },
   "app.usage.sessionUse": { es: "uso: session use <id|nombre>", en: "usage: session use <id|name>" },
   "app.usage.sessionName": { es: "uso: session name <nombre>", en: "usage: session name <name>" },
   "app.usage.sessionPin": {
@@ -1803,7 +1804,7 @@ export const TEXTOS = {
   "cmd.panel-left.summary": { es: "Mostrar u ocultar el panel izquierdo", en: "Show or hide the left panel" },
   "cmd.panel-right.summary": { es: "Mostrar u ocultar el inspector", en: "Show or hide the inspector" },
   "cmd.run.summary": { es: "Envía un mensaje al agente (igual que texto libre)", en: "Send a message to the agent (same as free text)" },
-  "cmd.plan.summary": { es: "Modo plan: el LLM propone alternativas para elegir", en: "Plan mode: the LLM proposes alternatives to choose from" },
+  "cmd.plan.summary": { es: "Modo plan: investiga sin cambiar nada y propone enfoques", en: "Plan mode: investigates without changing anything and proposes approaches" },
   "cmd.context.summary": { es: "Uso de contexto del modelo", en: "Model context usage" },
   "cmd.compact.summary": { es: "Compactar el contexto de la conversación", en: "Compact the conversation context" },
   "cmd.cancel.summary": { es: "Cancelar el turno en curso", en: "Cancel the current turn" },
@@ -1819,7 +1820,7 @@ export const TEXTOS = {
   "cmd.tools.summary": { es: "Ver las herramientas del runtime", en: "See the runtime tools" },
   "cmd.tasks.summary": { es: "Listar las tareas persistidas", en: "List the persisted tasks" },
   "cmd.status.summary": { es: "Eventos de una tarea", en: "Events of a task" },
-  "cmd.inspect.summary": { es: "Grafo serializado de una tarea", en: "Serialised graph of a task" },
+  "cmd.inspect.summary": { es: "Qué hizo una tarea: tools y delegaciones", en: "What a task did: tools and delegations" },
   "cmd.changes.summary": { es: "Archivos y diff que cambió una tarea", en: "Files and diff a task changed" },
   "cmd.undo-task.summary": { es: "Restaurar los cambios de esa tarea", en: "Restore that task's changes" },
   "cmd.jobs.summary": { es: "Comandos largos en segundo plano", en: "Long commands in the background" },

@@ -1,4 +1,4 @@
-"""Cancelación cooperativa: token, runner, orquestador y handler de MCP."""
+"""Cancelación cooperativa: token, orquestador piloto y handler de MCP."""
 
 from __future__ import annotations
 
@@ -12,15 +12,13 @@ import pytest
 
 from satellite.agents.base import Agent, AgentContext, AgentFactory
 from satellite.agents.runtime import LLMAgent
-from satellite.core.graph import Edge, ExecutionGraph, Node
 from satellite.core.result import AgentResult, AgentStatus
 from satellite.core.spec import AgentSpec
 from satellite.core.task import Task, TaskStatus
 from satellite.events.base import EventSink
 from satellite.orchestration.base import RuntimeServices
 from satellite.orchestration.cancel import CancelToken, CancelledTask, race_cancel
-from satellite.orchestration.orchestrator import DefaultOrchestrator
-from satellite.orchestration.runner import DefaultGraphRunner
+from satellite.orchestration.pilot import PilotOrchestrator
 from satellite.providers.fake import FakeLLM
 from satellite.security.policy import DefaultSecurityPolicy
 from satellite.tools.base import ToolContext
@@ -30,54 +28,6 @@ from satellite.tools.registry import DefaultToolRegistry
 
 def run(coro):
     return asyncio.run(coro)
-
-
-class Sink(EventSink):
-    """Sink que guarda lo emitido."""
-
-    def __init__(self) -> None:
-        self.events = []
-
-    def emit(self, event) -> None:
-        self.events.append(event)
-
-    def subscribe(self, handler) -> None:
-        return None
-
-
-class AgenteQueCancela(Agent):
-    """Cancela al terminar el nodo indicado, como haría el usuario a mitad de tarea."""
-
-    def __init__(self, token: CancelToken, cancelar_en: str) -> None:
-        self.token = token
-        self.cancelar_en = cancelar_en
-        self.nodos: list[str] = []
-
-    async def execute(self, task: dict, ctx: AgentContext) -> AgentResult:
-        self.nodos.append(ctx.node_id)
-        if ctx.node_id == self.cancelar_en:
-            self.token.request("cancelado en la prueba")
-        return AgentResult(
-            node_id=ctx.node_id, spec_id="eco", status=AgentStatus.OK, summary="ok"
-        )
-
-
-class Factory(AgentFactory):
-    """Fábrica que devuelve siempre el mismo agente, para contar qué nodos corrieron."""
-
-    def __init__(self, agente: Agent) -> None:
-        self.agente = agente
-
-    def create(self, spec_id: str, *, model_role: str | None = None) -> Agent:
-        return self.agente
-
-
-def grafo() -> ExecutionGraph:
-    graph = ExecutionGraph(entry_node="n1")
-    graph.add_node(Node(id="n1", spec_id="eco"))
-    graph.add_node(Node(id="n2", spec_id="eco"))
-    graph.add_edge(Edge(id="e1", source="n1", target="n2", payload="result"))
-    return graph
 
 
 # --- el token ---
@@ -110,83 +60,73 @@ def test_the_token_raises_only_when_it_was_requested() -> None:
         token.raise_if_cancelled()
 
 
-# --- el runner ---
-
-
-def test_cancelled_before_starting_stops_everything(tmp_path: Path) -> None:
-    token = CancelToken()
-    agente = AgenteQueCancela(token, cancelar_en="")
-    sink = Sink()
-    token.request("antes de empezar")
-
-    resultado = run(
-        DefaultGraphRunner(Factory(agente), sink=sink).run(
-            grafo(), Task(goal="x", project_root=tmp_path), RuntimeServices(factory=Factory(agente), cancel=token, sink=sink)
-        )
-    )
-
-    assert resultado.status is TaskStatus.CANCELLED
-    assert agente.nodos == []  # no corrió ningún nodo
-    assert "antes de empezar" in resultado.summary
-    assert sink.events[-1].payload["status"] == "cancelled"
-
-
-def test_cancelled_inside_a_node_stops_after_that_node(tmp_path: Path) -> None:
-    token = CancelToken()
-    agente = AgenteQueCancela(token, cancelar_en="n1")
-    factory = Factory(agente)
-
-    resultado = run(
-        DefaultGraphRunner(factory).run(
-            grafo(),
-            Task(goal="x", project_root=tmp_path),
-            RuntimeServices(factory=factory, cancel=token),
-        )
-    )
-
-    assert agente.nodos == ["n1"]  # el segundo nodo no llegó a empezar
-    assert resultado.status is TaskStatus.CANCELLED
-    assert resultado.output["cancelled"] is True
-    assert resultado.output["nodes_done"] == 1  # lo hecho queda contado
-    assert resultado.error is None  # cancelar no es un fallo
-
-
-def test_without_a_token_the_runner_behaves_as_before(tmp_path: Path) -> None:
-    agente = AgenteQueCancela(CancelToken(), cancelar_en="")
-    factory = Factory(agente)
-
-    resultado = run(
-        DefaultGraphRunner(factory).run(
-            grafo(), Task(goal="x", project_root=tmp_path), RuntimeServices(factory=factory)
-        )
-    )
-
-    assert resultado.status is TaskStatus.OK
-    assert agente.nodos == ["n1", "n2"]
-
-
 # --- el orquestador y MCP ---
 
 
-class Nada:
-    """Planner/runner de mentira: aquí sólo se prueba la puerta de la cancelación."""
+class PilotoFalso(Agent):
+    """Piloto de mentira: graba su contexto y devuelve el estado que se le diga."""
 
-    async def plan(self, *args, **kwargs):
-        raise AssertionError("no debería planificar")
+    def __init__(self, status: AgentStatus = AgentStatus.OK) -> None:
+        self.spec = AgentSpec(
+            id="pilot", name="Pilot", capabilities=("pilot",), prompt_ref="pilot"
+        )
+        self.tools: list = []
+        self.status = status
+        self.ctx: AgentContext | None = None
 
-    async def run(self, *args, **kwargs):
-        raise AssertionError("no debería ejecutar")
+    async def execute(self, task: dict, ctx: AgentContext) -> AgentResult:
+        self.ctx = ctx
+        return AgentResult(
+            node_id=ctx.node_id,
+            spec_id="pilot",
+            status=self.status,
+            summary="hecho",
+            output={"content": "hecho"},
+        )
+
+
+class Factory(AgentFactory):
+    """Fábrica que devuelve siempre el mismo agente."""
+
+    def __init__(self, agente: Agent) -> None:
+        self.agente = agente
+
+    def create(self, spec_id: str, *, model_role: str | None = None) -> Agent:
+        return self.agente
 
 
 def test_the_orchestrator_cancel_reaches_its_token() -> None:
     token = CancelToken()
-    orchestrator = DefaultOrchestrator(Nada(), Nada(), RuntimeServices(cancel=token))
+    orchestrator = PilotOrchestrator(RuntimeServices(cancel=token))
 
     resultado = orchestrator.cancel("t1", "porque sí")
 
     assert resultado["cancelled"] is True
     assert resultado["task_id"] == "t1"
     assert token.reason == "porque sí"
+
+
+def test_without_a_token_the_orchestrator_says_it_cannot_cancel() -> None:
+    resultado = PilotOrchestrator(RuntimeServices()).cancel("t1")
+
+    assert resultado["cancelled"] is False
+
+
+def test_the_pilot_turn_carries_the_token(tmp_path: Path) -> None:
+    """El token llega al agente: sin él, cancelar no cortaría la llamada en vuelo."""
+    token = CancelToken()
+    token.request("de un turno anterior")
+    agente = PilotoFalso()
+
+    resultado = run(
+        PilotOrchestrator(RuntimeServices(factory=Factory(agente), cancel=token)).execute(
+            Task(goal="x", project_root=tmp_path)
+        )
+    )
+
+    assert resultado.status is TaskStatus.OK
+    assert agente.ctx.cancel is token
+    assert token.cancelled is False  # cada turno empieza sin la cancelación anterior
 
 
 def test_the_mcp_handler_asks_instead_of_just_forgetting(tmp_path: Path) -> None:
@@ -224,31 +164,17 @@ def test_the_mcp_handler_says_when_there_is_nothing_to_cancel() -> None:
 # --- la carrera con una llamada en vuelo (tanda 2) ---
 
 
-class AgenteQueDevuelve(Agent):
-    """Agente que devuelve el estado que se le diga."""
-
-    def __init__(self, status: AgentStatus) -> None:
-        self.status = status
-        self.nodos: list[str] = []
-
-    async def execute(self, task: dict, ctx: AgentContext) -> AgentResult:
-        self.nodos.append(ctx.node_id)
-        return AgentResult(node_id=ctx.node_id, spec_id="eco", status=self.status, summary="hecho")
-
-
-def test_a_node_that_ends_cancelled_makes_the_task_cancelled(tmp_path: Path) -> None:
-    """El final del runner no puede decir «ok» si un nodo acabó cancelado: sería mentir."""
-    agente = AgenteQueDevuelve(AgentStatus.CANCELLED)
-    factory = Factory(agente)
+def test_a_pilot_that_ends_cancelled_makes_the_task_cancelled(tmp_path: Path) -> None:
+    """El turno no puede decir «ok» si el piloto acabó cancelado: sería mentir."""
+    agente = PilotoFalso(AgentStatus.CANCELLED)
 
     resultado = run(
-        DefaultGraphRunner(factory).run(
-            grafo(), Task(goal="x", project_root=tmp_path), RuntimeServices(factory=factory)
+        PilotOrchestrator(RuntimeServices(factory=Factory(agente))).execute(
+            Task(goal="x", project_root=tmp_path)
         )
     )
 
     assert resultado.status is TaskStatus.CANCELLED
-    assert "cancelado" in resultado.summary.lower()
 
 
 def test_race_cancel_lets_the_value_through_when_nobody_cancels() -> None:

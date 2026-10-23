@@ -5,7 +5,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from satellite.core.task import Task
-from satellite.core.graph import ExecutionGraph
 from satellite.core.events import ExecutionEvent
 
 
@@ -20,16 +19,6 @@ class Store(ABC):
     @abstractmethod
     async def load_task(self, task_id: str) -> Task:
         """Carga un Task por id."""
-        raise NotImplementedError
-
-    @abstractmethod
-    async def save_graph(self, task_id: str, graph: ExecutionGraph) -> None:
-        """Guarda el grafo de una tarea."""
-        raise NotImplementedError
-
-    @abstractmethod
-    async def load_graph(self, task_id: str) -> ExecutionGraph:
-        """Carga el grafo de una tarea."""
         raise NotImplementedError
 
     @abstractmethod

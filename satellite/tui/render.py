@@ -161,41 +161,6 @@ def reply_panel(reply, *, elapsed_ms: float = 0, metrics: dict | None = None) ->
     )
 
 
-def plan_options_panel(options) -> Panel:
-    """Panel con las alternativas del modo plan."""
-    items = getattr(options, "options", ()) or ()
-    body = Text()
-    question = getattr(options, "question", "")
-    if question:
-        body.append(question + "\n\n", style="bold")
-    recommended = getattr(options, "recommendation", "")
-    for index, option in enumerate(items, 1):
-        body.append(f"{index}. {option.title}", style="bold cyan")
-        if option.id == recommended:
-            body.append("  ★ recomendada", style="green")
-        body.append("\n")
-        body.append(f"   {option.summary}\n")
-        for step in option.approach:
-            body.append(f"     · {step}\n", style="dim")
-        meta = [
-            f"esfuerzo {option.effort}" if option.effort else "",
-            f"riesgo {option.risk}" if option.risk else "",
-        ]
-        meta = [item for item in meta if item]
-        if meta:
-            body.append("   " + " · ".join(meta) + "\n", style="dim")
-        if option.tradeoffs:
-            body.append(f"   contrapartidas: {option.tradeoffs}\n", style="dim")
-        body.append("\n")
-    body.append(
-        "Elige una opción, o «Otra cosa» para describir tu propio enfoque.",
-        style="italic",
-    )
-    return Panel(
-        body, title="modo plan · alternativas", title_align="left", border_style="magenta"
-    )
-
-
 def conversation_table(turns) -> Table:
     """Tabla con la conversación actual."""
     table = Table(title=f"Conversación ({len(turns)} turnos)", title_justify="left", expand=True)
@@ -683,6 +648,83 @@ def action_card(
         body, title=f"🔧 {name or 'tool'}", title_align="left",
         border_style=ok_border, padding=padding,
     )
+
+
+# Eventos de ciclo de vida: alimentan el panel de agentes y la línea de estado, pero no
+# son conversación y no se pintan en el log.
+LIFECYCLE_EVENTS = frozenset(
+    {"task_started", "task_finished", "graph_built", "node_started", "node_finished"}
+)
+# Tools que sólo miran el proyecto: una línea basta. Escrituras y comandos llevan
+# su tarjeta con el diff o la salida.
+_QUIET_TOOLS = _READ_TOOLS + _LISTING_TOOLS + ("lsp", "git_status", "request_context")
+
+
+def tool_line(tool: str, arguments: dict | None = None, *, success: bool = True, error: str = "") -> Text:
+    """Una línea compacta para una tool de solo lectura."""
+    line = Text("  · ", style="dim")
+    line.append(tool_action(tool, arguments), style="dim" if success else DANGER)
+    if not success and error:
+        line.append(f"  ({_clip(error, 80)})", style=DANGER)
+    return line
+
+
+def delegation_line(event: ExecutionEvent) -> Text:
+    """Inicio o fin de una delegación en una línea («→ python_coder»)."""
+    payload = event.payload or {}
+    agent = str(payload.get("agent_id") or "agente")
+    if event.event_type.value == "delegation_started":
+        return Text.assemble(("  → ", ACCENT), (agent, "bold"), (" trabajando", "dim"))
+    ok = str(payload.get("status") or "ok") == "ok"
+    return Text.assemble(
+        ("  ✓ " if ok else "  ✗ ", SUCCESS if ok else DANGER),
+        (agent, "bold"),
+        (" terminó" if ok else f" terminó con estado {payload.get('status')}", "dim"),
+    )
+
+
+def reconnect_line(event: ExecutionEvent) -> Text:
+    """Reintento del proveedor («↻ reconectando con el proveedor 2/4 en 2 s»)."""
+    payload = event.payload or {}
+    line = Text("  ↻ ", style="yellow")
+    line.append(
+        f"reconectando con el proveedor {payload.get('attempt', '?')}/{payload.get('max', '?')}"
+        f" en {payload.get('wait_s', '?')} s",
+        style="yellow",
+    )
+    if payload.get("error"):
+        line.append(f"  ({_clip(str(payload['error']), 80)})", style="dim")
+    return line
+
+
+def is_reconnect(event: ExecutionEvent) -> bool:
+    return event.event_type.value == "retry" and (event.payload or {}).get("kind") == "provider"
+
+
+def live_panel(text: str) -> Panel:
+    """La respuesta mientras el modelo la escribe."""
+    return Panel(
+        Markdown(text or "…"),
+        title=ASSISTANT_BADGE,
+        title_align="left",
+        border_style=MUTED,
+        padding=(0, 1),
+    )
+
+
+def question_hint(question: dict | None) -> Text | None:
+    """Cómo responder a una pregunta con opciones (``None`` si no hay opciones)."""
+    choices = (question or {}).get("choices") or []
+    if not choices:
+        return None
+    return Text(
+        f"responde con el número (1-{len(choices)}) o escribe tu propia respuesta",
+        style="italic dim",
+    )
+
+
+def is_quiet_tool(tool: str) -> bool:
+    return tool in _QUIET_TOOLS
 
 
 def event_text(event: ExecutionEvent):

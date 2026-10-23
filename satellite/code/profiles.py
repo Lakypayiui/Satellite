@@ -287,16 +287,40 @@ def _run_profile(
     return _unsupported(f"lenguaje no soportado: {language}")
 
 
-def _python_test_plan(root: Path, python_cmd: str, filter_text: str | None) -> Plan:
+def _python_test_plan(
+    root: Path, python_cmd: str, filter_text: str | None, path: Path | None = None
+) -> Plan:
+    # Con ``path`` se prueba sólo ese archivo o directorio: sin él, cada verificación
+    # de un agente lanzaba la suite entera.
+    target = _relative_target(root, path)
     if _uses_pytest(root):
         argv = [python_cmd, "-m", "pytest", "-q"]
+        if target:
+            argv.append(target)
         if filter_text:
             argv.extend(["-k", filter_text])
         return Plan(steps=(Step(tuple(argv)),))
-    argv = [python_cmd, "-m", "unittest", "discover", "-q"]
+    if target and not (root / target).is_dir():
+        argv = [python_cmd, "-m", "unittest", "-q", target]
+    else:
+        argv = [python_cmd, "-m", "unittest", "discover", "-q"]
+        if target:
+            argv.extend(["-s", target, "-t", "."])
     if filter_text:
         argv.extend(["-k", filter_text])
     return Plan(steps=(Step(tuple(argv)),))
+
+
+def _relative_target(root: Path, path: Path | None) -> str | None:
+    """``path`` relativa a ``root`` (None si no hay, es la raíz o queda fuera)."""
+    if path is None:
+        return None
+    try:
+        relative = Path(path).resolve().relative_to(Path(root).resolve())
+    except ValueError:
+        return None
+    text = relative.as_posix()
+    return None if text in ("", ".") else text
 
 
 def _test_profile(
@@ -310,7 +334,7 @@ def _test_profile(
 ) -> Plan:
     if language == "python":
         return _python_test_plan(
-            root, python_cmd or _project_python(root, sandbox_n1), filter_text
+            root, python_cmd or _project_python(root, sandbox_n1), filter_text, path
         )
     if language in ("javascript", "typescript"):
         if not filter_text and _package_test_script(root):

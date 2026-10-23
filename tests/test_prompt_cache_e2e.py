@@ -1,7 +1,7 @@
 """Transversales del prompt caching (F7): la cadena completa, no unidades sueltas.
 
-Cubre, con las piezas reales enganchadas entre sí: prefijo estable en multi-turno
-simulado (aciertos de cache), rechazo de contenido dinámico en el system, deriva
+Cubre, con las piezas reales enganchadas entre sí: prefijo estable del piloto en
+multi-turno simulado (aciertos de cache), rechazo de contenido dinámico en el system, deriva
 vs cambio legítimo, costes con precios reales y la distinción
 "no cacheado" / "unknown".
 """
@@ -10,10 +10,14 @@ import asyncio
 import json
 from pathlib import Path
 
-from satellite.agents.prompting import build_meta_messages
-from satellite.agents.runtime import build_system_prompt
+from types import SimpleNamespace
+
+from satellite.agents.prompts import DefaultPromptRegistry
+from satellite.agents.registry import DefaultAgentRegistry
+from satellite.agents.runtime import LLMAgent, build_system_prompt
 from satellite.core.messages import CallContext, LLMRequest, Message, Role
 from satellite.core.spec import AgentSpec
+from satellite.core.task import Task
 from satellite.metrics.cache_report import build_cache_report
 from satellite.metrics.pricing import ModelPrice, PriceBook
 from satellite.metrics.stats import build_report
@@ -24,14 +28,14 @@ from satellite.observability.call_log import (
     WRITTEN,
     CallRecorder,
 )
-from satellite.orchestration.planner_prompt import build_catalog_context, render_history
+from satellite.orchestration.pilot import PilotOrchestrator
 from satellite.providers.caching import TTL_1H, TTL_5M, TtlLedger
 from satellite.providers.fake import FakeLLM
 from satellite.providers.metered import MeteredProvider
-from satellite.providers.prefix import fingerprint, prefix_payload
+from satellite.providers.prefix import prefix_payload
 
-SYSTEM_PROMPT = "# ROL\nEres el orquestador.\nSALIDA:\n{output_schema}"
-USER_TEMPLATE = "# ENTRADAS\n<data>\nTarea: {task}\nContexto: {context}\nFeedback: {feedback}\n</data>"
+PROMPTS = Path(__file__).resolve().parent.parent / "satellite" / "agents" / "prompts"
+SYSTEM_PROMPT = "# ROL\nEres el piloto.\nSALIDA:\n{output_schema}"
 
 DRIFT = "drift"
 CATALOG_CHANGED = "catalog_changed"
@@ -52,30 +56,50 @@ def make_spec(spec_id: str, *, capabilities=("do_thing",)) -> AgentSpec:
     )
 
 
-def planner_style_request(
+class _PilotFactory:
+    """Crea el piloto real (prompts del paquete) hablando con ``provider``."""
+
+    def __init__(self, provider) -> None:
+        self.provider = provider
+        self.prompts = DefaultPromptRegistry()
+        self.prompts.load_dir(PROMPTS)
+
+    def create(self, spec_id, *, model_role=None):
+        spec = AgentSpec(
+            id=spec_id,
+            name="Pilot",
+            capabilities=("converse",),
+            prompt_ref=spec_id,
+            model_role="orchestrator",
+        )
+        return LLMAgent(
+            spec=spec,
+            system_prompt=self.prompts.get_system(spec_id),
+            user_template=self.prompts.get_user(spec_id),
+            tools=[],
+            provider=self.provider,
+        )
+
+
+def pilot_style_request(
+    tmp_path: Path,
     *,
     goal: str,
     history: list[dict] | None = None,
     specs: list[AgentSpec],
     task_id: str = "t1",
 ) -> LLMRequest:
-    """Petición con la misma forma que arma el planner real."""
-    catalog = build_catalog_context(specs)
-    messages, stable = build_meta_messages(
-        system_prompt=SYSTEM_PROMPT,
-        user_template=USER_TEMPLATE,
-        output_schema={"type": "object"},
-        catalog=catalog,
-        task=goal,
-        context=render_history(history),
+    """La petición que manda el piloto real en un turno (capturada del proveedor)."""
+    registry = DefaultAgentRegistry()
+    for spec in specs:
+        registry.register_spec(spec)
+    capture = FakeLLM(default_content="ok")
+    services = SimpleNamespace(registry=registry, factory=_PilotFactory(capture))
+    task = Task(
+        goal=goal, project_root=tmp_path, task_id=task_id, metadata={"history": history or []}
     )
-    return LLMRequest(
-        messages=messages,
-        stable_user_count=stable,
-        call=CallContext(
-            task_id=task_id, role="orchestrator", catalog_fp=fingerprint(catalog)
-        ),
-    )
+    run(PilotOrchestrator(services).execute(task))
+    return capture.requests[0]
 
 
 # ---------------------------------------------------------------- multi-turno
@@ -112,10 +136,13 @@ def test_multi_turn_simulated_cache_hits(tmp_path: Path) -> None:
     provider = MeteredProvider(inner, recorder, model="m", price_book=book)
     specs = [make_spec("alpha_agent")]
 
-    run(provider.complete(planner_style_request(goal="primer mensaje", specs=specs)))
+    project = tmp_path / "project"
+    project.mkdir()
+    run(provider.complete(pilot_style_request(project, goal="primer mensaje", specs=specs)))
     run(
         provider.complete(
-            planner_style_request(
+            pilot_style_request(
+                project,
                 goal="segunda cosa",
                 history=[
                     {"role": "user", "content": "primer mensaje"},
@@ -145,9 +172,10 @@ def test_multi_turn_simulated_cache_hits(tmp_path: Path) -> None:
     assert "deriva (CACHE_PREFIX_DRIFT): 0" in report.format()
 
 
-def test_system_never_carries_dynamic_content() -> None:
-    """AJ-1: el system es estático y el catálogo va como bloque USER."""
-    request = planner_style_request(
+def test_system_never_carries_dynamic_content(tmp_path: Path) -> None:
+    """El system del piloto es estático: su catálogo de delegación sí, la tarea no."""
+    request = pilot_style_request(
+        tmp_path,
         goal="TAREA-SECRETA",
         history=[{"role": "user", "content": "HISTORIAL-SECRETO"}],
         specs=[make_spec("alpha_agent")],
@@ -156,13 +184,13 @@ def test_system_never_carries_dynamic_content() -> None:
     assert system.role is Role.SYSTEM
     assert "TAREA-SECRETA" not in system.content
     assert "HISTORIAL-SECRETO" not in system.content
-    assert 'source="catalogo"' not in system.content
+    # el catálogo (fijo durante el turno) va en el system, ordenado y sin el piloto
+    assert "# DELEGATION" in system.content
+    assert "- alpha_agent:" in system.content
 
-    assert request.stable_user_count == 1
-    catalog_block = request.messages[1]
-    assert catalog_block.role is Role.USER
-    assert 'source="catalog"' in catalog_block.content
-    assert "alpha_agent" in catalog_block.content
+    # sólo system + mensaje dinámico: no hay bloque USER estable
+    assert request.stable_user_count == 0
+    assert [message.role for message in request.messages] == [Role.SYSTEM, Role.USER]
 
     dynamic = request.messages[-1]
     assert "TAREA-SECRETA" in dynamic.content
@@ -170,15 +198,16 @@ def test_system_never_carries_dynamic_content() -> None:
 
 
 def stable_bytes(request: LLMRequest) -> str:
-    """Payload del prefijo estable de la petición (tools + system + catálogo)."""
-    return prefix_payload(None, request.messages[0].content, request.messages[1].content)
+    """Payload del prefijo estable de la petición (tools + system; catálogo en el system)."""
+    return prefix_payload(request.tools, request.messages[0].content, "")
 
 
-def test_stable_prefix_ignores_history_and_task() -> None:
+def test_stable_prefix_ignores_history_and_task(tmp_path: Path) -> None:
     """Los bytes del prefijo estable sólo dependen de tools+system+catálogo."""
     specs = [make_spec("alpha_agent"), make_spec("beta_agent")]
-    first = planner_style_request(goal="uno", specs=specs)
-    second = planner_style_request(
+    first = pilot_style_request(tmp_path, goal="uno", specs=specs)
+    second = pilot_style_request(
+        tmp_path,
         goal="dos distinto", history=[{"role": "user", "content": "hola"}], specs=specs
     )
     assert stable_bytes(first) == stable_bytes(second)
@@ -203,13 +232,15 @@ def test_drift_vs_legitimate_change(tmp_path: Path) -> None:
         FakeLLM(script=[{"content": "{}"}] * 4), recorder, model="m"
     )
     specs = [make_spec("alpha_agent")]
+    project = tmp_path / "project"
+    project.mkdir()
 
     # 1-2: mismo prefijo (sólo cambia lo dinámico)
-    run(provider.complete(planner_style_request(goal="uno", specs=specs)))
-    run(provider.complete(planner_style_request(goal="dos", specs=specs)))
+    run(provider.complete(pilot_style_request(project, goal="uno", specs=specs)))
+    run(provider.complete(pilot_style_request(project, goal="dos", specs=specs)))
     # 3: cambia el SYSTEM -> misma spec/catálogo/tools/modelo => deriva
     provider.inner = FakeLLM(script=[{"content": "{}"}] * 2)
-    request = planner_style_request(goal="tres", specs=specs)
+    request = pilot_style_request(project, goal="tres", specs=specs)
     changed_system = LLMRequest(
         messages=(
             Message(role=Role.SYSTEM, content=request.messages[0].content + "\n# EXTRA"),
@@ -219,13 +250,32 @@ def test_drift_vs_legitimate_change(tmp_path: Path) -> None:
         call=request.call,
     )
     run(provider.complete(changed_system))
-    # 4: cambia el CATÁLOGO (spec nueva) => cambio legítimo, no deriva
-    run(provider.complete(planner_style_request(goal="cuatro", specs=specs + [make_spec("beta_agent")])))
 
     kinds = [record.kind for record in recorder.load()]
-    assert kinds == ["", "", DRIFT, CATALOG_CHANGED]
+    assert kinds == ["", "", DRIFT]
     report = build_cache_report(recorder.load())
     assert report.drift_events == 1
+
+
+def test_pilot_catalog_change_is_not_drift(tmp_path: Path) -> None:
+    recorder = CallRecorder(tmp_path)
+    provider = MeteredProvider(
+        FakeLLM(script=[{"content": "{}"}] * 2), recorder, model="m"
+    )
+    specs = [make_spec("alpha_agent")]
+    project = tmp_path / "project"
+    project.mkdir()
+
+    run(provider.complete(pilot_style_request(project, goal="uno", specs=specs)))
+    # cambia el CATÁLOGO (spec nueva) => cambio legítimo, no deriva
+    run(
+        provider.complete(
+            pilot_style_request(project, goal="dos", specs=specs + [make_spec("beta_agent")])
+        )
+    )
+
+    kinds = [record.kind for record in recorder.load()]
+    assert kinds == ["", CATALOG_CHANGED]
 
 
 # ---------------------------------------------------------------- costes
@@ -300,7 +350,9 @@ def test_no_cached_and_unknown_are_distinguished(tmp_path: Path) -> None:
         recorder,
         model="m",
     )
-    request = planner_style_request(goal="x", specs=[make_spec("alpha_agent")])
+    project = tmp_path / "project"
+    project.mkdir()
+    request = pilot_style_request(project, goal="x", specs=[make_spec("alpha_agent")])
     run(provider.complete(request))
     run(provider.complete(request))
 

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+import re
+from typing import Any, AsyncIterator
 
 from satellite.core.errors import ProviderError
-from satellite.core.messages import LLMRequest, LLMResponse, Usage
+from satellite.core.messages import LLMRequest, LLMResponse, StreamChunk, Usage
 from satellite.core.tool_models import ToolCall
 from satellite.providers.base import LLMProvider
 
@@ -64,6 +65,13 @@ class FakeLLM(LLMProvider):
             stop_reason="tool_calls" if calls else "end_turn",
             usage=usage,
         )
+
+    async def stream(self, request: LLMRequest) -> AsyncIterator[StreamChunk]:
+        """Como ``complete``, pero cede el texto palabra a palabra (streaming real)."""
+        response = await self.complete(request)
+        for piece in re.findall(r"\S+\s*|\s+", response.content or ""):
+            yield StreamChunk(text=piece)
+        yield StreamChunk(response=response)
 
 
 def _ensure_dict(value: Any) -> dict:

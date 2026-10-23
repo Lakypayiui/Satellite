@@ -8,7 +8,6 @@ from pathlib import Path
 
 from satellite.core.atomic import atomic_write_text
 from satellite.core.events import ExecutionEvent
-from satellite.core.graph import ExecutionGraph
 from satellite.core.task import Task
 from satellite.kernel import migrations
 from satellite.kernel.guard import KernelWriteError
@@ -39,15 +38,6 @@ class FileStore(Store):
         if not path.exists():
             raise KeyError(f"task no encontrado: {task_id}")
         return Task.from_dict(self._read_json(path))
-
-    async def save_graph(self, task_id: str, graph: ExecutionGraph) -> None:
-        self._write_json(self._graph_path(task_id), graph.to_dict())
-
-    async def load_graph(self, task_id: str) -> ExecutionGraph:
-        path = self._graph_path(task_id)
-        if not path.exists():
-            raise KeyError(f"grafo no encontrado: {task_id}")
-        return ExecutionGraph.from_dict(self._read_json(path))
 
     async def append_event(self, task_id: str, event: ExecutionEvent) -> None:
         loop = asyncio.get_running_loop()
@@ -147,9 +137,6 @@ class FileStore(Store):
 
     def _task_path(self, task_id: str) -> Path:
         return self.root / "tasks" / f"{task_id}.json"
-
-    def _graph_path(self, task_id: str) -> Path:
-        return self.root / "plans" / f"{task_id}-graph.json"
 
     def _events_path(self, task_id: str) -> Path:
         return self.root / "executions" / f"{task_id}.jsonl"

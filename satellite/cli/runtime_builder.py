@@ -2,8 +2,7 @@
 
 Carga los 3 agentes base (verificados por hash contra el paquete), recarga de
 forma tolerante el catálogo global persistido, y conecta tools, skills,
-sandbox, context engine, planner, runner, orchestrator, expander y
-puerto de aprobación.
+sandbox, context engine, el orquestador piloto, expander y puerto de aprobación.
 """
 
 from __future__ import annotations
@@ -21,7 +20,6 @@ from satellite.approval.base import AutoApprovalPort
 from satellite.approval.cli import CliApproval
 from satellite.approval.policy import ApprovalPolicy
 from satellite.context.engine import DefaultContextEngine
-from satellite.context.preprocessor import LocalPreprocessor
 from satellite.core.tempfiles import cleanup_orphan_temps
 from satellite.config import providers as provider_config
 from satellite.core.errors import ProviderError
@@ -31,25 +29,23 @@ from satellite.desktop_control.config import load_desktop_settings
 from satellite.desktop_control.policy import DesktopControlPolicy
 from satellite.desktop_control.vision import vision_fallback_for
 from satellite.kernel.audit import AuditLog
-from satellite.kernel.manifest import RESERVED_AGENT_IDS, verify_and_restore
+from satellite.kernel.manifest import (
+    RESERVED_AGENT_IDS,
+    RETIRED_AGENT_IDS,
+    verify_and_restore,
+)
 from satellite.kernel.migrations import migrate, migrate_agent_specs, migrate_prompt_files
 from satellite.kernel.paths import ensure_dirs, resolve_paths
 from satellite.kernel.policy import PolicyMode, Settings, load_settings
 from satellite.metrics.pricing import PriceBook
 from satellite.observability.call_log import CallRecorder, default_log_dir
-from satellite.observability.logger import ExecutionLogger
 from satellite.providers.metered import MeteredProvider
+from satellite.providers.retry import with_retries
 from satellite.safe_proxy.interceptor import SanitizingProvider, sanitize_provider
 from satellite.skills.cache import SkillResultCache
 from satellite.orchestration.base import RuntimeServices
+from satellite.orchestration.pilot import PilotOrchestrator
 from satellite.orchestration.delegation import DelegationManager
-from satellite.orchestration.desktop_flow import DesktopFlow
-from satellite.orchestration.diagram_flow import DiagramFlow
-from satellite.orchestration.web_research_flow import WebResearchFlow
-from satellite.orchestration.orchestrator import DefaultOrchestrator
-from satellite.orchestration.plan_mode import PlanOptionGenerator
-from satellite.orchestration.planner import LLMPlanner
-from satellite.orchestration.runner import DefaultGraphRunner
 from satellite.persistence.store import FileStore
 from satellite.providers.base import LLMProvider
 from satellite.providers.factory import ProviderConfig, ProviderFactory
@@ -61,6 +57,9 @@ from satellite.skills.registry import SkillRegistry
 from satellite.skills.runner import SkillRunner
 from satellite.tools.context_tool import RequestContextTool
 from satellite.tools.delegate import DelegateTool
+from satellite.tools.ask_user import AskUserTool
+from satellite.tools.create_agent import CreateAgentTool
+from satellite.tools.describe_runtime import DescribeRuntimeTool
 from satellite.tools.spawn_agent import SpawnAgentTool
 from satellite.tools.diagram import RenderDiagramTool
 from satellite.tools.fs import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
@@ -90,6 +89,9 @@ DEFAULT_ALLOWED_TOOLS: set[str] = {
     "search_skills",
     "propose_skill",
     "delegate",
+    "ask_user",
+    "describe_runtime",
+    "create_agent",
     "spawn_agent",
     "render_diagram",
     "web_search",
@@ -201,7 +203,11 @@ def build_runtime(
     )
 
     # Catálogo: base (ya sincronizado) + agentes creados por el usuario.
-    loaded_specs = {spec.id: spec for spec in catalog_store.load_specs()}
+    loaded_specs = {
+        spec.id: spec
+        for spec in catalog_store.load_specs()
+        if spec.id not in RETIRED_AGENT_IDS
+    }
     # El operador de escritorio sólo existe si el control está habilitado en
     # Ajustes y la superficie tiene humano. Si no, ni se ve ni se puede ejecutar.
     if not desktop_active:
@@ -225,16 +231,23 @@ def build_runtime(
 
     approval_port = approval if approval is not None else _default_approval(settings)
 
-    # Modo plan: alternativas desarrolladas por el LLM.
-    plan_advisor = PlanOptionGenerator(provider, prompt_reg)
-
     # Providers per role, built lazily and cached: every node creation asks for one.
     role_providers: dict[str, LLMProvider] = {}
 
     def provider_for_role(role: str) -> LLMProvider:
         key = role or "agents"
         if key not in role_providers:
-            role_providers[key] = _role_provider(project_root, key, provider)
+            # Cada rol pasa por la misma medición (calls.jsonl, límites de tokens) y por
+            # el Safe Proxy que el proveedor global: un cliente sin envolver se saltaba
+            # ambas cosas. Los dos envoltorios son idempotentes.
+            role_providers[key] = _safe_proxy(
+                _metered(
+                    _role_provider(project_root, key, provider),
+                    project_root=project_root,
+                    settings=settings,
+                    role=key,
+                )
+            )
         return role_providers[key]
 
     # Children inherit the parent's provider unless the user configured a specific
@@ -275,6 +288,7 @@ def build_runtime(
     delegation = DelegationManager(
         factory,
         registry=registry,
+        token_budget=_delegation_token_budget(provider_config.load_config(project_root)),
         sink=bus,
         approval=approval_port,
     )
@@ -324,47 +338,20 @@ def build_runtime(
         sandbox=sandbox,
         delegation=delegation,
     )
-    runner = DefaultGraphRunner(factory=factory, context_engine=context, sink=bus)
-    runner.logger = ExecutionLogger(project_root / ".satellite" / "observability")
-    planner = LLMPlanner(provider, registry, prompts=prompt_reg)
-    orchestrator = DefaultOrchestrator(
-        planner,
-        runner,
+    orchestrator = PilotOrchestrator(
         services,
         store=store,
         sink=bus,
         expander=expander,
-        plan_advisor=plan_advisor,
-        allow_chat_direct=settings.direct_reply,
+        skill_runner=skill_runner,
     )
-    orchestrator.preprocessor = _build_preprocessor(
-        project_root,
-        provider_for_role("context") if settings.refine_goal else provider,
-        settings,
-    )
-    orchestrator.skill_runner = skill_runner
-    # Capacidad condicional: diagramas/arquitecturas se enrutan al agente de diagrama
-    # (pele_diagram_agent). El flujo sólo delega; el agente diseña el Mermaid y lo
-    # renderiza con la tool render_diagram. Si el renderer no está instalado, el agente
-    # devuelve la fuente Mermaid y el flujo la presenta sin romper la tarea.
-    orchestrator.diagram_flow = DiagramFlow(
-        factory=factory,
-        project_root=project_root,
-        services=services,
-    )
-    # Control del escritorio: sólo con humano y con el flag de Ajustes encendido.
-    if desktop_active:
-        orchestrator.desktop_flow = DesktopFlow(
-            factory=factory,
-            project_root=project_root,
-            services=services,
-        )
-    # Búsquedas/investigación en internet: ruta determinista a web_researcher.
-    orchestrator.web_flow = WebResearchFlow(
-        factory=factory,
-        project_root=project_root,
-        services=services,
-    )
+    # Estas tools leen piezas que existen ya en este punto: los registros y el
+    # expander del orquestador (se lee el atributo, por si se sustituye).
+    for tool in tools.all():
+        if isinstance(tool, DescribeRuntimeTool):
+            tool.bind(lambda: services)
+        elif isinstance(tool, CreateAgentTool):
+            tool.bind(lambda: getattr(orchestrator, "expander", None))
     return orchestrator, bus, store, registry
 
 
@@ -384,18 +371,6 @@ def _default_approval(settings: Settings) -> object:
     if settings.policy_mode is PolicyMode.ASK:
         return CliApproval()
     return AutoApprovalPort()
-
-
-def _build_preprocessor(
-    project_root: Path, provider: LLMProvider, settings: Settings
-) -> LocalPreprocessor | None:
-    """Preprocesado opcional (refine_goal), desactivado por defecto."""
-    if not settings.refine_goal:
-        return None
-    try:
-        return LocalPreprocessor(provider, project_root)
-    except Exception:
-        return None
 
 
 def _skill_cache_path(paths) -> Path | None:
@@ -456,6 +431,9 @@ def build_tool_registry(
         GitStatusTool(),
         RequestContextTool(),
         DelegateTool(),
+        AskUserTool(),
+        DescribeRuntimeTool(),
+        CreateAgentTool(),
         SpawnAgentTool(),
         SearchSkillsTool(),
         ProposeSkillTool(),
@@ -537,14 +515,41 @@ def _metered(
     llm = data.get("llm") if isinstance(data, dict) else None
     cache = parse_cache_config(llm.get("cache") if isinstance(llm, dict) else None)
     return MeteredProvider(
-        provider,
+        with_retries(provider, **_retry_config(llm)),
         CallRecorder(default_log_dir(project_root)),
-        provider_name=(cfg.name if cfg is not None else ""),
+        provider_name=(cfg.name if cfg is not None else type(provider).__name__),
         model=(cfg.model if cfg is not None else ""),
         price_book=PriceBook.from_config(data),
         max_tokens_by_role=settings.max_tokens,
         prewarm=bool(cache.get("prewarm")),
     )
+
+
+def _delegation_token_budget(data: object) -> int | None:
+    """``llm.delegation.token_budget``: tokens que pueden gastar los delegados por turno.
+
+    ``None`` (sin tope) si no está o no es un entero positivo.
+    """
+    llm = data.get("llm") if isinstance(data, dict) else None
+    raw = llm.get("delegation") if isinstance(llm, dict) else None
+    value = raw.get("token_budget") if isinstance(raw, dict) else None
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
+def _retry_config(llm: object) -> dict:
+    """``llm.retry`` → argumentos de ``with_retries`` (valores inválidos = defecto)."""
+    raw = llm.get("retry") if isinstance(llm, dict) else None
+    out: dict = {}
+    if isinstance(raw, dict):
+        attempts = raw.get("attempts")
+        if isinstance(attempts, int) and not isinstance(attempts, bool) and 1 <= attempts <= 10:
+            out["attempts"] = attempts
+        delay = raw.get("base_delay_s")
+        if isinstance(delay, (int, float)) and not isinstance(delay, bool) and 0 <= delay <= 30:
+            out["base_delay_s"] = float(delay)
+    return out
 
 
 def _load_provider(project_root: Path) -> LLMProvider:

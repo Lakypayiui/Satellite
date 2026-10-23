@@ -97,6 +97,7 @@ def test_reserved_ids() -> None:
     }
     assert RESERVED_AGENT_IDS == {
         "orchestrator",
+        "pilot",
         "agent_creator",
         "skill_curator",
         "pele_diagram_agent",
@@ -162,7 +163,8 @@ def test_load_settings_reads_values(tmp_path: Path) -> None:
     assert settings.policy_mode is PolicyMode.AUTO
     assert settings.quotas.max_agents == 5
     assert settings.quotas.max_skills == Quotas().max_skills
-    assert settings.refine_goal is True
+    # Claves del modo antiguo (refine_goal) se ignoran sin romper la carga.
+    assert not hasattr(settings, "refine_goal")
 
 
 def test_load_settings_tolerant_to_corrupt(tmp_path: Path) -> None:

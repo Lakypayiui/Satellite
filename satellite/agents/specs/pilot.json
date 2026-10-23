@@ -1,0 +1,23 @@
+{
+  "id": "pilot",
+  "name": "Pilot",
+  "description": "Drives each conversation turn: reads the project, answers, asks when needed and delegates work to specialized agents",
+  "capabilities": ["converse", "explore_project", "delegate_work"],
+  "prompt_ref": "pilot",
+  "tools": [
+    "read_file",
+    "list_dir",
+    "search_files",
+    "lsp",
+    "git_status",
+    "delegate",
+    "ask_user",
+    "describe_runtime",
+    "create_agent"
+  ],
+  "validators": [],
+  "model_role": "orchestrator",
+  "max_turns": 30,
+  "timeout_s": 1800,
+  "lifecycle": "persistent"
+}

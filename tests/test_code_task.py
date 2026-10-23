@@ -141,3 +141,30 @@ def test_missing_language_is_reported(tmp_path: Path) -> None:
     result = run(CodeTaskTool().execute({"action": "test"}, ctx))
     assert result.success is False
     assert result.error_code == "language_required"
+
+
+def test_python_test_action_runs_only_the_given_path(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_a.py").write_text("def test_a():\n    pass\n", encoding="utf-8")
+    calls: list[list[str]] = []
+    _fake_argv(
+        monkeypatch,
+        ToolResult(success=True, output={"exit_code": 0, "stdout": "1 passed"}),
+        calls,
+    )
+    run(CodeTaskTool().execute({"action": "test", "path": "tests/test_a.py"}, _ctx(tmp_path)))
+    run(CodeTaskTool().execute({"action": "test"}, _ctx(tmp_path)))
+    assert calls[0][-1] == "tests/test_a.py"
+    assert "tests/test_a.py" not in calls[1]
+
+
+def test_unittest_plan_targets_a_file_or_directory(tmp_path: Path) -> None:
+    from satellite.code.profiles import _python_test_plan
+
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_a.py").write_text("", encoding="utf-8")
+    one = _python_test_plan(tmp_path, "py", None, tmp_path / "tests" / "test_a.py")
+    assert one.steps[0].argv[-1] == "tests/test_a.py"
+    folder = _python_test_plan(tmp_path, "py", None, tmp_path / "tests")
+    assert "discover" in folder.steps[0].argv and "tests" in folder.steps[0].argv
