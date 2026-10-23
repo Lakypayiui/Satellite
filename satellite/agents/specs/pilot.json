@@ -11,6 +11,7 @@
     "lsp",
     "git_status",
     "delegate",
+    "plan_graph",
     "ask_user",
     "describe_runtime",
     "create_agent"

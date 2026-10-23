@@ -57,6 +57,7 @@ from satellite.skills.registry import SkillRegistry
 from satellite.skills.runner import SkillRunner
 from satellite.tools.context_tool import RequestContextTool
 from satellite.tools.delegate import DelegateTool
+from satellite.tools.plan_graph import PlanGraphTool
 from satellite.tools.ask_user import AskUserTool
 from satellite.tools.create_agent import CreateAgentTool
 from satellite.tools.describe_runtime import DescribeRuntimeTool
@@ -89,6 +90,7 @@ DEFAULT_ALLOWED_TOOLS: set[str] = {
     "search_skills",
     "propose_skill",
     "delegate",
+    "plan_graph",
     "ask_user",
     "describe_runtime",
     "create_agent",
@@ -432,6 +434,7 @@ def build_tool_registry(
         GitStatusTool(),
         RequestContextTool(),
         DelegateTool(),
+        PlanGraphTool(),
         AskUserTool(),
         DescribeRuntimeTool(),
         CreateAgentTool(),

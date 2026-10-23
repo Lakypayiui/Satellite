@@ -384,7 +384,11 @@ def turn_trace(agent_result, state: dict) -> dict:
         }
         for item in state.get("delegations", [])
     ]
-    return {"pilot_tools": tools, "delegations": delegations}
+    trace = {"pilot_tools": tools, "delegations": delegations}
+    graph = state.get("graph")
+    if graph:
+        trace["graph"] = graph
+    return trace
 
 
 def append_external_context(task: Task, external: object = None) -> None:
