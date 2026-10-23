@@ -72,8 +72,10 @@ class PilotOrchestrator(Orchestrator):
         sink: EventSink | None = None,
         expander: object | None = None,
         skill_runner: object | None = None,
+        precontext_mode: str = "map",
     ) -> None:
         self.services = services
+        self.precontext_mode = precontext_mode
         self.store = store
         self.sink = sink if sink is not None else getattr(services, "sink", None)
         self.expander = expander
@@ -181,23 +183,33 @@ class PilotOrchestrator(Orchestrator):
             if index is None:
                 index = ProjectIndex(task.project_root)
             index.ensure_persisted()
-            task.metadata["project_context"] = index.context_for_goal(task.goal)
+            task.metadata["project_context"] = index.context_for_goal(
+                task.goal, mode=self._precontext_mode()
+            )
             task.metadata["project_context_status"] = (
                 "ok" if task.metadata["project_context"] else "empty"
             )
+            # Los lenguajes salen del mismo índice: sin un segundo recorrido del proyecto.
+            hint = index.language_hint()
+            if hint:
+                task.metadata["project_languages"] = hint
         except (OSError, ValueError, TypeError):
             # Un problema al indexar no debe impedir el turno.
             task.metadata.setdefault("project_context", "")
             task.metadata["project_context_status"] = "unavailable"
-        try:
-            from satellite.context.languages import project_language_hint
-
-            hint = project_language_hint(task.project_root)
-            if hint:
-                task.metadata["project_languages"] = hint
-        except (OSError, ValueError, TypeError):
             task.metadata.pop("project_languages", None)
         append_external_context(task, external_context)
+
+    def _precontext_mode(self) -> str:
+        """``SATELLITE_PRECONTEXT`` (para comparar modos en la evaluación) o la config."""
+        import os
+
+        from satellite.context.project_index import PRECONTEXT_MODES
+
+        override = os.environ.get("SATELLITE_PRECONTEXT", "").strip().lower()
+        if override in PRECONTEXT_MODES:
+            return override
+        return self.precontext_mode if self.precontext_mode in PRECONTEXT_MODES else "map"
 
     # ----------------------------------------------------------------- piezas
 

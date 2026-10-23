@@ -176,6 +176,19 @@ retrying (invalid key, bad request) fail at once.
 { "llm": { "retry": { "attempts": 6, "base_delay_s": 2 } } }
 ```
 
+### Project context
+
+Before each turn the project index (`.satellite/context/index.json`) is refreshed
+incrementally: per file it stores the language, line count and symbols, plus totals,
+the language breakdown and the folders. The pilot receives a compact **map** of the
+project (totals, languages, key files, folders with their main language) and reads the
+files it needs with its tools; for a question about the project as a whole it also gets
+the README. To attach the most relevant files' contents up front instead:
+
+```json
+{ "context": { "precontext": "full" } }
+```
+
 ### Delegation token budget
 
 To cap what the agents the pilot delegates to can spend in one turn (input + output

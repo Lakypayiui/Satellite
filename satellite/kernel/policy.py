@@ -99,6 +99,8 @@ class Settings:
     allowed_commands: tuple[str, ...] = ()
     max_tokens: dict = field(default_factory=dict)
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
+    # Precontexto del turno (``context.precontext``): ``map`` (por defecto) o ``full``.
+    precontext_mode: str = "map"
 
     def max_tokens_for(self, role: str) -> int | None:
         """Límite de salida por rol (``llm.max_tokens.<rol>``); ``*`` = general."""
@@ -115,6 +117,7 @@ class Settings:
             "allowed_commands": list(self.allowed_commands),
             "max_tokens": dict(self.max_tokens),
             "compaction": self.compaction.to_dict(),
+            "context": {"precontext": self.precontext_mode},
         }
 
 
@@ -184,6 +187,13 @@ def _allowed_commands_from(data: dict) -> tuple[str, ...]:
 
 
 
+def _precontext_mode_from(data: dict) -> str:
+    """``context.precontext`` (tolerante): un valor desconocido es ``map``."""
+    raw = data.get("context")
+    value = str(raw.get("precontext") or "").strip().lower() if isinstance(raw, dict) else ""
+    return value if value in ("full", "map") else "map"
+
+
 def load_settings(path: Path | None = None) -> Settings:
     """Carga la configuración de forma tolerante (nunca lanza por datos corruptos).
 
@@ -212,4 +222,5 @@ def load_settings(path: Path | None = None) -> Settings:
         allowed_commands=_allowed_commands_from(data),
         max_tokens=_max_tokens_from(data),
         compaction=_compaction_from(data),
+        precontext_mode=_precontext_mode_from(data),
     )

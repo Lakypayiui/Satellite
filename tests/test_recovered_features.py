@@ -175,7 +175,8 @@ def test_index_context_falls_back_to_entrypoints_without_readme(tmp_path: Path) 
     index = ProjectIndex(tmp_path)
     index.ensure_persisted()
 
-    context = index.context_for_goal("¿De qué trata el proyecto?")
+    # El contenido de los puntos de entrada lo adjunta el modo ``full``.
+    context = index.context_for_goal("¿De qué trata el proyecto?", mode="full")
 
     assert "main.py" in context
     assert "def main" in context

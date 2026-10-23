@@ -17,7 +17,30 @@ IGNORED_DIRS = {
     "node_modules", ".satellite", ".agent",
     "__pycache__", "build", "dist", "out",
     ".pytest_cache", ".mypy_cache", ".ruff_cache", ".idea", ".vscode",
+    ".tox", ".next", ".nuxt", ".gradle", "coverage", "dist-electron",
 }
+# Carpetas generadas que se reconocen por el final del nombre (``satellite.egg-info``).
+_IGNORED_DIR_SUFFIXES = (".egg-info",)
+# Archivos del sistema operativo: no son del proyecto y ensuciaban el árbol.
+IGNORED_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}
+INDEX_SCHEMA = 2
+# Precontexto del turno: ``full`` = mapa + contenido de los archivos más pertinentes;
+# ``map`` = sólo el mapa (y el README si la pregunta es sobre el proyecto en general).
+PRECONTEXT_MODES = ("full", "map")
+DEFAULT_PRECONTEXT_MODE = "map"
+_MAP_CHARS = 2_500
+_MAP_DIRS = 40
+_KEY_FILES = (
+    "readme.md", "readme.rst", "readme.txt", "agents.md", "pyproject.toml",
+    "package.json", "cargo.toml", "go.mod", "pom.xml", "build.gradle",
+    "cmakelists.txt", "makefile", "requirements.txt", "setup.py",
+    "main.py", "app.py", "__main__.py", "index.ts", "index.js", "main.go", "main.rs",
+)
+# Pregunta general por el proyecto (no por un archivo ni una acción concreta).
+_PROJECT_QUESTION_RE = re.compile(
+    r"\b(proyecto|project|repo|repositorio|repository|codebase|aplicaci[oó]n|app)\b",
+    re.IGNORECASE,
+)
 _MAX_INDEX_FILE_BYTES = 1_000_000
 _MAX_CONTEXT_CHARS = 12_000
 # Extensiones que casi siempre son binarias: no se intentan leer como texto. Es un
@@ -80,6 +103,25 @@ _EXPLAIN_RE = re.compile(
 )
 
 
+def _language_of(path: Path) -> str:
+    from satellite.code.languages import language_for_path
+
+    return language_for_path(path.name) or ""
+
+
+def _count_lines(path: Path) -> int:
+    """Líneas de un archivo de texto (0 si es binario o no se puede leer)."""
+    if path.suffix.lower() in _BINARY_SUFFIXES:
+        return 0
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return 0
+    if not data or b"\x00" in data[:4096]:
+        return 0
+    return data.count(b"\n") + (0 if data.endswith(b"\n") else 1)
+
+
 def explain_goal(goal: str) -> bool:
     """True si el goal pregunta por el proyecto (overview/README) y no por una acción."""
     return bool(_EXPLAIN_RE.search(str(goal or "")))
@@ -102,6 +144,7 @@ class ProjectIndex:
         self._stats: dict[str, dict] = {}  # relpath -> {size, mtime_ns}
         self._structure: dict[str, dict] = {}  # relpath -> {functions, classes, imports}
         self._dir_cache: dict[Path, list[Path]] = {}  # dir -> archivos listados
+        self._meta: dict[str, dict] = {}  # relpath -> {language, lines}
         self._ensured = False  # el índice persistido ya se cargó/actualizó al menos una vez
         self.index_path = self.project_root / ".satellite" / "context" / "index.json"
 
@@ -117,7 +160,10 @@ class ProjectIndex:
             loaded = json.loads(self.index_path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
                 payload = loaded
-            if payload.get("schema") == 1 and payload.get("root") == str(self.project_root):
+            if (
+                payload.get("schema") == INDEX_SCHEMA
+                and payload.get("root") == str(self.project_root)
+            ):
                 valid_snapshot = True
                 saved = {
                     str(item["path"]): item
@@ -141,9 +187,17 @@ class ProjectIndex:
                 self._structure[rel] = {
                     key: previous.get(key, []) for key in ("functions", "classes", "imports")
                 }
+                self._meta[rel] = {
+                    "language": str(previous.get("language") or ""),
+                    "lines": int(previous.get("lines") or 0),
+                }
             else:
                 self.refresh(path)
                 self.structure(path)
+                self._meta[rel] = {
+                    "language": _language_of(path),
+                    "lines": _count_lines(path),
+                }
 
         # A partir de aquí el índice en memoria cubre TODO el proyecto, aunque la
         # escritura a disco falle (p. ej. proyecto de solo lectura).
@@ -155,18 +209,30 @@ class ProjectIndex:
         for rel in set(self._stats) - set(current):
             self._stats.pop(rel, None)
             self._structure.pop(rel, None)
+            self._meta.pop(rel, None)
 
         records = []
         for rel in sorted(current):
             stat = current[rel]
             structure = self._structure.get(rel, {"functions": [], "classes": [], "imports": []})
-            records.append({"path": rel, **stat, **structure})
+            meta = self._meta.get(rel, {"language": "", "lines": 0})
+            records.append({"path": rel, **meta, **stat, **structure})
         if valid_snapshot and payload.get("files", []) == records:
             return
+        counts = self.language_counts()
         payload = {
-            "schema": 1,
+            "schema": INDEX_SCHEMA,
             "root": str(self.project_root),
             "built_at": datetime.now(timezone.utc).isoformat(),
+            "totals": {
+                "files": len(records),
+                "lines": sum(int(item.get("lines") or 0) for item in records),
+            },
+            "languages": [
+                {"id": c.id, "name": c.name, "files": c.files, "percent": c.percent}
+                for c in counts
+            ],
+            "directories": self.directories(),
             "files": records,
         }
         try:
@@ -185,13 +251,122 @@ class ProjectIndex:
             # El índice en memoria sigue siendo útil en proyectos de solo lectura.
             return
 
-    def context_for_goal(self, goal: str, *, max_chars: int = _MAX_CONTEXT_CHARS) -> str:
-        """Crea una vista compacta del proyecto y añade archivos pertinentes al goal."""
+    # --- resumen (de lo que ya está en el índice; sin volver a recorrer) ---
+
+    def language_counts(self):
+        """Archivos por lenguaje conocido, del índice (mismo formato que ``languages``)."""
+        from satellite.code.languages import LANGUAGES
+        from satellite.context.languages import LanguageCount
+
+        counts: dict[str, int] = {}
+        for meta in self._meta.values():
+            language = meta.get("language")
+            if language:
+                counts[language] = counts.get(language, 0) + 1
+        total = sum(counts.values())
+        if total == 0:
+            return []
+        result = [
+            LanguageCount(
+                id=language_id,
+                name=LANGUAGES[language_id].name if language_id in LANGUAGES else language_id,
+                files=count,
+                percent=round(count * 100.0 / total, 1),
+            )
+            for language_id, count in counts.items()
+        ]
+        return sorted(result, key=lambda item: (-item.files, item.id))
+
+    def language_hint(self) -> str:
+        """Resumen de lenguajes para el piloto, del índice (sin un segundo recorrido)."""
+        if not self._ensured:
+            self.ensure_persisted()
+        from satellite.context.languages import format_language_hint
+
+        return format_language_hint(self.language_counts())
+
+    def directories(self, depth: int = 2) -> list[dict]:
+        """Carpetas hasta ``depth`` niveles: archivos, líneas y lenguaje dominante."""
+        from satellite.code.languages import LANGUAGES
+
+        groups: dict[str, dict] = {}
+        for rel in self._stats:
+            parts = rel.split("/")[:-1]
+            for level in range(1, min(depth, len(parts)) + 1):
+                key = "/".join(parts[:level])
+                group = groups.setdefault(key, {"files": 0, "lines": 0, "langs": {}})
+                meta = self._meta.get(rel, {})
+                group["files"] += 1
+                group["lines"] += int(meta.get("lines") or 0)
+                language = meta.get("language")
+                if language:
+                    group["langs"][language] = group["langs"].get(language, 0) + 1
+        out = []
+        for key in sorted(groups):
+            group = groups[key]
+            langs = group["langs"]
+            main = max(sorted(langs), key=lambda lang: langs[lang]) if langs else ""
+            out.append(
+                {
+                    "path": key,
+                    "files": group["files"],
+                    "lines": group["lines"],
+                    "language": LANGUAGES[main].name if main in LANGUAGES else main,
+                }
+            )
+        return out
+
+    def project_map(self) -> str:
+        """Mapa compacto del proyecto: totales, lenguajes, archivos clave y carpetas."""
         if not self._ensured:
             self.ensure_persisted()
         rels = sorted(self._stats)
         if not rels:
             return ""
+        total_lines = sum(int(meta.get("lines") or 0) for meta in self._meta.values())
+        lines = [
+            "Project map (from the project index; read the files you need with your tools):",
+            f"- {len(rels)} files, {total_lines} lines.",
+        ]
+        hint = self.language_hint()
+        if hint:
+            lines.append(f"- Languages: {hint}.")
+        key = [rel for rel in rels if Path(rel).name.lower() in _KEY_FILES and rel.count("/") <= 1]
+        if key:
+            lines.append("- Key files: " + ", ".join(key[:12]))
+        top = [rel for rel in rels if "/" not in rel and rel not in key]
+        if top:
+            lines.append("- Other files at the root: " + ", ".join(top[:15]))
+        folders = self.directories()[:_MAP_DIRS]
+        if folders:
+            lines.append("Folders (files · lines · main language):")
+        for item in folders:
+            indent = "  " * item["path"].count("/")
+            language = f" · {item['language']}" if item["language"] else ""
+            lines.append(f"{indent}- {item['path']}/ {item['files']} · {item['lines']}{language}")
+        text = "\n".join(lines)
+        return text if len(text) <= _MAP_CHARS else text[: _MAP_CHARS - 1] + "…"
+
+    def context_for_goal(
+        self,
+        goal: str,
+        *,
+        max_chars: int = _MAX_CONTEXT_CHARS,
+        mode: str = DEFAULT_PRECONTEXT_MODE,
+    ) -> str:
+        """Precontexto del turno: el mapa del proyecto y, según ``mode``, contenido.
+
+        ``full``: además, los archivos más pertinentes al goal. ``map``: sólo el mapa, y
+        el README cuando la pregunta es sobre el proyecto en general (le ahorra al
+        piloto una ronda de tools sin adivinar qué archivo de código hace falta).
+        """
+        if not self._ensured:
+            self.ensure_persisted()
+        rels = sorted(self._stats)
+        if not rels:
+            return ""
+        if mode == "map":
+            return self._map_context(goal, rels, max_chars)
 
         # Path-like tokens (`test.py`, `src/main.ts`) are explicit references: the file
         # the user names must be preferred over generic "main.*" or README heuristics.
@@ -232,9 +407,7 @@ class ProjectIndex:
             ranked = [(score + (5 if rel in selected_reps else 0), rel, path) for score, rel, path in ranked]
         ranked.sort(key=lambda item: (-item[0], item[1]))
 
-        lines = ["Project structure (tree up to two levels):"]
-        tree = [rel for rel in rels if rel.count("/") <= 1]
-        lines.extend(f"- {rel}" for rel in tree[:100])
+        lines = [self.project_map()]
         remaining = max(0, max_chars - sum(len(line) + 1 for line in lines))
         selected = [item for item in ranked if item[0] > 0][:6]
         for _, rel, path in selected:
@@ -252,6 +425,18 @@ class ProjectIndex:
             if remaining <= 0:
                 break
         return "\n".join(lines)[:max_chars]
+
+    def _map_context(self, goal: str, rels: list[str], max_chars: int) -> str:
+        parts = [self.project_map()]
+        if _PROJECT_QUESTION_RE.search(str(goal or "")):
+            readme = next(
+                (rel for rel in rels if "/" not in rel and rel.lower().startswith("readme")),
+                None,
+            )
+            content = self._readable_text(self.project_root / readme) if readme else None
+            if content:
+                parts.append(f"{_CONTENT_BLOCK}{readme} ---\n{content}")
+        return "\n".join(parts)[:max_chars]
 
     def _readable_text(self, path: Path, *, limit: int = 4000) -> str | None:
         """Texto legible de un archivo, o ``None`` si no es seguro/legible.
@@ -383,11 +568,14 @@ class ProjectIndex:
                 d
                 for d in dirs
                 if d not in IGNORED_DIRS
+                and not d.endswith(_IGNORED_DIR_SUFFIXES)
                 # Generic virtualenv detection: a directory with `pyvenv.cfg` is a
                 # Python environment, whatever the user named it (`myenv`, `env`...).
                 and not (root / d / "pyvenv.cfg").exists()
             ]
             for name in names:
+                if name in IGNORED_FILES:
+                    continue
                 candidate = root / name
                 if not self._safe_index_file(candidate):
                     continue

@@ -18,7 +18,7 @@ def test_project_context_header_is_english(tmp_path: Path) -> None:
     index = ProjectIndex(tmp_path)
     index.ensure_persisted()
     context = index.context_for_goal("what is this project")
-    assert context.startswith("Project structure (tree up to two levels):")
+    assert context.startswith("Project map (from the project index;")
 
 
 def test_session_memory_labels_are_english() -> None:

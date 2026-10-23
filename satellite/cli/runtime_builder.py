@@ -344,6 +344,7 @@ def build_runtime(
         sink=bus,
         expander=expander,
         skill_runner=skill_runner,
+        precontext_mode=settings.precontext_mode,
     )
     # Estas tools leen piezas que existen ya en este punto: los registros y el
     # expander del orquestador (se lee el atributo, por si se sustituye).

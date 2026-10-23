@@ -155,7 +155,9 @@ def test_plan_mode_receives_the_project_context(tmp_path: Path, monkeypatch) -> 
 
     enviado = _enviado(provider)
     assert "Plan mode" in enviado
-    assert "caja registradora" in enviado
+    # El mapa del proyecto (precontexto ``map`` por defecto) llega también al modo plan.
+    assert "Project map" in enviado
+    assert "caja.py" in enviado
 
 
 def test_the_pilot_agent_receives_the_project_context(tmp_path: Path) -> None:
@@ -170,14 +172,19 @@ def test_the_pilot_agent_receives_the_project_context(tmp_path: Path) -> None:
 
     assert result.status is TaskStatus.OK
     secciones = factory.pilot.last_ctx.context.sections
-    assert any("caja registradora" in section.content for section in secciones)
+    assert any(
+        "Project map" in section.content and "caja.py" in section.content
+        for section in secciones
+    )
 
 
 # --- preguntas normales recuperan archivos relevantes -------------------------
 
 
 def test_a_normal_question_retrieves_the_relevant_file(tmp_path: Path, monkeypatch) -> None:
-    """Una pregunta normal trae al prompt el archivo del proyecto que el índice elige."""
+    """Con el precontexto ``full``, una pregunta normal trae al prompt el archivo que el
+    índice elige (con ``map``, el piloto lo lee con sus tools)."""
+    monkeypatch.setenv("SATELLITE_PRECONTEXT", "full")
     provider = FakeLLM(script=[{"content": "cobrar devuelve el total."}])
     project, orch = _runtime(tmp_path, monkeypatch, provider)
     _proyecto(project)
