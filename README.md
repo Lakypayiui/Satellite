@@ -342,10 +342,16 @@ phase stays only if it beats the previous row without failing checks.
 |---|---|---|---|---|---|
 | 0 · graph model (baseline) | scaffolding only; turn flow unchanged | 21/21 | 126 | 1.45M | 9.3 min |
 | 1 · wave executor | executor added, not yet in the turn path | 21/21 | 141 | 1.72M | 10.4 min |
+| 2 · pilot emits graphs | plan_graph tool, opt-in by shape | 21/21 | 137 | 1.56M | 13.8 min\* |
 
 Phases 0–1 are scaffolding (the executor is not yet in the turn path), so their numbers
-are the baseline the later phases are compared against; the first behavioural change —
-and the first real comparison — is phase 2, when the pilot starts emitting graphs.
+are the baseline the later phases are compared against.
+
+Phase 2 matches the baseline because none of the ten standard cases has independent
+parts, so the pilot correctly did **not** build a graph on them (graphs are opt-in by
+shape); it only confirms no regression on simple turns. (\* the higher wall-clock is
+provider-latency variance, not graph overhead.) To exercise the feature a dedicated
+parallel case (`grafo`: two independent edits at once) is added from phase 3 on.
 
 ## License
 
