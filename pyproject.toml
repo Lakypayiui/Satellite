@@ -1,6 +1,6 @@
 [project]
 name = "satellite"
-version = "0.2.0"
+version = "0.1.0"
 description = "Satellite 2.0: framework de microagentes de IA especializados con grafos de ejecucion y contexto bajo demanda"
 requires-python = ">=3.11"
 dependencies = [
