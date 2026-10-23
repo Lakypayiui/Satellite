@@ -91,6 +91,13 @@ class PlanGraphTool(Tool):
                     error_code="wrong_language_agent",
                 )
 
+        # Checkpoint por forma del grafo: si un intento anterior se cortó, los nodos ya
+        # hechos se saltan; al terminar bien, se limpia.
+        from satellite.orchestration.graph_checkpoint import GraphCheckpoint, graph_key
+
+        store = GraphCheckpoint(tool_ctx.project_root)
+        key = graph_key(graph.to_dict())
+        resume = store.load(key)
         executor = GraphExecutor(manager, sink=getattr(tool_ctx, "sink", None))
         run_result = await executor.run(
             graph,
@@ -99,7 +106,11 @@ class PlanGraphTool(Tool):
             caller_spec=getattr(tool_ctx, "active_spec", None),
             approval=getattr(tool_ctx, "approval", None),
             cancel=getattr(tool_ctx, "cancel", None),
+            resume=resume,
+            checkpoint=lambda node_id, outcome: store.save_node(key, node_id, outcome),
         )
+        if run_result.ok and not run_result.cancelled:
+            store.clear(key)  # grafo completo: no hay nada que reanudar
 
         state = getattr(tool_ctx, "task_state", None)
         if isinstance(state, dict):

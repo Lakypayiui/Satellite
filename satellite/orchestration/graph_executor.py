@@ -56,6 +56,19 @@ class NodeOutcome:
             "error": self.error,
         }
 
+    @classmethod
+    def from_checkpoint(cls, data: dict) -> "NodeOutcome":
+        """Reconstruye lo justo de un nodo ya hecho (para reanudar y para las puertas)."""
+        return cls(
+            id=str(data.get("id", "")),
+            agent_id=str(data.get("agent_id", "")),
+            status=str(data.get("status", "ok")),
+            ok=bool(data.get("ok")),
+            skipped=bool(data.get("skipped")),
+            files_touched=tuple(data.get("files_touched") or ()),
+            summary=str(data.get("summary", "")),
+        )
+
 
 @dataclass
 class GraphRunResult:
@@ -98,11 +111,22 @@ class GraphExecutor:
         caller_spec=None,
         approval=None,
         cancel=None,
+        resume: dict | None = None,
+        checkpoint=None,
     ) -> GraphRunResult:
+        """Ejecuta el grafo. ``resume``: nodos ya hechos (de un turno cortado), que se
+        saltan. ``checkpoint(node_id, outcome_dict)``: se llama al terminar cada nodo,
+        para que quien llama lo persista y pueda reanudar si el turno se corta."""
         graph.validate()
         result = GraphRunResult()
         done: set[str] = set()
         started: set[str] = set()
+        # Reanudar: los nodos ya completados en un intento anterior no se repiten.
+        for node_id, data in (resume or {}).items():
+            if graph.node(node_id) is not None:
+                result.outcomes[node_id] = NodeOutcome.from_checkpoint({**data, "id": node_id})
+                done.add(node_id)
+                started.add(node_id)
         retries_left = graph.limits.max_retries_total
         replans_left = graph.limits.max_replans
         self._emit(
@@ -150,6 +174,11 @@ class GraphExecutor:
             for outcome in outcomes:
                 result.outcomes[outcome.id] = outcome
                 done.add(outcome.id)
+                if checkpoint is not None:
+                    try:
+                        checkpoint(outcome.id, outcome.to_trace())
+                    except Exception:  # noqa: BLE001 — un checkpoint que falla no para el grafo
+                        pass
         return result
 
     async def _run_node(
