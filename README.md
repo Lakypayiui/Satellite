@@ -329,6 +329,23 @@ The local denylist (terminals, password managers, system settings) always wins.
 .venv\Scripts\python -m pytest tests/ -q     # Windows
 ```
 
+## Execution graph — benchmark
+
+Satellite's identity is the grounded **execution graph**: after the pilot explores the
+real code, it can emit a DAG of delegations that runs in parallel waves, with
+verification gates and bounded re-planning (see `docs/PLAN-grafo-piloto.md`). It is being
+reintroduced phase by phase on top of the pilot, each phase measured with
+`scripts/eval_flow.py` (10 cases, the commandcode `deepseek-v4.1-flash` provider). A
+phase stays only if it beats the previous row without failing checks.
+
+| Phase | What it adds | Checks | Calls | Input tokens | Time |
+|---|---|---|---|---|---|
+| 0 · graph model (baseline) | scaffolding only; turn flow unchanged | 21/21 | 126 | 1.45M | 9.3 min |
+
+Phases 0–1 are scaffolding (the executor is not yet in the turn path), so their numbers
+are the baseline the later phases are compared against; the first behavioural change —
+and the first real comparison — is phase 2, when the pilot starts emitting graphs.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
