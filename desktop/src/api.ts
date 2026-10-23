@@ -634,6 +634,10 @@ interface Bridge {
     disconnect: () => Promise<{ connected: boolean; email: string }>;
   };
   claude: { login: () => Promise<{ launched: boolean; message?: string }> };
+  terminal: {
+    installCli: () => Promise<{ ok: boolean; path: string; onPath: boolean; message: string }>;
+    openTui: (project?: string) => Promise<{ launched: boolean; message?: string }>;
+  };
   platform: string;
   windowControls: {
     minimize: () => void;
@@ -691,6 +695,8 @@ export const bridge = {
     disconnect: () => puente().chatgpt.disconnect(),
   },
   claude: { login: () => puente().claude.login() },
+  instalarCli: () => puente().terminal.installCli(),
+  abrirTui: (project?: string) => puente().terminal.openTui(project),
   plataforma: () => puente().platform,
   estadoVentana: () => puente().windowControls.state(),
   alCambiarVentana: (onEstado: (estado: EstadoVentana) => void) =>

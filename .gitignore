@@ -63,3 +63,7 @@ build/
 
 # --- Documentos internos (no se publican) ---
 SATELLITE2_*.md
+
+# --- Empaquetado (PyInstaller) ---
+dist-backend/
+build/pyinstaller/

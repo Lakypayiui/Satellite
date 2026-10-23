@@ -88,6 +88,21 @@ const api = {
     login: () => ipcRenderer.invoke("satellite:chatgpt-login") as Promise<{ email: string }>,
     disconnect: () => ipcRenderer.invoke("satellite:chatgpt-disconnect") as Promise<{ connected: boolean; email: string }>,
   },
+  /** Terminal: instalar el comando `satellite` y abrir la TUI en una terminal. */
+  terminal: {
+    installCli: () =>
+      ipcRenderer.invoke("satellite:install-cli") as Promise<{
+        ok: boolean;
+        path: string;
+        onPath: boolean;
+        message: string;
+      }>,
+    openTui: (project?: string) =>
+      ipcRenderer.invoke("satellite:open-tui", project ?? "") as Promise<{
+        launched: boolean;
+        message?: string;
+      }>,
+  },
   /** Abre el login oficial de Claude Code en una terminal del sistema. */
   claude: {
     login: () => ipcRenderer.invoke("satellite:claude-login") as Promise<{ launched: boolean; message?: string }>,

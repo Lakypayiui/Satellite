@@ -1833,6 +1833,7 @@ export function App() {
           <Settings
             config={config}
             safeMode={Boolean(status?.safe_mode)}
+            ruta={ruta}
             seccion={ajustesSeccion}
             tema={tema}
             onTema={cambiarTema}

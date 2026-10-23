@@ -1,7 +1,7 @@
 {
   "name": "satellite-desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Satellite desktop app (development build over the local Python backend)",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -18,25 +18,61 @@
     "start": "npm run build && node scripts/launch.mjs",
     "smoke": "node scripts/smoke.mjs",
     "icons": "node scripts/icons.mjs",
-    "dist": "npm run icons && npm run build && electron-builder"
+    "dist": "npm run icons && npm run build && npm run build:backend && electron-builder --publish never",
+    "build:backend": "node scripts/build-backend.mjs"
   },
   "build": {
     "appId": "ai.satellite.desktop",
     "productName": "Satellite",
-    "files": ["dist/**", "dist-electron/**", "package.json"],
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "package.json"
+    ],
     "mac": {
       "icon": "build/icon.icns",
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg"
+        }
+      ]
     },
     "win": {
       "icon": "build/icon.ico",
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ]
     },
     "linux": {
       "icon": "build/icon.png",
       "category": "Development",
-      "target": ["AppImage"]
-    }
+      "target": [
+        "AppImage",
+        "tar.gz"
+      ]
+    },
+    "directories": {
+      "output": "release"
+    },
+    "extraResources": [
+      {
+        "from": "../dist-backend/satellite",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../Icono",
+        "to": "Icono",
+        "filter": [
+          "Ico_white",
+          "Ico_Black"
+        ]
+      }
+    ],
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
   },
   "dependencies": {
     "pele": "^1.7.0",
@@ -51,6 +87,7 @@
     "@types/react-dom": "^19.0.2",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
     "typescript": "^5.7.2",
     "vite": "^6.0.7"
   }

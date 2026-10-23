@@ -181,6 +181,8 @@ function formularioProxy(config: SafeProxyConfigView | null): SafeProxyForm {
 interface Props {
   config: ConfigView;
   safeMode: boolean;
+  /** Proyecto abierto (para abrir la TUI sobre él). */
+  ruta: string;
   /** Categoría abierta; `null` = página principal de Ajustes. */
   seccion: AjustesSeccion | null;
   /** Tema de apariencia activo. */
@@ -272,6 +274,24 @@ export function Settings(props: Props) {
     return () => { vigente = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function instalarComando(): Promise<void> {
+    try {
+      const resultado = await bridge.instalarCli();
+      props.onAviso(resultado.message);
+    } catch (exc) {
+      props.onAviso(mensajeDe(exc));
+    }
+  }
+
+  async function abrirTui(): Promise<void> {
+    try {
+      const resultado = await bridge.abrirTui(props.ruta || undefined);
+      if (!resultado.launched) props.onAviso(resultado.message || t("settings.terminal.failed"));
+    } catch (exc) {
+      props.onAviso(mensajeDe(exc));
+    }
+  }
 
   async function iniciarSesionClaude(): Promise<void> {
     setClaudeBusy(true);
@@ -1496,6 +1516,17 @@ export function Settings(props: Props) {
           </button>
           <button onClick={() => void cargarHerramientas()}>{t("settings.maintenance.tools")}</button>
           <button onClick={() => void cargarSnapshots()}>{t("settings.maintenance.snapshots")}</button>
+        </div>
+
+        <div className="subbloque">
+          <p className="etiqueta">{t("settings.terminal.title")}</p>
+          <p className="nota" style={{ marginTop: 0 }}>
+            {t("settings.terminal.note")}
+          </p>
+          <div className="acciones">
+            <button onClick={() => void instalarComando()}>{t("settings.terminal.install")}</button>
+            <button onClick={() => void abrirTui()}>{t("settings.terminal.tui")}</button>
+          </div>
         </div>
 
         {salida && <pre className="salida">{salida}</pre>}

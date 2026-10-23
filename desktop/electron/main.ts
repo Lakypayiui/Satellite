@@ -14,12 +14,22 @@ import {
   type IpcMainEvent,
   type IpcMainInvokeEvent,
 } from "electron";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { spawn, type ChildProcess } from "node:child_process";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { ApiError, Backend, StreamItem } from "./backend";
+import { ApiError, Backend, type BackendLaunch, StreamItem } from "./backend";
 import { ChatGPTAccount } from "./chatgpt";
 import { manejadorNavegacion, manejadorVentanaNueva } from "./security";
 import {
@@ -56,8 +66,10 @@ const CERRAR_BACKEND_MS = 2_500;
 // Iconos de la app tomados de la carpeta de iconos del repo (arte original, sin retocar). El
 // arte claro se usa con el sistema en oscuro y el oscuro con el sistema en claro; se reaplica
 // en vivo cuando cambia el tema del SO (`nativeTheme`).
-const ICONO_SO_OSCURO = path.join(REPO_ROOT, "Icono", "Ico_white");
-const ICONO_SO_CLARO = path.join(REPO_ROOT, "Icono", "Ico_Black");
+// Empaquetada, los recursos (iconos, ejecutable del backend) viven en `resources/`.
+const RECURSOS = app.isPackaged ? process.resourcesPath : REPO_ROOT;
+const ICONO_SO_OSCURO = path.join(RECURSOS, "Icono", "Ico_white");
+const ICONO_SO_CLARO = path.join(RECURSOS, "Icono", "Ico_Black");
 
 /** Ruta del icono que corresponde al tema actual del sistema operativo. */
 function iconoSegunSistema(): string {
@@ -222,6 +234,23 @@ function pythonPath(): string {
     : path.join(REPO_ROOT, ".venv", "bin", "python");
 }
 
+/** Ejecutable `satellite` (CLI, TUI, MCP y backend): el empaquetado o el del `.venv`. */
+function satelliteExecutable(): string {
+  const exe = process.platform === "win32" ? "satellite.exe" : "satellite";
+  if (app.isPackaged) return path.join(process.resourcesPath, "backend", exe);
+  return process.platform === "win32"
+    ? path.join(REPO_ROOT, ".venv", "Scripts", exe)
+    : path.join(REPO_ROOT, ".venv", "bin", exe);
+}
+
+/** Empaquetada: el ejecutable congelado. En desarrollo: `python -m satellite.desktop`. */
+function backendLaunch(): BackendLaunch {
+  if (app.isPackaged) {
+    return { command: satelliteExecutable(), args: ["desktop-backend"], cwd: os.homedir() };
+  }
+  return { command: pythonPath(), args: ["-m", "satellite.desktop"], cwd: REPO_ROOT };
+}
+
 function permitida(ruta: string): boolean {
   return RUTAS.some(
     (prefijo) => ruta === prefijo || ruta.startsWith(`${prefijo}/`) || ruta.startsWith(`${prefijo}?`),
@@ -239,7 +268,7 @@ function iniciarBackend(): Promise<Backend> {
   if (!arranque) {
     arranque = (async () => {
       const broker = await chatgptAccount.startBroker();
-      const instancia = new Backend(REPO_ROOT, pythonPath(), process.env.SATELLITE_HOME, broker);
+      const instancia = new Backend(backendLaunch(), process.env.SATELLITE_HOME, broker);
       await instancia.start(process.env.SATELLITE_PROJECT || undefined);
       backend = instancia;
       errorArranque = "";
@@ -426,19 +455,25 @@ ipcMain.handle("satellite:chatgpt-disconnect", (evento) => {
   return chatgptAccount.status();
 });
 
-ipcMain.handle("satellite:claude-login", (evento) => {
-  if (!remitenteValido(evento)) throw new Error("remitente no autorizado");
-  // Claude Code is Anthropic's supported account-authenticated route for plan users.
-  // Run its normal interactive login in a visible terminal; credentials stay in Claude Code.
+/** Comilla simple POSIX: el texto viaja entero como un solo argumento del shell. */
+function comillaShell(texto: string): string {
+  return `'${texto.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Abre una terminal visible del sistema que ejecuta `argv` (sin pasar por un shell
+ * propio en Windows ni Linux; en macOS, Terminal recibe una línea ya entrecomillada). */
+function abrirEnTerminal(argv: string[]): { launched: boolean; message?: string } {
   let child: ChildProcess;
   if (process.platform === "win32") {
-    child = spawn("cmd.exe", ["/d", "/c", "start", "", "cmd.exe", "/k", "claude"], {
+    child = spawn("cmd.exe", ["/d", "/c", "start", "", "cmd.exe", "/k", ...argv], {
       detached: true,
       stdio: "ignore",
       windowsHide: true,
     });
   } else if (process.platform === "darwin") {
-    child = spawn("osascript", ["-e", 'tell application "Terminal" to do script "claude"'], {
+    const linea = argv.map(comillaShell).join(" ");
+    const script = `tell application "Terminal" to do script ${JSON.stringify(linea)}`;
+    child = spawn("osascript", ["-e", script, "-e", 'tell application "Terminal" to activate'], {
       detached: true,
       stdio: "ignore",
     });
@@ -448,14 +483,107 @@ ipcMain.handle("satellite:claude-login", (evento) => {
         existsSync(path.join(dir, command)),
       )));
     if (!terminal) return { launched: false, message: "No se encontró una terminal disponible." };
-    const args = terminal === "gnome-terminal" ? ["--", "claude"] : ["-e", "claude"];
+    const args = terminal === "gnome-terminal" ? ["--", ...argv] : ["-e", ...argv];
     child = spawn(terminal, args, { detached: true, stdio: "ignore" });
   }
   child.once("error", (error) => {
-    console.error("No se pudo abrir Claude Code:", error.message);
+    console.error(`No se pudo abrir ${argv[0]}:`, error.message);
   });
   child.unref();
   return { launched: true };
+}
+
+ipcMain.handle("satellite:claude-login", (evento) => {
+  if (!remitenteValido(evento)) throw new Error("remitente no autorizado");
+  // Claude Code is Anthropic's supported account-authenticated route for plan users.
+  // Run its normal interactive login in a visible terminal; credentials stay in Claude Code.
+  return abrirEnTerminal(["claude"]);
+});
+
+/** La TUI de Satellite en una terminal, sobre el proyecto abierto (si hay). */
+ipcMain.handle("satellite:open-tui", (evento, project: unknown) => {
+  if (!remitenteValido(evento)) throw new Error("remitente no autorizado");
+  const exe = satelliteExecutable();
+  if (!existsSync(exe)) return { launched: false, message: `No se encontró ${exe}.` };
+  const argv = [exe, "tui"];
+  if (typeof project === "string" && project && existsSync(project)) argv.push("--project", project);
+  return abrirEnTerminal(argv);
+});
+
+export interface InstalacionCli {
+  ok: boolean;
+  path: string;
+  onPath: boolean;
+  message: string;
+}
+
+/** Instala el comando `satellite` para la terminal (como el `code` de VS Code).
+ *
+ * macOS/Linux: enlace en `~/.local/bin` (sin permisos de administrador); nunca pisa un
+ * archivo que no sea un enlace. Windows: añade la carpeta del ejecutable al PATH del
+ * usuario. El comando y la app usan el mismo ejecutable, así que se actualizan juntos.
+ */
+async function instalarCli(): Promise<InstalacionCli> {
+  const exe = satelliteExecutable();
+  if (!existsSync(exe)) {
+    return { ok: false, path: exe, onPath: false, message: `No se encontró ${exe}.` };
+  }
+  const separador = path.delimiter;
+  if (process.platform === "win32") {
+    const carpeta = path.dirname(exe);
+    const script =
+      "$p=[Environment]::GetEnvironmentVariable('Path','User'); if(-not $p){$p=''};" +
+      `$d='${carpeta.replace(/'/g, "''")}';` +
+      "if(($p -split ';') -notcontains $d){[Environment]::SetEnvironmentVariable('Path',($p.TrimEnd(';')+';'+$d).TrimStart(';'),'User')}";
+    await new Promise<void>((resolve, reject) => {
+      execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], (error) =>
+        error ? reject(error) : resolve(),
+      );
+    });
+    return {
+      ok: true,
+      path: carpeta,
+      onPath: true,
+      message: "Añadido al PATH de tu usuario. Abre una terminal nueva y escribe `satellite`.",
+    };
+  }
+  const carpeta = path.join(os.homedir(), ".local", "bin");
+  const enlace = path.join(carpeta, "satellite");
+  mkdirSync(carpeta, { recursive: true });
+  try {
+    const actual = lstatSync(enlace);
+    if (!actual.isSymbolicLink()) {
+      return {
+        ok: false,
+        path: enlace,
+        onPath: false,
+        message: `Ya existe ${enlace} y no es un enlace de Satellite: no se toca.`,
+      };
+    }
+    if (readlinkSync(enlace) !== exe) unlinkSync(enlace);
+  } catch {
+    // No existe: se crea abajo.
+  }
+  if (!existsSync(enlace)) symlinkSync(exe, enlace);
+  const onPath = (process.env.PATH ?? "").split(separador).includes(carpeta);
+  return {
+    ok: true,
+    path: enlace,
+    onPath,
+    message: onPath
+      ? "Listo: abre una terminal y escribe `satellite`."
+      : `Instalado en ${enlace}. Añade ~/.local/bin a tu PATH (por ejemplo, ` +
+        "`export PATH=\"$HOME/.local/bin:$PATH\"` en ~/.zshrc) y abre una terminal nueva.",
+  };
+}
+
+ipcMain.handle("satellite:install-cli", async (evento) => {
+  if (!remitenteValido(evento)) throw new Error("remitente no autorizado");
+  try {
+    return await instalarCli();
+  } catch (exc) {
+    return { ok: false, path: "", onPath: false, message: String(exc) };
+  }
 });
 
 ipcMain.handle("satellite:pick-folder", async (evento) => {

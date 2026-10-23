@@ -135,6 +135,22 @@ def plan(
 
 
 @app.command()
+def mcp(
+    project: Path = typer.Option(
+        None, "--project", help="Project root por defecto (si no, el directorio actual)."
+    ),
+) -> None:
+    """Arranca el servidor MCP por stdio (para clientes como Claude Desktop o un IDE)."""
+    import os
+
+    if project is not None:
+        os.environ["SATELLITE_MCP_PROJECT_ROOT"] = str(project.resolve())
+    from satellite.mcp.server import MCPServer
+
+    MCPServer().serve()
+
+
+@app.command()
 def tui(
     project: Path = typer.Option(Path.cwd(), "--project", help="Project root."),
 ) -> None:

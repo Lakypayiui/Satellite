@@ -1098,6 +1098,14 @@ export const TEXTOS = {
 
   // Ajustes · Diagnóstico y mantenimiento.
   "settings.maintenance.doctor": { es: "Diagnóstico", en: "Diagnostics" },
+  "settings.terminal.title": { es: "Terminal", en: "Terminal" },
+  "settings.terminal.note": {
+    es: "La app incluye la CLI y la TUI de Satellite. Instala el comando `satellite` para usarlo desde cualquier terminal (satellite run, satellite tui, satellite mcp…).",
+    en: "The app includes Satellite's CLI and TUI. Install the `satellite` command to use it from any terminal (satellite run, satellite tui, satellite mcp…).",
+  },
+  "settings.terminal.install": { es: "Instalar comando satellite", en: "Install satellite command" },
+  "settings.terminal.tui": { es: "Abrir la TUI", en: "Open the TUI" },
+  "settings.terminal.failed": { es: "No se pudo abrir la terminal.", en: "Could not open the terminal." },
   "settings.maintenance.stats": { es: "Métricas", en: "Metrics" },
   "settings.maintenance.compact": { es: "Compactar contexto", en: "Compact context" },
   "settings.maintenance.init": { es: "Inicializar o reparar", en: "Initialise or repair" },

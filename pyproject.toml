@@ -16,6 +16,10 @@ dependencies = [
     "colorama>=0.4; platform_system == 'Windows'",
 ]
 
+[project.scripts]
+# Un solo comando: CLI, `satellite tui`, `satellite mcp` (y el backend interno de la app).
+satellite = "satellite.launcher:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",

@@ -42,6 +42,13 @@ const HANDSHAKE_TIMEOUT_MS = 20_000;
 const SHUTDOWN_GRACE_MS = 1_500;
 const STDERR_TAIL = 40;
 
+/** Cómo se lanza el backend: el ejecutable empaquetado o ``python -m`` en desarrollo. */
+export interface BackendLaunch {
+  command: string;
+  args: string[];
+  cwd: string;
+}
+
 export class Backend {
   private child: Hijo | null = null;
   private port = 0;
@@ -49,8 +56,7 @@ export class Backend {
   private stderr: string[] = [];
 
   constructor(
-    private readonly repoRoot: string,
-    private readonly python: string,
+    private readonly launch: BackendLaunch,
     private readonly home?: string,
     private readonly accountBroker?: { url: string; secret: string },
   ) {}
@@ -63,17 +69,18 @@ export class Backend {
     return this.port > 0 && this.child !== null;
   }
 
-  /** Lanza `python -m satellite.desktop` y espera su línea de handshake. */
+  /** Lanza el backend (``satellite desktop-backend`` o ``python -m satellite.desktop``)
+   * y espera su línea de handshake. */
   async start(project?: string): Promise<Handshake> {
     if (this.child) return { port: this.port, token: this.token };
     // El secreto lo genera este proceso y viaja por stdin: no aparece en argv, ni en
     // stdout, ni en los logs del backend. Python sólo anuncia el puerto.
     const token = randomBytes(32).toString("hex");
-    const args = ["-m", "satellite.desktop", "--token-stdin"];
+    const args = [...this.launch.args, "--token-stdin"];
     if (project) args.push("--project", project);
     if (this.home) args.push("--home", this.home);
-    const child = spawn(this.python, args, {
-      cwd: this.repoRoot,
+    const child = spawn(this.launch.command, args, {
+      cwd: this.launch.cwd,
       env: {
         ...process.env,
         PYTHONUNBUFFERED: "1",

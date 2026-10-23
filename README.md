@@ -49,7 +49,38 @@
 | Desktop app | Satellite desktop app over the local backend |
 | MCP server | `python -m satellite.mcp` |
 
-## Quick start
+## Install the app
+
+Download the package for your system from the
+[Releases](https://github.com/Lakypayiui/Satellite/releases) page:
+
+| System | Package |
+|---|---|
+| macOS (Apple Silicon / Intel) | `Satellite-<version>-mac-arm64.dmg` / `-mac-x64.dmg` |
+| Windows | `Satellite-<version>-win-x64.exe` (installer) |
+| Linux | `Satellite-<version>-linux-x64.AppImage` or `-linux-x64.tar.gz` |
+
+One install gives you everything: the desktop app, the CLI, the TUI and the MCP
+server; Python is bundled, nothing else to install. To use it from a terminal, open
+**Settings → Maintenance → Terminal → Install satellite command** (macOS/Linux link it
+in `~/.local/bin`; Windows adds it to your user PATH), then:
+
+```bash
+satellite tui          # terminal UI
+satellite run "..."    # one task from the CLI
+satellite mcp          # MCP server over stdio (Claude Desktop, IDEs)
+```
+
+The same button page has **Open the TUI** to start it in a terminal on the open project.
+Packages are not signed yet: on macOS open the app the first time with right-click →
+Open; on Windows choose "More info → Run anyway" in SmartScreen.
+
+To build the packages yourself: `pip install ".[desktop]" pyinstaller`, then from
+`desktop/` run `npm install && npm run dist` (each system builds its own package).
+Pushing a `v*` tag builds all of them in GitHub Actions and attaches them to a draft
+release.
+
+## Quick start (from source)
 
 ### Linux / macOS
 
