@@ -344,6 +344,7 @@ phase stays only if it beats the previous row without failing checks.
 | 1 · wave executor | executor added, not yet in the turn path | 21/21 | 141 | 1.72M | 10.4 min |
 | 2 · pilot emits graphs | plan_graph tool, opt-in by shape | 21/21 | 137 | 1.56M | 13.8 min\* |
 | 3 · bounded continuation + `grafo` case | parallel case now exercises the graph | 23/23 | 184 | 2.30M | 14.8 min |
+| 4 · resumable + inspectable | checkpoint by graph shape; graph in the turn trace | 23/23 | 187 | 2.11M | 15.0 min |
 
 Phases 0–1 are scaffolding (the executor is not yet in the turn path), so their numbers
 are the baseline the later phases are compared against.
@@ -356,9 +357,17 @@ parallel case (`grafo`: two independent edits at once) is added from phase 3 on.
 
 From phase 3 the `grafo` case is in the suite, and it works end to end against the real
 provider: the pilot emitted a graph (`uses_graph: True`) whose two `python_coder` nodes
-ran in parallel — the execution graph differentiator, in action. (The totals grew only
-because `hazlo` had an expensive 62-call run that round; that is provider variance, not
-graph overhead.)
+ran in parallel — the execution graph differentiator, in action, held across phases 3
+and 4. The ten original cases never build a graph (no independent parts), so simple
+turns do not regress. `hazlo`'s 62-call runs are provider variance, not graph overhead.
+
+What landed (all phases on `main`, with tests): a grounded pilot that, after reading the
+real code, can emit a DAG of delegations run in parallel waves, with verification gates
+(`run_if`), bounded continuation of nodes that ran out of rounds, and resumption from a
+checkpoint if a turn is cut off — the execution-graph identity, rebuilt on top of the
+pilot instead of the old blind, regex-routed planner. A live visual graph view in the
+desktop app is the remaining follow-up (the graph is already shown as a trace and
+streamed as events).
 
 ## License
 
