@@ -18,6 +18,7 @@ Uso:
 
 Formato de ``--cases`` (lista JSON): ``{"id", "turns": [str, ...], "expect": {...}}`` con
 ``expect`` opcional: ``tools_any`` (alguna de estas tools), ``no_tools`` (true),
+``uses_graph`` (el turno emitió un grafo),
 ``delegate`` (agente), ``asks`` (true: termina en pregunta) y ``selected`` (true: el
 último turno resolvió una opción de la pregunta anterior).
 """
@@ -93,6 +94,16 @@ DEFAULT_CASES: list[dict] = [
         "expect": {"delegate_any": ["python_coder", "python_auditor"]},
     },
     {
+        "id": "grafo",
+        "turns": [
+            "Dos tareas independientes, en archivos distintos que no se tocan entre sí: "
+            "1) añade o mejora el docstring de módulo de satellite/events/base.py; "
+            "2) añade o mejora el docstring de módulo de satellite/events/bus.py. "
+            "Hazlas a la vez."
+        ],
+        "expect": {"uses_graph": True},
+    },
+    {
         "id": "hazlo",
         "turns": [
             "propón en una frase cómo mejorarías el mensaje de error cuando falta el "
@@ -161,6 +172,7 @@ async def run_case(project: Path, case: dict) -> dict:
             e.payload.get("agent_id") for e in events
             if e.event_type is EventType.DELEGATION_STARTED
         ]
+        used_graph = any(e.event_type is EventType.GRAPH_BUILT for e in events)
         selected = None
         if answering:
             from satellite.orchestration.chat import answer_context
@@ -183,6 +195,7 @@ async def run_case(project: Path, case: dict) -> dict:
                 "delegations": delegations,
                 "asked": reply.question is not None,
                 "selected": selected,
+                "graph": used_graph,
                 "first_text_s": round(first_text - started, 2) if first_text else None,
                 "total_s": round(elapsed, 2),
                 "tokens_in": int((reply.metrics or {}).get("tokens_in", 0) or 0),
@@ -244,6 +257,8 @@ def check(case: dict, turns: list[dict]) -> dict:
         out["asks_first"] = bool(turns) and turns[0]["asked"]
     if expect.get("selected"):
         out["answer_linked"] = bool(turns) and turns[-1]["selected"] is not None
+    if expect.get("uses_graph"):
+        out["uses_graph"] = any(turn.get("graph") for turn in turns)
     out["no_failures"] = all(turn["status"] in ("ok", "needs_user_input") for turn in turns)
     return out
 

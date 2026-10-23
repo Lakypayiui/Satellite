@@ -28,6 +28,8 @@ class GraphLimits:
 
     max_nodes: int = 40
     max_retries_total: int = 20
+    # Continuaciones de nodos que acabaron a medias (agotaron rondas), en todo el grafo.
+    max_replans: int = 4
     timeout_s: int = 1800
 
     def validate(self) -> None:
@@ -35,6 +37,8 @@ class GraphLimits:
             raise GraphError("max_nodes debe ser > 0")
         if self.max_retries_total < 0:
             raise GraphError("max_retries_total debe ser >= 0")
+        if self.max_replans < 0:
+            raise GraphError("max_replans debe ser >= 0")
         if self.timeout_s <= 0:
             raise GraphError("timeout_s debe ser > 0")
 
@@ -42,6 +46,7 @@ class GraphLimits:
         return {
             "max_nodes": self.max_nodes,
             "max_retries_total": self.max_retries_total,
+            "max_replans": self.max_replans,
             "timeout_s": self.timeout_s,
         }
 
@@ -52,6 +57,7 @@ class GraphLimits:
         return cls(
             max_nodes=int(d.get("max_nodes", base.max_nodes)),
             max_retries_total=int(d.get("max_retries_total", base.max_retries_total)),
+            max_replans=int(d.get("max_replans", base.max_replans)),
             timeout_s=int(d.get("timeout_s", base.timeout_s)),
         )
 

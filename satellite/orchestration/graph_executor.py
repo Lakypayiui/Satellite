@@ -32,9 +32,11 @@ class NodeOutcome:
     ok: bool = False
     skipped: bool = False
     attempts: int = 0
+    continuations: int = 0
     tokens_in: int = 0
     tokens_out: int = 0
     files_touched: tuple[str, ...] = ()
+    files_read: tuple[str, ...] = ()
     summary: str = ""
     error: str | None = None
     result: DelegationResult | None = None
@@ -50,6 +52,7 @@ class NodeOutcome:
             "tokens_in": self.tokens_in,
             "tokens_out": self.tokens_out,
             "files_touched": list(self.files_touched),
+            "continuations": self.continuations,
             "error": self.error,
         }
 
@@ -101,6 +104,7 @@ class GraphExecutor:
         done: set[str] = set()
         started: set[str] = set()
         retries_left = graph.limits.max_retries_total
+        replans_left = graph.limits.max_replans
         self._emit(
             EventType.GRAPH_BUILT,
             parent_ctx,
@@ -130,7 +134,7 @@ class GraphExecutor:
                 continue
             for node in runnable:
                 started.add(node.id)
-            budget = {"left": retries_left}
+            budget = {"retries": retries_left, "replans": replans_left}
             outcomes = await asyncio.gather(
                 *(
                     self._run_node(
@@ -141,7 +145,8 @@ class GraphExecutor:
                     for node in runnable
                 )
             )
-            retries_left = budget["left"]
+            retries_left = budget["retries"]
+            replans_left = budget["replans"]
             for outcome in outcomes:
                 result.outcomes[outcome.id] = outcome
                 done.add(outcome.id)
@@ -164,16 +169,42 @@ class GraphExecutor:
             outcome.tokens_out += delegation.tokens_out
             outcome.result = delegation
             outcome.summary = delegation.summary or ""
-            outcome.files_touched = tuple(getattr(delegation, "files_touched", ()) or ())
+            outcome.files_touched = _merge(outcome.files_touched, getattr(delegation, "files_touched", ()))
+            outcome.files_read = _merge(outcome.files_read, getattr(delegation, "files_read", ()))
             outcome.error = delegation.error
-            if delegation.ok:
+            if delegation.ok and not getattr(delegation, "budget_exhausted", False):
                 outcome.ok = True
                 outcome.status = "ok"
                 return outcome
-            # Reintento del nodo mientras le quede a él y al presupuesto global.
-            if outcome.attempts > node.max_retries or budget["left"] <= 0 or self._cancelled(cancel):
+            if delegation.ok and getattr(delegation, "budget_exhausted", False):
+                # Terminó a medias (agotó rondas): se continúa con lo ya hecho como
+                # contexto, mientras quede presupuesto de replanes. No es un fallo.
+                if budget["replans"] <= 0 or self._cancelled(cancel):
+                    outcome.ok = True
+                    outcome.status = "incomplete"
+                    return outcome
+                budget["replans"] -= 1
+                outcome.continuations += 1
+                task = self._continuation_task(task, outcome)
+                continue
+            # Falló: reintento mientras le quede a él y al presupuesto global.
+            if outcome.attempts > node.max_retries or budget["retries"] <= 0 or self._cancelled(cancel):
                 return outcome
-            budget["left"] -= 1
+            budget["retries"] -= 1
+
+    @staticmethod
+    def _continuation_task(task: dict, outcome: NodeOutcome) -> dict:
+        """La misma tarea, con lo ya hecho/leído para que continúe sin empezar de cero."""
+        out = dict(task)
+        context = dict(out.get("context") or {}) if isinstance(out.get("context"), dict) else {}
+        context["continuation"] = {
+            "note": "Previous attempt ran out of rounds. Continue from here; do not redo "
+            "what is already done.",
+            "files_touched": list(outcome.files_touched),
+            "files_read": list(outcome.files_read),
+        }
+        out["context"] = context
+        return out
 
     def _task_with_upstream(self, node: GraphNode, result: GraphRunResult) -> dict:
         """La tarea del nodo, con un resumen de lo que hicieron sus dependencias."""
@@ -219,6 +250,15 @@ class GraphExecutor:
                 payload=payload,
             )
         )
+
+
+def _merge(current: tuple[str, ...], extra) -> tuple[str, ...]:
+    """Une rutas conservando el orden y sin repetir (lo tocado/leído entre intentos)."""
+    seen: dict[str, None] = {key: None for key in current}
+    for item in extra or ():
+        if isinstance(item, str) and item:
+            seen.setdefault(item, None)
+    return tuple(seen)
 
 
 __all__ = ["GraphExecutor", "GraphRunResult", "NodeOutcome"]

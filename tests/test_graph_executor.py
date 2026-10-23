@@ -207,3 +207,54 @@ def test_the_shared_token_budget_counts_graph_nodes() -> None:
     assert result.outcomes["b"].ok is True
     assert result.outcomes["c"].ok is False
     assert "token" in (result.outcomes["c"].error or "")
+
+
+def test_an_incomplete_node_is_continued_until_it_finishes() -> None:
+    """Fase 3: un nodo que agota rondas se continúa con lo ya hecho como contexto."""
+    from satellite.core.result import ToolRecord
+
+    attempts = {"n": 0}
+
+    class Tired(_Agent):
+        async def execute(self, task, ctx):
+            attempts["n"] += 1
+            # Las dos primeras veces vuelve a medias; a la tercera, completo.
+            agotado = attempts["n"] < 3
+            self.budget_exhausted = agotado
+            return AgentResult(
+                node_id="n", spec_id="x", status=AgentStatus.OK, summary="progreso",
+                output={}, metrics=ExecutionMetrics(tokens_in=5, tokens_out=2),
+                tool_calls=(ToolRecord("edit_file", {"path": "a.py"}),),
+            )
+
+    manager = _manager(Tired())
+    graph = ExecutionGraph(nodes=(_node("a"),))
+
+    result = run(GraphExecutor(manager).run(graph, parent_ctx=_root(manager), project_root=Path("."), caller_spec=None))
+
+    assert attempts["n"] == 3
+    outcome = result.outcomes["a"]
+    assert outcome.ok is True and outcome.status == "ok"
+    assert outcome.continuations == 2
+    assert result.ok is True
+
+
+def test_continuations_are_bounded_by_the_replan_budget() -> None:
+    from satellite.orchestration.graph import GraphLimits
+
+    class AlwaysTired(_Agent):
+        async def execute(self, task, ctx):
+            self.budget_exhausted = True
+            return AgentResult(node_id="n", spec_id="x", status=AgentStatus.OK, summary="s",
+                               output={}, metrics=ExecutionMetrics(tokens_in=1, tokens_out=1))
+
+    manager = _manager(AlwaysTired())
+    graph = ExecutionGraph(nodes=(_node("a"),), limits=GraphLimits(max_replans=2))
+
+    result = run(GraphExecutor(manager).run(graph, parent_ctx=_root(manager), project_root=Path("."), caller_spec=None))
+
+    outcome = result.outcomes["a"]
+    # Se continúa 2 veces (el presupuesto) y luego se deja como incompleto, no en bucle.
+    assert outcome.continuations == 2
+    assert outcome.status == "incomplete"
+    assert outcome.ok is True  # progreso, no fallo
