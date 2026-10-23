@@ -46,6 +46,23 @@ def test_register_keeps_the_historical_hash_for_a_single_file(tmp_path: Path) ->
     assert manifest.hash == hashlib.sha256(SCRIPT.encode("utf-8")).hexdigest()
 
 
+def test_the_script_is_written_byte_for_byte_on_every_platform(tmp_path: Path, monkeypatch) -> None:
+    """Simula la traducción de saltos de línea de Windows: el archivo y el hash no cambian."""
+    real_write_text = Path.write_text
+
+    def windows_write_text(self, data, encoding=None, errors=None, newline=None):
+        if newline is None:
+            data = data.replace("\n", "\r\n")
+        return real_write_text(self, data, encoding=encoding, errors=errors, newline="")
+
+    monkeypatch.setattr(Path, "write_text", windows_write_text)
+    registry = SkillRegistry(tmp_path)
+    manifest = registry.register(make_manifest("single"), SCRIPT)
+
+    assert (tmp_path / "single" / "main.py").read_bytes() == SCRIPT.encode("utf-8")
+    assert manifest.hash == hashlib.sha256(SCRIPT.encode("utf-8")).hexdigest()
+
+
 def test_register_rejects_reserved_id(tmp_path: Path) -> None:
     registry = SkillRegistry(tmp_path)
     with pytest.raises(ToolError):

@@ -131,7 +131,10 @@ class SkillRegistry:
         if skill_dir.exists():
             self._archive_previous(skill_dir)
         skill_dir.mkdir(parents=True, exist_ok=True)
-        (skill_dir / manifest.entrypoint).write_text(script, encoding="utf-8")
+        # ``newline=""``: se escriben los bytes del script tal cual. Sin él, Windows
+        # convierte ``\n`` en ``\r\n`` y el hash (que se calcula sobre el archivo)
+        # dejaba de ser el histórico ``sha256(script)`` y variaba según el sistema.
+        (skill_dir / manifest.entrypoint).write_text(script, encoding="utf-8", newline="")
         # Huella del entrypoint y de los módulos locales que ya existan. El caso
         # de un solo fichero conserva el sha256 histórico del script.
         digest = code_digest(skill_dir, manifest.entrypoint) or sha256_bytes(script_bytes)
