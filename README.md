@@ -341,6 +341,7 @@ phase stays only if it beats the previous row without failing checks.
 | Phase | What it adds | Checks | Calls | Input tokens | Time |
 |---|---|---|---|---|---|
 | 0 · graph model (baseline) | scaffolding only; turn flow unchanged | 21/21 | 126 | 1.45M | 9.3 min |
+| 1 · wave executor | executor added, not yet in the turn path | 21/21 | 141 | 1.72M | 10.4 min |
 
 Phases 0–1 are scaffolding (the executor is not yet in the turn path), so their numbers
 are the baseline the later phases are compared against; the first behavioural change —
