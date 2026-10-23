@@ -27,9 +27,11 @@ class PlanGraphTool(Tool):
     def description(self) -> str:
         return (
             "Runs several delegations as a graph (DAG), in parallel where possible. Use "
-            "it when the work has independent parts (they run at the same time) or "
-            "dependent ones (a node waits for others, e.g. an auditor after two coders); "
-            "for a single piece of work use delegate instead. Each node delegates to an "
+            "it only when the work has three or more independent parts (they run at the "
+            "same time) or a real dependency structure (a node waits for others, e.g. an "
+            "auditor after several coders). The graph has a fixed overhead that pays off "
+            "only with that much parallel work: for one or two parts use delegate instead "
+            "(one call per part) — it is cheaper and no slower. Each node delegates to an "
             "agent in your can_call list. Node fields: `id`, `agent_id`, `task` (goal + "
             "params, like delegate), `depends_on` (ids of nodes that must finish first), "
             "`run_if` ('all_ok' to run only if its dependencies succeeded — a verification "

@@ -96,9 +96,10 @@ DEFAULT_CASES: list[dict] = [
     {
         "id": "grafo",
         "turns": [
-            "Dos tareas independientes, en archivos distintos que no se tocan entre sí: "
+            "Tres tareas independientes, en archivos distintos que no se tocan entre sí: "
             "1) añade o mejora el docstring de módulo de satellite/events/base.py; "
-            "2) añade o mejora el docstring de módulo de satellite/events/bus.py. "
+            "2) añade o mejora el docstring de módulo de satellite/events/bus.py; "
+            "3) añade o mejora el docstring de módulo de satellite/core/errors.py. "
             "Hazlas a la vez."
         ],
         "expect": {"uses_graph": True},

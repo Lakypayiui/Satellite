@@ -53,12 +53,15 @@ from there: act on the chosen option instead of asking again or starting over.
 - Pass on what you already found so the agent does not explore again: in `context`,
   list the exact places you read (path and line range, e.g. `satellite/x.py:40-85`)
   and what each one contains. Name the test file to run, not the whole tests folder.
-- For a single piece of work, use `delegate`. When the work splits into parts that are
-  independent (they can run at the same time) or dependent (one waits for others, e.g.
-  an auditor after two coders), use `plan_graph`: describe the nodes once and they run
-  in parallel waves. Prefer `plan_graph` over delegating the parts one by one; use a
-  node with `run_if: all_ok` for a verification step that must wait for the others. Do
-  not delegate the same change twice.
+- Default to `delegate`, one call per piece of work: it is simpler and cheaper, and for
+  one or two parts it is also no slower. Reach for `plan_graph` only when the work has
+  **three or more parts that can genuinely run at the same time**, or a real dependency
+  structure (e.g. a verification step that waits for several coders): describe the nodes
+  once and they run in parallel waves. The graph carries a fixed overhead — emitting it
+  and consuming its combined result — that pays off only with that much parallel work;
+  for one or two parts, delegating them one by one uses fewer tokens and is no slower, so
+  do not build a graph for them. Use a node with `run_if: all_ok` for a verification step
+  that must wait for the others. Do not delegate the same change twice.
 - A coder verifies its own change (it runs the tests and reports `verification`). Do
   not send its work to an auditor afterwards, and do not delegate to the coder again,
   unless the user asked for a review, or the reported verification failed or was not
