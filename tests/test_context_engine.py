@@ -66,3 +66,24 @@ def test_snapshot_default_empty(tmp_path: Path) -> None:
     snap = run(engine.snapshot("ninguno"))
     assert snap.node_id == "ninguno"
     assert snap.refs == ()
+
+
+def test_startup_and_reading_one_file_do_not_scan_the_project(tmp_path: Path, monkeypatch) -> None:
+    from satellite.context.project_index import ProjectIndex
+
+    def unexpected_scan(*_args, **_kwargs):
+        raise AssertionError("no se debe recorrer el proyecto al construir el runtime")
+
+    monkeypatch.setattr(ProjectIndex, "list_project_files", unexpected_scan)
+    engine = DefaultContextEngine(make_root(tmp_path))
+    bundle = run(engine.resolve([ContextRef(kind=ContextRefKind.PATH, value="a.txt")]))
+
+    assert bundle.sections[0].content == "contenido"
+    assert not engine.resolver.index.index_path.exists()
+
+
+def test_project_map_still_builds_the_index_on_demand(tmp_path: Path) -> None:
+    engine = DefaultContextEngine(make_root(tmp_path))
+
+    assert "a.txt" in engine.resolver.index.project_map()
+    assert engine.resolver.index.index_path.exists()

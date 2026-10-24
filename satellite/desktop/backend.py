@@ -294,6 +294,11 @@ class DesktopBackend:
         if bridge is None:
             bridge = EventBridge()
             self._bridges[key] = bridge
+        # Al abrir la app empaquetada, cwd es la carpeta personal, no un proyecto
+        # elegido. /status y /events llegan antes del asistente: no deben construir
+        # un runtime ni indexar esa carpeta implícita.
+        if not self._explicit_project:
+            return bridge
         if not bridge.attached and key not in self._runtime_errors:
             try:
                 _orchestrator, bus, store, _registry = self.session(project_root).runtime()
@@ -980,6 +985,8 @@ class DesktopBackend:
         from satellite import gitops
 
         root = self.resolve(project_root)
+        if not self._explicit_project:
+            return {"is_repo": False, "root": str(root), "workdir": str(root)}
         workdir = gitops.active_workdir(root) or root
         try:
             data = gitops.status(workdir)
@@ -1027,6 +1034,8 @@ class DesktopBackend:
         from satellite import gitops
 
         root = self.resolve(project_root)
+        if not self._explicit_project:
+            return {"is_repo": False, "root": str(root), "worktrees": [], "active": ""}
         try:
             items = gitops.list_worktrees(root)
             is_repo = gitops.is_repo(root)

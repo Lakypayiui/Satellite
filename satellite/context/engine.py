@@ -27,7 +27,9 @@ class DefaultContextEngine(ContextEngine):
         self.project_root = project_root
         self.default_limits = limits
         self.resolver = resolver or ContextResolver(project_root, ProjectIndex(project_root))
-        self.resolver.index.ensure_persisted()
+        # El mapa y el precontexto actualizan el índice cuando se necesitan.
+        # Construir el runtime (p. ej. desde /status o /events) debe ser barato:
+        # recorrer aquí todo el árbol bloqueaba el arranque en proyectos grandes.
         self._snapshots: dict[str, ContextSnapshot] = {}
         self._last_bundle: ContextBundle | None = None
 
