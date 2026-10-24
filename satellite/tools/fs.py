@@ -11,6 +11,11 @@ from satellite.core.tool_models import ToolResult
 from satellite.tools.base import Tool, ToolContext, inside_execution_roots
 
 READ_LIMIT_CHARS = 50_000
+LIST_LIMIT = 200
+LIST_SKIP_DIRS = frozenset({
+    ".git", ".satellite", "node_modules", ".venv", "venv", "__pycache__",
+    "build", "dist", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+})
 
 
 class ReadFileTool(Tool):
@@ -175,7 +180,7 @@ class ListDirTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Lists directory entries with name, type, size and mtime."
+        return "Lists up to 200 directory entries with name, type, size and mtime. Narrow path if truncated; recursive listings skip generated directories and symlinks."
 
     @property
     def parameters_schema(self) -> dict:
@@ -199,6 +204,11 @@ class ListDirTool(Tool):
             entries = _list_entries(path, recursive)
         except OSError as exc:
             return ToolResult(success=False, error=f"no se pudo listar '{path}': {exc}")
+        if len(entries) > LIST_LIMIT:
+            return ToolResult(success=True, output={
+                "entries": entries[:LIST_LIMIT], "truncated": True,
+                "note": "More entries exist; list a specific subdirectory.",
+            })
         return ToolResult(success=True, output=entries)
 
 
@@ -216,7 +226,9 @@ def _list_entries(path: Path, recursive: bool) -> list[dict]:
                 "mtime": datetime.fromtimestamp(child.stat().st_mtime).isoformat(),
             }
             entries.append(entry)
-            if recursive and child.is_dir():
+            if len(entries) > LIST_LIMIT:
+                return entries
+            if recursive and child.is_dir() and child.name not in LIST_SKIP_DIRS and not child.is_symlink():
                 stack.append(child)
     return entries
 

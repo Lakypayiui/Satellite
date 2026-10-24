@@ -13,7 +13,7 @@ from pathlib import Path
 from satellite.core.tool_models import ToolResult
 from satellite.sandbox.base import sanitize_env
 from satellite.tools.base import Tool, ToolContext, inside_execution_roots
-from satellite.tools.fs import ListDirTool, ReadFileTool, WriteFileTool
+from satellite.tools.fs import LIST_LIMIT, LIST_SKIP_DIRS, ListDirTool, ReadFileTool, WriteFileTool
 from satellite.tools.terminal import RunCommandTool, execute_argv
 
 __all__ = [
@@ -144,7 +144,8 @@ class SearchFilesTool(Tool):
         return (
             "Finds files by glob pattern (e.g. '**/*.py') inside the project. With "
             "'content', searches inside those files instead and returns the matching "
-            "lines as path, line number and text (like grep)."
+            "lines as path, line number and text (like grep). File listings are limited "
+            "to 200 entries and skip generated directories; narrow pattern/path if truncated."
         )
 
     @property
@@ -220,7 +221,7 @@ class SearchFilesTool(Tool):
         if not root.is_dir():
             return ToolResult(success=False, error=f"no es un directorio: {root}")
         try:
-            matches = sorted(root.glob(pattern))
+            matches = root.glob(pattern)
         except (NotImplementedError, OSError, ValueError) as exc:
             return ToolResult(
                 success=False,
@@ -233,9 +234,13 @@ class SearchFilesTool(Tool):
         # ``.satellite/worktrees``): así ``read_file`` las entiende y la búsqueda por
         # contenido no las descarta como si fueran de ``.satellite``.
         base_root = Path(base).resolve()
+        content = arguments.get("content")
+        content_search = isinstance(content, str) and bool(content)
         files = []
         for match in matches:
             try:
+                if LIST_SKIP_DIRS.intersection(match.relative_to(root).parts[:-1]):
+                    continue
                 # Se resuelve para que un symlink no escape, y se exige que el destino siga
                 # dentro del proyecto o del workdir activo (un worktree hermano).
                 resolved = match.resolve(strict=True)
@@ -251,8 +256,12 @@ class SearchFilesTool(Tool):
             except (OSError, ValueError, RuntimeError):
                 continue
             files.append({"path": rel, "size": size})
-        content = arguments.get("content")
-        if isinstance(content, str) and content:
+            if not content_search and len(files) > LIST_LIMIT:
+                return ToolResult(success=True, output={
+                    "files": files[:LIST_LIMIT], "truncated": True,
+                    "note": "More files exist; narrow pattern or search a specific subdirectory.",
+                })
+        if content_search:
             return _search_content(base_root, files, content, arguments)
         return ToolResult(success=True, output=files)
 

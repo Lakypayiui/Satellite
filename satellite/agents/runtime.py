@@ -320,6 +320,8 @@ class LLMAgent(Agent):
                 # Cada llamada reenvía toda la conversación: los resultados viejos de las
                 # tools se recortan para que el coste no crezca con cada lectura.
                 messages = _compact_tool_results(messages, self.keep_tool_results)
+            messages = _bound_tool_messages(messages)
+            reads.retain_complete(messages)
             response = await self._complete(
                 ctx,
                 LLMRequest(
@@ -551,6 +553,9 @@ class LLMAgent(Agent):
         """
         from satellite.orchestration.cancel import race_cancel
 
+        # Se aplica a TODOS los agentes y también a las llamadas de síntesis.
+        # Conservar N resultados recientes no protege contra uno solo de varios MB.
+        request = replace(request, messages=tuple(_bound_tool_messages(list(request.messages))))
         if self.stream_text:
             from satellite.providers.streaming import DeltaPublisher, complete_streaming
 
@@ -981,6 +986,40 @@ REPORT_PROGRESS = (
 )
 TRUNCATED_NOTE = "\n[older tool result truncated to save context; call the tool again if you need it]"
 TRUNCATED_KEEP_CHARS = 400
+TOOL_MESSAGE_CHARS = 24_000
+TOOL_HISTORY_CHARS = 120_000
+
+
+def _bound_tool_messages(messages: list[Message]) -> list[Message]:
+    """Acota las salidas que se reenvían, sin alterar los resultados persistidos.
+
+    Conserva los ids/llamadas del protocolo y prioriza los resultados recientes.
+    El recorte es explícito: nunca presentar una vista parcial como salida completa.
+    """
+    count = sum(message.role is Role.TOOL for message in messages)
+    # Reserva espacio para avisos explícitos incluso en los resultados más viejos.
+    minimum = min(256, TOOL_HISTORY_CHARS // max(1, count))
+    remaining = TOOL_HISTORY_CHARS
+    out = list(messages)
+    for index in range(len(out) - 1, -1, -1):
+        message = out[index]
+        if message.role is not Role.TOOL:
+            continue
+        count -= 1
+        limit = min(TOOL_MESSAGE_CHARS, max(minimum, remaining - count * minimum))
+        if len(message.content) > limit:
+            content = json.dumps({
+                "truncated": True,
+                "note": "Tool output shortened for context. Narrow the query or read a specific file/line range; the preview is incomplete.",
+                "preview": message.content[:max(0, limit - 1000)],
+            }, ensure_ascii=False)
+            # JSON escaping can expand a preview containing source or JSON output.
+            while len(content) > max(limit, 128):
+                preview = json.loads(content)["preview"]
+                content = json.dumps({"truncated": True, "note": "Incomplete tool output; narrow the query.", "preview": preview[:len(preview) // 2]}, ensure_ascii=False)
+            out[index] = replace(message, content=content)
+        remaining -= len(out[index].content)
+    return out
 
 _TOOL_MARKUP_RE = re.compile(
     r"<[｜|]{1,2}DSML[｜|]{1,2}|<tool_call>|<function_calls>|<invoke name=|<\|tool_call",
@@ -1116,6 +1155,20 @@ class _ReadLedger:
         key = self._key(call)
         if key is not None:
             self._seen[key] = ordinal
+
+    def retain_complete(self, messages: list[Message]) -> None:
+        """Una lectura recortada por tamaño debe poder repetirse por un rango menor."""
+        complete = set()
+        for ordinal, message in enumerate(m for m in messages if m.role is Role.TOOL):
+            if message.content.endswith(TRUNCATED_NOTE):
+                continue
+            try:
+                payload = json.loads(message.content)
+            except (ValueError, TypeError):
+                payload = None
+            if not isinstance(payload, dict) or payload.get("truncated") is not True:
+                complete.add(ordinal)
+        self._seen = {key: pos for key, pos in self._seen.items() if pos in complete}
 
     def repeated(self, call: ToolCall, *, total: int, keep: int | None) -> bool:
         key = self._key(call)
