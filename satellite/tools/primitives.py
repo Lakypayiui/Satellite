@@ -261,7 +261,7 @@ class SearchFilesTool(Tool):
                     "files": files[:LIST_LIMIT], "truncated": True,
                     "note": "More files exist; narrow pattern or search a specific subdirectory.",
                 })
-        if content_search:
+        if isinstance(content, str) and content:
             return _search_content(base_root, files, content, arguments)
         return ToolResult(success=True, output=files)
 
