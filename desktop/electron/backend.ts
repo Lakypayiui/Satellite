@@ -47,6 +47,8 @@ export interface BackendLaunch {
   command: string;
   args: string[];
   cwd: string;
+  /** Variables adicionales para recursos que el backend congelado debe leer del disco. */
+  env?: NodeJS.ProcessEnv;
 }
 
 export class Backend {
@@ -83,6 +85,7 @@ export class Backend {
       cwd: this.launch.cwd,
       env: {
         ...process.env,
+        ...this.launch.env,
         PYTHONUNBUFFERED: "1",
         ...(this.accountBroker
           ? {

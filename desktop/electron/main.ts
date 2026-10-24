@@ -246,7 +246,14 @@ function satelliteExecutable(): string {
 /** Empaquetada: el ejecutable congelado. En desarrollo: `python -m satellite.desktop`. */
 function backendLaunch(): BackendLaunch {
   if (app.isPackaged) {
-    return { command: satelliteExecutable(), args: ["desktop-backend"], cwd: os.homedir() };
+    // Pele vive fuera de app.asar: el backend Python necesita un archivo real para
+    // pasarlo a Node, que no puede importar módulos desde el ASAR de Electron.
+    return {
+      command: satelliteExecutable(),
+      args: ["desktop-backend"],
+      cwd: os.homedir(),
+      env: { SATELLITE_PELE_PATH: path.join(process.resourcesPath, "pele") },
+    };
   }
   return { command: pythonPath(), args: ["-m", "satellite.desktop"], cwd: REPO_ROOT };
 }

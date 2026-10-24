@@ -70,6 +70,13 @@
           "Ico_white",
           "Ico_Black"
         ]
+      },
+      {
+        "from": "node_modules/pele",
+        "to": "pele",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
